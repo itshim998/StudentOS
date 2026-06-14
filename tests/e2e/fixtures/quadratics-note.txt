@@ -1,0 +1,1 @@
+Quadratics study note: factoring finds roots, vertex form shows turning point, and graphing checks intercepts. For exams, identify coefficients, choose the method, solve carefully, then verify roots against the original equation.

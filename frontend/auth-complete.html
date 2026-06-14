@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StudentOS Account Completion</title>
+    <link rel="stylesheet" href="/styles/main.css">
+  </head>
+  <body class="auth-complete-page">
+    <main class="auth-complete-shell">
+      <section class="auth-complete-panel" aria-labelledby="completion-title">
+        <p class="eyebrow">StudentOS by SentIQGPT</p>
+        <h1 id="completion-title">Account Completion</h1>
+        <p id="completion-copy">Checking your secure account link.</p>
+        <form id="recovery-complete-form" class="form-grid" hidden>
+          <label>
+            New password
+            <input id="recovery-password" type="password" minlength="8" autocomplete="new-password" required>
+          </label>
+          <button class="primary-button" type="submit">Set new password</button>
+        </form>
+        <div id="completion-result" class="result-box" aria-live="polite"></div>
+        <a class="secondary-button completion-link" href="/">Return to StudentOS</a>
+      </section>
+    </main>
+    <script src="/scripts/auth-complete.js"></script>
+  </body>
+</html>

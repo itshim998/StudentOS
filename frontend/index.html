@@ -1,0 +1,522 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>StudentOS</title>
+  <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="rail" aria-label="Primary navigation">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">SO</div>
+        <div>
+          <h1>StudentOS</h1>
+          <p>Powered by SentIQGPT</p>
+        </div>
+      </div>
+      <nav class="nav-stack" aria-label="Views">
+        <button class="nav-item active" data-view="today" type="button">
+          <span class="nav-icon calendar-icon" aria-hidden="true"></span>
+          <span>Today</span>
+        </button>
+        <button class="nav-item" data-view="setup" type="button">
+          <span class="nav-icon studio-icon" aria-hidden="true"></span>
+          <span>Setup</span>
+        </button>
+        <button class="nav-item" data-view="courses" type="button">
+          <span class="nav-icon course-icon" aria-hidden="true"></span>
+          <span>Courses</span>
+        </button>
+        <button class="nav-item" data-view="memory" type="button">
+          <span class="nav-icon memory-icon" aria-hidden="true"></span>
+          <span>Memory</span>
+        </button>
+        <button class="nav-item" data-view="studio" type="button">
+          <span class="nav-icon studio-icon" aria-hidden="true"></span>
+          <span>Studio</span>
+        </button>
+        <button class="nav-item" data-view="account" type="button">
+          <span class="nav-icon account-icon" aria-hidden="true"></span>
+          <span>Account</span>
+        </button>
+      </nav>
+      <section class="auth-panel" id="auth-panel" aria-label="StudentOS session">
+        <p class="eyebrow">Session</p>
+        <form id="auth-form" class="auth-form">
+          <input id="auth-email" name="email" type="email" placeholder="email@student.com" autocomplete="email">
+          <input id="auth-password" name="password" type="password" placeholder="password" autocomplete="current-password">
+          <div class="auth-actions">
+            <button class="secondary-button" type="submit" data-auth-action="signin">Sign in</button>
+            <button class="secondary-button" type="button" id="signup-btn">Sign up</button>
+          </div>
+          <button class="text-button subtle-action" type="button" id="password-reset-btn">Reset password</button>
+        </form>
+        <div id="auth-session" class="auth-session"></div>
+        <div id="auth-help" class="auth-help">Email verification and recovery are ready for the StudentOS Auth project.</div>
+        <button id="logout-btn" class="secondary-button wide auth-logout" type="button" hidden>Logout</button>
+      </section>
+      <div class="rail-footer">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="connector-status">Mock mode</span>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Focused semester layer</p>
+          <h2 id="view-title">Today</h2>
+        </div>
+        <div class="profile-strip">
+          <div class="metric-pill plan-pill">
+            <span>Plan</span>
+            <strong id="plan-badge">Free</strong>
+          </div>
+          <div class="metric-pill">
+            <span>Credits</span>
+            <strong id="credit-balance">0</strong>
+          </div>
+          <div class="metric-pill">
+            <span>Rhythm</span>
+            <strong id="study-rhythm">-</strong>
+          </div>
+          <div class="metric-pill wide-pill">
+            <span>Eligibility</span>
+            <strong id="credit-eligibility">-</strong>
+          </div>
+          <div class="student-chip">
+            <span class="avatar" aria-hidden="true">A</span>
+            <span id="student-name">Student</span>
+          </div>
+        </div>
+      </header>
+
+      <section class="view active" id="view-today" aria-labelledby="view-title">
+        <div id="dashboard-summary" class="dashboard-summary"></div>
+        <div class="overview-grid">
+          <section class="focus-board">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Now</p>
+                <h3>Study Queue</h3>
+              </div>
+              <button class="icon-button" id="refresh-btn" type="button" title="Refresh">
+                <span class="refresh-icon" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div id="roadmap-list" class="stack-list"></div>
+          </section>
+
+          <section class="agenda-board">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Schedule</p>
+                <h3>Classes And Blocks</h3>
+              </div>
+            </div>
+            <div id="timetable-list" class="stack-list compact"></div>
+          </section>
+
+          <section class="assignment-board">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Due Work</p>
+                <h3>Assignments</h3>
+              </div>
+              <div class="inline-actions">
+                <button class="text-button" id="classroom-connect-btn" type="button">Connect Classroom</button>
+                <button class="text-button" id="classroom-sync-btn" type="button">Sync Classroom</button>
+                <button class="text-button" id="classroom-disconnect-btn" type="button">Disconnect</button>
+              </div>
+            </div>
+            <div id="classroom-panel" class="result-box compact-result" aria-live="polite">
+              <p>Read-only import. StudentOS will not submit or modify Classroom work.</p>
+            </div>
+            <div id="assignment-list" class="stack-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-setup" aria-labelledby="view-title">
+        <div class="setup-layout">
+          <section class="onboarding-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Academic Profile</p>
+                <h3>StudentOS Setup</h3>
+              </div>
+              <button class="text-button" id="demo-seed-btn" type="button">Load demo</button>
+            </div>
+            <form id="onboarding-form" class="form-grid onboarding-form">
+              <div class="form-row">
+                <label>
+                  Student name
+                  <input name="displayName" type="text" value="Aarav" required>
+                </label>
+                <label>
+                  Stream
+                  <input name="stream" type="text" value="Science">
+                </label>
+              </div>
+              <div class="form-row">
+                <label>
+                  Class
+                  <input name="classLevel" type="text" value="Grade 10">
+                </label>
+                <label>
+                  Goal
+                  <select name="academicGoal">
+                    <option value="exam_prep">Exam prep</option>
+                    <option value="assignment_control">Assignment control</option>
+                    <option value="concept_mastery">Concept mastery</option>
+                    <option value="revision">Revision</option>
+                  </select>
+                </label>
+              </div>
+              <div class="form-row">
+                <label>
+                  Daily study minutes
+                  <input name="dailyStudyAvailabilityMinutes" type="number" min="15" max="360" value="105">
+                </label>
+                <label>
+                  Break cycle
+                  <select name="studyBreakPattern">
+                    <option value="25/5">25 / 5</option>
+                    <option value="50/10">50 / 10</option>
+                    <option value="40/8">40 / 8</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                Subjects
+                <textarea name="subjectsText" rows="4">Mathematics|2026-06-05|Quadratic equations, Trigonometry basics, Statistics
+Biology|2026-06-09|Cell cycle and mitosis, Ecology
+English|2026-06-12|Argument writing, Macbeth</textarea>
+              </label>
+              <label>
+                Weak topics
+                <textarea name="weakTopicsText" rows="3">Mathematics: Trigonometry basics, Statistics
+Biology: Phase ordering</textarea>
+              </label>
+              <label>
+                Completed topics
+                <textarea name="completedTopicsText" rows="2">Mathematics: Quadratic equations</textarea>
+              </label>
+              <label>
+                Class timetable / study blocks
+                <textarea name="timetableText" rows="3">Mon|18:30|Math revision|Mathematics
+Tue|18:00|Biology diagrams|Biology
+Thu|19:00|English writing sprint|English</textarea>
+              </label>
+              <button class="primary-button" type="submit">Generate roadmap</button>
+            </form>
+            <div id="onboarding-result" class="result-box rich-result" aria-live="polite"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-courses" aria-labelledby="view-title">
+        <div id="courses-grid" class="courses-grid"></div>
+      </section>
+
+      <section class="view" id="view-memory" aria-labelledby="view-title">
+        <div class="memory-layout">
+          <section>
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Sources</p>
+                <h3>Student Materials</h3>
+              </div>
+            </div>
+            <div id="source-list" class="source-list"></div>
+          </section>
+          <section>
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Private Upload</p>
+                <h3>Add Source Material</h3>
+              </div>
+            </div>
+            <form id="source-form" class="form-grid">
+              <label>
+                Title
+                <input name="title" type="text" value="Chapter handout" required>
+              </label>
+              <label>
+                Course
+                <select name="courseId" id="source-course-select"></select>
+              </label>
+              <label>
+                Private file
+                <input name="file" id="source-file" type="file" accept=".txt,.md,.markdown,.pdf,.doc,.docx,.ppt,.pptx,text/plain,text/markdown,application/pdf" required>
+              </label>
+              <button class="primary-button" type="submit">Upload private source</button>
+            </form>
+            <div id="source-result" class="result-box" aria-live="polite"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-studio" aria-labelledby="view-title">
+        <div class="studio-layout">
+          <section class="studio-wide">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Assignment Loop</p>
+                <h3>Coverage To Learning Flow</h3>
+              </div>
+            </div>
+            <form id="assignment-flow-form" class="form-grid inline-form">
+              <label>
+                Assignment
+                <select name="assignmentId" id="flow-assignment-select"></select>
+              </label>
+              <button class="primary-button" type="submit">Analyze flow</button>
+            </form>
+            <div id="flow-result" class="result-box rich-result" aria-live="polite"></div>
+          </section>
+
+          <section>
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">MCQ Scoring</p>
+                <h3>Credit Engine</h3>
+              </div>
+            </div>
+            <form id="score-form" class="form-grid">
+              <label>
+                Topic
+                <select name="topicId" id="score-topic-select"></select>
+              </label>
+              <label>
+                Score
+                <input name="scorePercent" type="number" min="0" max="100" value="82" required>
+              </label>
+              <button class="primary-button" type="submit">Record score</button>
+            </form>
+            <div id="score-result" class="result-box rich-result" aria-live="polite"></div>
+          </section>
+
+          <section>
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Extension Draft</p>
+                <h3>Decision Support</h3>
+              </div>
+            </div>
+            <form id="extension-form" class="form-grid">
+              <label>
+                Assignment
+                <select name="assignmentId" id="extension-assignment-select"></select>
+              </label>
+              <label>
+                Reason
+                <input name="reason" type="text" value="medical appointment conflict" required>
+              </label>
+              <button class="secondary-button" type="submit">Draft only</button>
+            </form>
+            <div id="extension-result" class="result-box" aria-live="polite"></div>
+          </section>
+
+          <section class="studio-wide">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Tutor Lesson</p>
+                <h3>Corrections And Source-Grounded Repair</h3>
+              </div>
+            </div>
+            <div id="lesson-result" class="result-box rich-result"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-account" aria-labelledby="view-title">
+        <div class="account-layout">
+          <section class="account-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Account</p>
+                <h3>StudentOS Identity</h3>
+              </div>
+              <span class="brain-badge">SynthetIQ ecosystem</span>
+            </div>
+            <div id="account-summary" class="account-summary"></div>
+          </section>
+
+          <section class="account-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Plan</p>
+                <h3>Quota And Storage</h3>
+              </div>
+              <div class="heading-actions">
+                <button class="text-button" type="button" id="manage-billing-btn">Manage</button>
+                <button class="text-button" type="button" id="upgrade-btn">Upgrade</button>
+              </div>
+            </div>
+            <div id="quota-panel" class="quota-panel"></div>
+          </section>
+
+          <section class="account-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Recovery</p>
+                <h3>Password Reset</h3>
+              </div>
+            </div>
+            <form id="account-reset-form" class="form-grid">
+              <label>
+                Account email
+                <input name="email" id="account-reset-email" type="email" placeholder="student@example.com" autocomplete="email">
+              </label>
+              <button class="secondary-button" type="submit">Request reset link</button>
+            </form>
+            <div id="password-reset-result" class="result-box" aria-live="polite"></div>
+          </section>
+
+          <section class="account-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Verification</p>
+                <h3>Email Status</h3>
+              </div>
+            </div>
+            <form id="verification-resend-form" class="form-grid">
+              <label>
+                Account email
+                <input name="email" id="verification-email" type="email" placeholder="student@example.com" autocomplete="email">
+              </label>
+              <button class="secondary-button" type="submit">Resend verification link</button>
+            </form>
+            <div id="verification-result" class="result-box" aria-live="polite"></div>
+          </section>
+
+          <section class="account-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Legal</p>
+                <h3>Terms And Privacy</h3>
+              </div>
+            </div>
+            <div id="legal-status" class="lifecycle-status"></div>
+            <label class="check-row">
+              <input id="legal-accept-check" type="checkbox">
+              <span>I accept the current StudentOS terms and privacy notice.</span>
+            </label>
+            <button id="legal-accept-btn" class="secondary-button" type="button">Record acceptance</button>
+            <div id="legal-result" class="result-box" aria-live="polite"></div>
+          </section>
+
+          <section class="account-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Consent</p>
+                <h3>Privacy Preferences</h3>
+              </div>
+            </div>
+            <form id="consent-form" class="consent-form">
+              <label class="check-row">
+                <input name="aiPersonalization" type="checkbox" checked>
+                <span>Use my StudentOS activity to personalize tutoring.</span>
+              </label>
+              <label class="check-row">
+                <input name="productResearch" type="checkbox">
+                <span>Allow de-identified product quality review.</span>
+              </label>
+              <label class="check-row">
+                <input name="externalProgressSharing" type="checkbox">
+                <span>Share progress outside my account.</span>
+              </label>
+              <label class="check-row">
+                <input name="guardianSharingFuture" type="checkbox">
+                <span>Prepare guardian or mentor sharing for a future consent flow.</span>
+              </label>
+              <div class="account-actions-grid">
+                <button class="secondary-button" type="submit">Save preferences</button>
+                <button class="text-button" type="button" id="consent-withdraw-btn">Request withdrawal</button>
+              </div>
+            </form>
+            <div id="consent-result" class="result-box" aria-live="polite"></div>
+          </section>
+
+          <section class="account-panel account-wide">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Pricing</p>
+                <h3>StudentOS Plans</h3>
+              </div>
+              <span class="brain-badge">No payments active</span>
+            </div>
+            <div id="pricing-panel" class="pricing-panel"></div>
+          </section>
+
+          <section class="account-panel account-wide">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Data Rights</p>
+                <h3>Export And Deletion Requests</h3>
+              </div>
+            </div>
+            <div class="account-actions-grid">
+              <button id="export-request-btn" class="secondary-button" type="button">Request data export</button>
+              <button id="deletion-request-btn" class="secondary-button danger-action" type="button">Request account deletion</button>
+            </div>
+            <p class="muted-copy">Exports are packaged privately and downloaded through your signed-in StudentOS session. Deletion requests always enter a grace-period review; dry runs do not delete data.</p>
+            <div id="account-action-result" class="result-box" aria-live="polite"></div>
+            <div id="account-lifecycle-status" class="lifecycle-grid"></div>
+          </section>
+
+          <section class="account-panel account-wide">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Future Roles</p>
+                <h3>Guardian Invitation Groundwork</h3>
+              </div>
+              <span class="brain-badge">Disabled by default</span>
+            </div>
+            <p class="muted-copy">Guardian, teacher, and institution access remains inactive. Any future invitation requires an explicit student consent flow.</p>
+            <button id="guardian-preview-btn" class="secondary-button" type="button">Preview guardian groundwork</button>
+            <div id="invitation-result" class="result-box" aria-live="polite"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <aside class="ai-panel" aria-label="AI panel">
+      <div class="ai-panel-head">
+        <div>
+          <p class="eyebrow">AI Verbs</p>
+          <h3>Academic Copilot</h3>
+        </div>
+        <span class="brain-badge">SentIQGPT powered</span>
+      </div>
+      <div class="verb-tabs" role="tablist" aria-label="AI verbs">
+        <button class="verb-tab active" data-verb="Ask" type="button">Ask</button>
+        <button class="verb-tab" data-verb="Plan" type="button">Plan</button>
+        <button class="verb-tab" data-verb="Make" type="button">Make</button>
+        <button class="verb-tab" data-verb="Review" type="button">Review</button>
+      </div>
+      <form id="ai-form" class="ai-form">
+        <textarea id="ai-message" rows="5">Help me with quadratics before the worksheet.</textarea>
+        <button class="primary-button wide" type="submit">Run</button>
+      </form>
+      <div id="ai-response" class="ai-response" aria-live="polite"></div>
+      <div class="contract-zone">
+        <div class="section-heading tight">
+          <div>
+            <p class="eyebrow">Automation</p>
+            <h3>Assignment Contract</h3>
+          </div>
+        </div>
+        <button id="contract-btn" class="secondary-button wide" type="button">Check first assignment</button>
+        <div id="contract-result" class="result-box"></div>
+      </div>
+    </aside>
+  </div>
+
+  <script type="module" src="scripts/config.js"></script>
+  <script type="module" src="scripts/app.js"></script>
+</body>
+</html>

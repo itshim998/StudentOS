@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StudentOS Operator Review</title>
+  <link rel="stylesheet" href="styles/main.css">
+</head>
+<body class="operator-page">
+  <main class="operator-shell">
+    <header class="operator-header">
+      <div>
+        <p class="eyebrow">StudentOS by SentIQGPT</p>
+        <h1>Operator Review Console</h1>
+        <p class="muted-copy">Internal, feature-flagged review surface. Final account deletion is disabled.</p>
+      </div>
+      <span class="brain-badge">Internal only</span>
+    </header>
+
+    <section class="operator-panel">
+      <form id="operator-query-form" class="operator-form">
+        <label>User ID<input id="operator-user-id" name="userId" required autocomplete="off"></label>
+        <label>Operator ID<input id="operator-id" name="operatorId" required autocomplete="off"></label>
+        <label>Bootstrap token<input id="operator-token" name="token" type="password" required autocomplete="off"></label>
+        <button class="primary-button" type="submit">Authorize and load</button>
+      </form>
+      <p class="muted-copy">The bootstrap token is exchanged once and cleared. The short-lived operator session stays in this browser tab only.</p>
+      <div id="operator-result" class="result-box" aria-live="polite"></div>
+    </section>
+
+    <section class="operator-panel">
+      <div class="section-heading"><h2>Operator MFA</h2></div>
+      <div class="operator-form">
+        <button id="operator-mfa-challenge-btn" class="secondary-button" type="button">Create MFA challenge</button>
+        <label>MFA code<input id="operator-mfa-code" type="password" autocomplete="one-time-code"></label>
+        <button id="operator-mfa-verify-btn" class="secondary-button" type="button">Verify MFA</button>
+      </div>
+      <div id="operator-mfa-result" class="result-box" aria-live="polite"></div>
+    </section>
+
+    <section class="operator-panel">
+      <div class="section-heading"><h2>Monitoring</h2></div>
+      <button id="operator-monitoring-btn" class="secondary-button" type="button">Refresh redacted status</button>
+      <div id="operator-monitoring" class="result-box" aria-live="polite"></div>
+    </section>
+
+    <section class="operator-grid">
+      <article class="operator-panel">
+        <div class="section-heading"><h2>Export Requests</h2></div>
+        <div id="operator-exports" class="operator-list"></div>
+      </article>
+      <article class="operator-panel">
+        <div class="section-heading"><h2>Deletion Review</h2></div>
+        <div id="operator-deletions" class="operator-list"></div>
+      </article>
+    </section>
+
+    <section class="operator-panel">
+      <div class="section-heading"><h2>Immutable Evidence</h2></div>
+      <div id="operator-evidence" class="operator-list"></div>
+    </section>
+
+    <section class="operator-grid">
+      <article class="operator-panel">
+        <div class="section-heading"><h2>Operator Audit</h2></div>
+        <div id="operator-audit" class="operator-list"></div>
+      </article>
+      <article class="operator-panel">
+        <div class="section-heading"><h2>Billing Safety</h2></div>
+        <div id="operator-billing-events" class="operator-list"></div>
+      </article>
+    </section>
+
+    <section class="operator-panel">
+      <div class="section-heading"><h2>Monitoring Alerts</h2></div>
+      <div id="operator-alerts" class="operator-list"></div>
+    </section>
+
+    <section class="operator-panel">
+      <div class="section-heading"><h2>Retention Cleanup</h2></div>
+      <p class="muted-copy">Deletes expired private export packages only. Student source files are outside this operation.</p>
+      <button id="operator-cleanup-btn" class="secondary-button" type="button">Clean expired export packages</button>
+      <div id="operator-cleanup-result" class="result-box" aria-live="polite"></div>
+    </section>
+  </main>
+  <script type="module" src="scripts/operator.js"></script>
+</body>
+</html>
