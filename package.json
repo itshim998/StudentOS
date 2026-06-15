@@ -63,7 +63,8 @@
     "preflight:production": "node scripts/preflightProduction.js",
     "test:pass30": "node backend/testPass30.js",
     "test:e2e:supabase:report": "node scripts/runSupabaseE2EReport.js",
-    "cleanup:e2e:supabase-users": "node scripts/cleanupSupabaseE2EUsers.js"
+    "cleanup:e2e:supabase-users": "node scripts/cleanupSupabaseE2EUsers.js",
+    "preflight:azure": "node scripts/preflightAzure.js"
   },
   "engines": {
     "node": ">=20.16.0"

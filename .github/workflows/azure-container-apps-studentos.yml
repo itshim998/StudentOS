@@ -1,0 +1,105 @@
+﻿name: Azure Container Apps - StudentOS API
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Optional image tag. Defaults to the commit SHA.
+        required: false
+        type: string
+      location:
+        description: Azure region.
+        required: false
+        default: centralindia
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: studentos-azure-container-apps
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/studentos-api
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: azure-dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select image tag
+        id: image
+        shell: bash
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          if [ -z "$TAG" ]; then TAG="${GITHUB_SHA}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE_NAME}:$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR for push
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.image }}
+          provenance: false
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Ensure resource group
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az group create \
+              --name "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --location "${{ inputs.location || secrets.AZURE_LOCATION }}" \
+              --output none
+
+      - name: Deploy Container App infrastructure
+        uses: azure/cli@v2
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        with:
+          inlineScript: |
+            az deployment group create \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --template-file infra/azure/containerapp.bicep \
+              --parameters \
+                location="${{ inputs.location || secrets.AZURE_LOCATION }}" \
+                containerAppName="${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
+                managedEnvironmentName="${{ secrets.AZURE_CONTAINER_APP_ENVIRONMENT }}" \
+                image="${{ steps.image.outputs.image }}" \
+                targetPort=3101 \
+                minReplicas=0 \
+                maxReplicas=1 \
+                registryServer="ghcr.io" \
+                registryUsername="${{ github.repository_owner }}" \
+                registryPassword="$GHCR_PULL_TOKEN" \
+              --output none
+
+      - name: Show safe deployment summary
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az containerapp show \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
+              --query "{name:name, fqdn:properties.configuration.ingress.fqdn, min:properties.template.scale.minReplicas, max:properties.template.scale.maxReplicas, latestRevision:properties.latestRevisionName}" \
+              --output table

@@ -1,0 +1,169 @@
+﻿# Azure Container Apps Deployment Readiness
+
+StudentOS backend is prepared for Azure Container Apps Consumption. This pass does not deploy automatically.
+
+## Target Architecture
+
+- Backend: Azure Container Apps Consumption
+- Image registry: GHCR, to avoid Azure Container Registry cost
+- Database/Auth/Storage: existing Supabase projects and private buckets
+- Frontend: Cloudflare Pages later
+- Min replicas: 0
+- Max replicas: 1
+- Ingress: external HTTP ingress
+- Workers: not always-on in the web container
+- Warmup pinger: disabled
+- Azure SQL: not used
+- Azure Storage duplication: not used
+
+## Files
+
+- `Dockerfile`
+- `.dockerignore`
+- `infra/azure/containerapp.bicep`
+- `infra/azure/deploy-containerapp.ps1`
+- `infra/azure/deploy-containerapp.sh`
+- `.github/workflows/azure-container-apps-studentos.yml`
+
+## GitHub Actions Workflow
+
+Workflow name: `Azure Container Apps - StudentOS API`
+
+The workflow is manual-only:
+
+```yaml
+on:
+  workflow_dispatch:
+```
+
+It builds a Docker image, pushes it to GHCR, and deploys/updates the Container App with min replicas 0 and max replicas 1.
+
+## Required GitHub Secrets
+
+Do not commit values. Configure these in GitHub repository secrets or environment secrets:
+
+- `AZURE_CREDENTIALS`
+- `AZURE_SUBSCRIPTION_ID`
+- `AZURE_RESOURCE_GROUP`
+- `AZURE_CONTAINER_APP_NAME`
+- `AZURE_CONTAINER_APP_ENVIRONMENT`
+- `AZURE_LOCATION`
+- `GHCR_PULL_TOKEN`
+
+`GHCR_PULL_TOKEN` should be a low-scope token with package read access so Azure Container Apps can pull the private GHCR image after the workflow finishes. The workflow uses `GITHUB_TOKEN` only to push the image during the workflow run.
+
+OIDC/federated identity can replace `AZURE_CREDENTIALS` later. If using OIDC, update the workflow to pass `client-id`, `tenant-id`, and `subscription-id` to `azure/login` instead of `creds`.
+
+## Azure Runtime Environment Variables
+
+Configure these on the Container App as env vars or secret refs. Do not bake them into the image and do not pass them as Docker build args.
+
+Non-secret runtime values:
+
+- `NODE_ENV=production`
+- `PORT=3101`
+- `STUDENTOS_PORT=3101`
+- `STUDENTOS_ENV=production`
+- `STUDENTOS_DEPLOYMENT=azure-container-apps`
+- `STUDENTOS_MODE=supabase`
+- `STUDENTOS_BACKGROUND_WORKERS_ENABLED=false`
+- `STUDENTOS_DEMO_SEED_ENABLED=false`
+- `STUDENTOS_GOOGLE_CLASSROOM_MODE=disabled`
+- `STUDENTOS_BILLING_PROVIDER=none`
+- `STUDENTOS_BILLING_LIVE_CHARGES_ENABLED=false`
+- `STUDENTOS_FINAL_ACCOUNT_DELETION_ENABLED=false`
+- `STUDENTOS_AUTH_ADMIN_DELETE_ENABLED=false`
+- `STUDENTOS_INTERNAL_OPS_ENABLED=false`
+- `CORS_ORIGINS=http://localhost:3101,http://127.0.0.1:3101`
+
+Backend-only secret values:
+
+- `STUDENTOS_SUPABASE_URL_1`
+- `STUDENTOS_SUPABASE_ANON_KEY_1`
+- `STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1`
+- `STUDENTOS_SUPABASE_URL_2`
+- `STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2`
+- `STUDENTOS_SUPABASE_URL_3`
+- `STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3`
+- `STUDENTOS_SUPABASE_URL_4`
+- `STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4`
+- `STUDENTOS_SUPABASE_JWT_SECRET`
+- `STUDENTOS_STORAGE_BUCKET`
+- `STUDENTOS_EXPORT_STORAGE_BUCKET`
+- `STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET` if Classroom OAuth is later enabled
+- `STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET` if Classroom OAuth is later enabled
+- `GOOGLE_CLIENT_ID` if Classroom OAuth is later enabled
+- `GOOGLE_CLIENT_SECRET` if Classroom OAuth is later enabled
+- `GOOGLE_REDIRECT_URI` if Classroom OAuth is later enabled
+- `GROQ_API_KEY` through `GROQ_API_KEY_5` if real AI is enabled
+- `POLLINATIONS_API_KEY` if Pollinations paid/authenticated mode is enabled
+- `STUDENTOS_EMBEDDING_API_KEY` if real embeddings are enabled
+- billing provider secrets only after a billing launch review
+- operator/internal/deletion secrets only after an internal-ops launch review
+
+## Manual Local Deployment Command
+
+PowerShell example after building/pushing an image:
+
+```powershell
+$env:GHCR_PULL_TOKEN="<set in local shell only>"
+.\infra\azure\deploy-containerapp.ps1 `
+  -ResourceGroup rg-studentos-dev `
+  -ContainerAppName studentos-api-dev `
+  -EnvironmentName cae-studentos-dev `
+  -Location centralindia `
+  -Image ghcr.io/itshim998/studentos-api:<tag> `
+  -RegistryUsername itshim998
+Remove-Item Env:GHCR_PULL_TOKEN
+```
+
+Bash example:
+
+```bash
+export AZURE_RESOURCE_GROUP=rg-studentos-dev
+export AZURE_CONTAINER_APP_NAME=studentos-api-dev
+export AZURE_CONTAINER_APP_ENVIRONMENT=cae-studentos-dev
+export AZURE_LOCATION=centralindia
+export STUDENTOS_IMAGE=ghcr.io/itshim998/studentos-api:<tag>
+export REGISTRY_USERNAME=itshim998
+export GHCR_PULL_TOKEN='<set in shell only>'
+bash infra/azure/deploy-containerapp.sh
+unset GHCR_PULL_TOKEN
+```
+
+## Health and Config
+
+- `/api/health` is intended to be lightweight and must not call Supabase or AI providers.
+- `/api/config` exposes safe public configuration only.
+- `/api/status` can include richer operational status and may inspect queue state.
+
+## Worker Strategy
+
+Do not run background workers in the web Container App for the first Azure deployment. The backend boots without a worker.
+
+Future option: Azure Container Apps Jobs for manual or scheduled jobs. Keep jobs disabled by default until reviewed.
+
+## CORS and Domains
+
+Current defaults support local development. Before connecting Cloudflare Pages, update `CORS_ORIGINS` to include the Cloudflare frontend origin.
+
+Future API domain options:
+
+- `https://studentos-api.sentiqlabs.com`
+- `https://studentos.sentiqlabs.com/api`
+
+Update Google OAuth redirect URIs only after choosing the public API domain.
+
+## Validation
+
+Run before enabling the manual workflow:
+
+```powershell
+npm.cmd run smoke:core
+npm.cmd run test:e2e
+npm.cmd run test:e2e:supabase
+npm.cmd run preflight:production
+npm.cmd run preflight:azure
+node --check backend/server.js
+node --check frontend/scripts/app.js
+```
