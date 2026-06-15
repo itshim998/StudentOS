@@ -1,0 +1,175 @@
+﻿# Azure First Deploy Checklist
+
+This checklist is for the first manual StudentOS backend deployment to Azure Container Apps. Do not paste secrets into terminals, screenshots, commits, GitHub issues, or chat logs.
+
+## 1. Azure Subscription Selection
+
+1. Sign in locally if using CLI deployment:
+   ```powershell
+   az login
+   ```
+2. Confirm the intended subscription:
+   ```powershell
+   az account show --query "{name:name,id:id,tenant:tenantId}" --output table
+   ```
+3. Select it explicitly if needed:
+   ```powershell
+   az account set --subscription "<subscription-id>"
+   ```
+
+## 2. Resource Group
+
+Default dev resource group:
+
+```text
+rg-studentos-dev
+```
+
+Create it in `centralindia` when available, otherwise use `eastus`:
+
+```powershell
+az group create --name rg-studentos-dev --location centralindia
+```
+
+## 3. Container Apps Environment
+
+The Bicep template creates or updates the environment:
+
+```text
+cae-studentos-dev
+```
+
+No Azure SQL, Azure Storage, or Azure Container Registry is required for the first deployment.
+
+## 4. Container App
+
+Default app:
+
+```text
+studentos-api-dev
+```
+
+Required scale settings:
+
+- `minReplicas=0`
+- `maxReplicas=1`
+- external HTTP ingress enabled
+- target port `3101`
+- smallest safe resources: `0.25` CPU and `0.5Gi` memory
+
+## 5. GitHub Actions Manual Workflow
+
+Workflow name:
+
+```text
+Azure Container Apps - StudentOS API
+```
+
+Workflow file:
+
+```text
+.github/workflows/azure-container-apps-studentos.yml
+```
+
+It must remain manual-only with `workflow_dispatch`. Do not add automatic `push` or `pull_request` deployment triggers until launch controls are reviewed.
+
+## 6. Required GitHub Repository Secrets
+
+Configure these without values in documentation or commits:
+
+- `AZURE_CREDENTIALS`
+- `AZURE_SUBSCRIPTION_ID`
+- `AZURE_RESOURCE_GROUP`
+- `AZURE_CONTAINER_APP_NAME`
+- `AZURE_CONTAINER_APP_ENVIRONMENT`
+- `AZURE_LOCATION`
+- `GHCR_PULL_TOKEN`
+
+Safer future option: replace long-lived `AZURE_CREDENTIALS` with Azure OIDC/federated credentials and update `azure/login` to use `client-id`, `tenant-id`, and `subscription-id`.
+
+## 7. GHCR Pull Credentials
+
+The workflow pushes the Docker image to GHCR. If the GHCR package is private, Azure Container Apps needs pull credentials.
+
+Recommended first-pass strategy:
+
+1. Create a minimal GitHub token that can read packages.
+2. Store it as `GHCR_PULL_TOKEN` in GitHub Secrets for workflow deployment.
+3. For local CLI deployment, set it only in the current shell as `GHCR_PULL_TOKEN`.
+4. Let the Bicep template store it as an Azure Container Apps registry secret.
+
+Do not make the repository public for this. Do not bake the token into the Docker image.
+
+## 8. Azure Runtime Secret Setup
+
+Use `infra/azure/containerapp-secrets.example.ps1` as a placeholder-only guide.
+
+Runtime secrets and env vars belong in Azure Container Apps, not in the image and not in GitHub source.
+
+## 9. Post-Deploy Health Checks
+
+After deployment, set the backend URL locally:
+
+```powershell
+$env:STUDENTOS_AZURE_API_URL="https://<container-app-fqdn>"
+npm.cmd run verify:azure-deployment
+Remove-Item Env:STUDENTOS_AZURE_API_URL
+```
+
+Expected checks:
+
+- `GET /api/health` returns `ok: true`
+- `GET /api/config` returns safe public config
+- config reports `deploymentTarget: azure-container-apps`
+- no dangerous toggles are enabled
+- no secrets appear in responses
+
+## 10. Cloudflare Frontend Wiring Later
+
+Do not wire Cloudflare yet unless the Azure URL is final.
+
+Future public frontend config name:
+
+```text
+STUDENTOS_PUBLIC_API_BASE_URL
+```
+
+Cloudflare Pages can use either an environment variable at build time or a small static config file generated during deployment.
+
+Future Azure CORS allowlist should include:
+
+- Cloudflare `pages.dev` preview URL
+- `https://studentos.sentiqlabs.com`
+- `http://localhost:3101`
+- `http://127.0.0.1:3101`
+
+## 11. Rollback and Scale-to-Zero
+
+Scale to zero while keeping the app:
+
+```powershell
+az containerapp update --resource-group rg-studentos-dev --name studentos-api-dev --min-replicas 0 --max-replicas 1
+```
+
+Disable ingress in an incident:
+
+```powershell
+az containerapp ingress disable --resource-group rg-studentos-dev --name studentos-api-dev
+```
+
+Delete the dev app:
+
+```powershell
+az containerapp delete --resource-group rg-studentos-dev --name studentos-api-dev --yes
+```
+
+## 12. Emergency Credit Preservation
+
+If unexpected cost appears:
+
+1. Disable ingress.
+2. Confirm min replicas is 0.
+3. Delete old revisions if needed.
+4. Delete the dev Container App if traffic continues.
+5. Delete the dev resource group only if it contains no shared resources.
+6. Check Azure Cost Management and budget alerts.

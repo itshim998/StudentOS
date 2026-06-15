@@ -1,0 +1,100 @@
+﻿import { performance } from "node:perf_hooks";
+
+const REQUIRED_ENV = "STUDENTOS_AZURE_API_URL";
+const SECRET_MARKERS = [
+  /service[_-]?role/i,
+  /supabase[_-]?service/i,
+  /GOOGLE_CLIENT_SECRET/i,
+  /GROQ_API_KEY/i,
+  /POLLINATIONS_API_KEY/i,
+  /TOKEN_ENCRYPTION_SECRET/i,
+  /AZURE_CREDENTIALS/i,
+  /PRIVATE KEY/i,
+  /BEGIN RSA/i,
+  /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/,
+];
+
+function normalizeBaseUrl(value) {
+  const raw = String(value || "").trim().replace(/\/+$/, "");
+  if (!raw) throw new Error(`${REQUIRED_ENV} is required`);
+  const url = new URL(raw);
+  if (!/^https?:$/.test(url.protocol)) throw new Error(`${REQUIRED_ENV} must be http or https`);
+  return url.toString().replace(/\/+$/, "");
+}
+
+async function getJson(baseUrl, path) {
+  const started = performance.now();
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers: { Accept: "application/json" },
+  });
+  const elapsedMs = Math.round(performance.now() - started);
+  const text = await response.text();
+  let body = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(`${path} did not return JSON`);
+  }
+  if (!response.ok) throw new Error(`${path} failed with HTTP ${response.status}`);
+  return { status: response.status, elapsedMs, body, raw: text };
+}
+
+function assertNoSecrets(label, raw) {
+  const hits = SECRET_MARKERS.filter((pattern) => pattern.test(raw));
+  if (hits.length) throw new Error(`${label} response contains secret-like markers`);
+}
+
+function dangerousToggles(config) {
+  const findings = [];
+  const account = config.account || {};
+  const billing = config.billing || config.saas?.billing?.provider || {};
+  const classroom = config.classroom || {};
+  if (account.directDeletionEnabled) findings.push("direct deletion enabled");
+  if (account.operatorConsoleEnabled) findings.push("operator console enabled");
+  if (billing.liveChargesEnabled || billing.checkoutRedirectEnabled) findings.push("billing live charge or checkout enabled");
+  if (classroom.writeScopesEnabled || classroom.postingEnabled || classroom.submissionEnabled) findings.push("Classroom write capability enabled");
+  return findings;
+}
+
+const baseUrl = normalizeBaseUrl(process.env[REQUIRED_ENV]);
+const started = new Date().toISOString();
+const health = await getJson(baseUrl, "/api/health");
+const config = await getJson(baseUrl, "/api/config");
+
+assertNoSecrets("/api/health", health.raw);
+assertNoSecrets("/api/config", config.raw);
+
+const errors = [];
+if (health.body?.ok !== true) errors.push("/api/health did not return ok=true");
+if (config.body?.deploymentTarget !== "azure-container-apps") errors.push("/api/config deploymentTarget is not azure-container-apps");
+if (!["supabase", "mock"].includes(config.body?.persistence?.mode || config.body?.supabase?.mode || "")) {
+  errors.push("/api/config persistence mode is neither supabase nor mock");
+}
+const toggles = dangerousToggles(config.body || {});
+errors.push(...toggles);
+
+const result = {
+  ok: errors.length === 0,
+  checkedAt: started,
+  baseUrlHost: new URL(baseUrl).host,
+  coldStartProbe: {
+    healthMs: health.elapsedMs,
+    configMs: config.elapsedMs,
+  },
+  health: {
+    ok: health.body?.ok === true,
+    deploymentTarget: health.body?.deploymentTarget || null,
+    mode: health.body?.mode || null,
+  },
+  config: {
+    deploymentTarget: config.body?.deploymentTarget || null,
+    persistenceMode: config.body?.persistence?.mode || config.body?.supabase?.mode || null,
+    classroomWriteScopesEnabled: Boolean(config.body?.classroom?.writeScopesEnabled),
+    realSubmissionEnabled: Boolean(config.body?.realSubmissionEnabled),
+  },
+  errors,
+  secretsPrinted: false,
+};
+
+console.log(JSON.stringify(result, null, 2));
+if (!result.ok) process.exit(1);

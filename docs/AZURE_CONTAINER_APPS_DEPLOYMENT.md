@@ -167,3 +167,23 @@ npm.cmd run preflight:azure
 node --check backend/server.js
 node --check frontend/scripts/app.js
 ```
+
+## First Deploy Checklist
+
+Use `docs/AZURE_FIRST_DEPLOY_CHECKLIST.md` before the first manual deployment. It covers subscription selection, GHCR pull credentials, runtime secret setup, post-deploy verification, rollback, scale-to-zero, and emergency credit preservation.
+
+## Post-Deploy Verification
+
+After the Container App URL is known, run:
+
+```powershell
+$env:STUDENTOS_AZURE_API_URL="https://<container-app-fqdn>"
+npm.cmd run verify:azure-deployment
+Remove-Item Env:STUDENTOS_AZURE_API_URL
+```
+
+The verifier checks `/api/health`, `/api/config`, cold-start timing, safe `deploymentTarget`, and dangerous toggles.
+
+## Cloudflare Frontend Wiring Plan
+
+Do not wire Cloudflare until the Azure backend URL is stable. The future public frontend config name should be `STUDENTOS_PUBLIC_API_BASE_URL`. Cloudflare Pages can inject it as an environment variable during build or write a small static config artifact. Update Azure `CORS_ORIGINS` to include the Cloudflare `pages.dev` preview URL, `https://studentos.sentiqlabs.com`, and localhost development origins.

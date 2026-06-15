@@ -63,6 +63,12 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Select Azure subscription
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
       - name: Ensure resource group
         uses: azure/cli@v2
         with:

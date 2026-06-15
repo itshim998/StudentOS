@@ -72,9 +72,11 @@ for (const pattern of [".env", ".env.*", "node_modules", "test-results", "playwr
 
 addCheck("package start exists", pkg.scripts?.start === "node backend/server.js");
 addCheck("package preflight:azure exists", pkg.scripts?.["preflight:azure"] === "node scripts/preflightAzure.js");
+addCheck("package verify:azure-deployment exists", pkg.scripts?.["verify:azure-deployment"] === "node scripts/verifyAzureDeployment.js");
 addCheck("server reads PORT", /process\.env\.PORT/.test(server));
 addCheck("health route exists", server.includes('url.pathname === "/api/health"'));
 addCheck("config route exists", server.includes('url.pathname === "/api/config"'));
+addCheck("config exposes safe deployment target", server.includes("deploymentTarget: DEPLOYMENT_TARGET"));
 
 const healthBlock = server.slice(server.indexOf('url.pathname === "/api/health"'), server.indexOf('url.pathname === "/api/status"'));
 addCheck("health route avoids state/database/provider calls", !/getStateContext|repository\.|fetch\(|runStudentOsVerb|syncGoogleClassroom|embedSourceChunks/.test(healthBlock));
@@ -125,6 +127,9 @@ for (const file of [
   "infra/azure/deploy-containerapp.sh",
   "docs/AZURE_CONTAINER_APPS_DEPLOYMENT.md",
   "docs/AZURE_COST_SAVER_RUNBOOK.md",
+  "docs/AZURE_FIRST_DEPLOY_CHECKLIST.md",
+  "infra/azure/containerapp-secrets.example.ps1",
+  "scripts/verifyAzureDeployment.js",
   ".github/workflows/azure-container-apps-studentos.yml",
 ]) {
   addCheck(`${file} exists`, exists(file));
@@ -132,8 +137,17 @@ for (const file of [
 
 addCheck("workflow is manual-only", workflow.includes("workflow_dispatch:") && !/^  push:/m.test(workflow) && !/^  pull_request:/m.test(workflow));
 addCheck("workflow uses GHCR", workflow.includes("ghcr.io") && workflow.includes("docker/build-push-action"));
+addCheck("workflow selects Azure subscription", workflow.includes("AZURE_SUBSCRIPTION_ID") && workflow.includes("az account set"));
 addCheck("workflow does not use secret build args", !/build-args:|--build-arg|STUDENTOS_SUPABASE_SERVICE_ROLE_KEY|GOOGLE_CLIENT_SECRET|GROQ_API_KEY|POLLINATIONS_API_KEY/.test(workflow));
 addCheck("Container Apps scale to zero configured", read("infra/azure/containerapp.bicep").includes("param minReplicas int = 0") && read("infra/azure/containerapp.bicep").includes("param maxReplicas int = 1"));
+const psDeploy = read("infra/azure/deploy-containerapp.ps1");
+const shDeploy = read("infra/azure/deploy-containerapp.sh");
+addCheck("deploy scripts refuse unsafe replica settings", psDeploy.includes("MinReplicas=0") && psDeploy.includes("MaxReplicas=1") && shDeploy.includes("MIN_REPLICAS=0") && shDeploy.includes("MAX_REPLICAS=1"));
+addCheck("deploy scripts show safe final URL summary", psDeploy.includes("Safe deployment summary") && shDeploy.includes("Safe deployment summary"));
+const verifier = read("scripts/verifyAzureDeployment.js");
+addCheck("verify script checks health and config", verifier.includes("/api/health") && verifier.includes("/api/config"));
+addCheck("verify script rejects missing Azure URL", verifier.includes("STUDENTOS_AZURE_API_URL"));
+addCheck("verify script checks deployment target", verifier.includes("azure-container-apps"));
 
 const failed = checks.filter((check) => !check.ok);
 const result = {

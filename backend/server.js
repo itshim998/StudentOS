@@ -195,6 +195,7 @@ const repository = new StudentOsRepository({
 });
 
 const PORT = Number(process.env.STUDENTOS_PORT || process.env.PORT || 3101);
+const DEPLOYMENT_TARGET = String(process.env.STUDENTOS_DEPLOYMENT || "local").trim() || "local";
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const SOURCE_UPLOAD_STAGE_TIMEOUT_MS = Number(process.env.STUDENTOS_SOURCE_UPLOAD_STAGE_TIMEOUT_MS || 20000);
 const SOURCE_UPLOAD_PARSE_TIMEOUT_MS = Number(process.env.STUDENTOS_SOURCE_UPLOAD_PARSE_TIMEOUT_MS || 15000);
@@ -664,6 +665,7 @@ async function handleApi(req, res, url) {
       ok: true,
       product: "StudentOS",
       brand: "SentIQGPT",
+      deploymentTarget: DEPLOYMENT_TARGET,
       mode: supabaseConfig.mode,
       sentiqgptReadOnly: true,
       persistence: getSafeSupabaseStatus(supabaseConfig),
@@ -685,6 +687,7 @@ async function handleApi(req, res, url) {
       ok: true,
       requestId: res.requestId,
       product: saasConfig.product,
+      deploymentTarget: DEPLOYMENT_TARGET,
       deployment: saasConfig.deployment,
       cors: {
         originPolicy: saasConfig.deployment === "production" ? "exact_origin_allowlist" : "local_development",
@@ -723,6 +726,7 @@ async function handleApi(req, res, url) {
       pass: STUDENTOS_APP_PASS,
       frontend: "pure_html_css_js",
       brand: saasConfig.product,
+      deploymentTarget: DEPLOYMENT_TARGET,
       storageMode: supabaseConfig.mode,
       aiProviders: getSafeAiProviderStatus(aiProviderConfig),
       embeddings: getSafeEmbeddingStatus(embeddingConfig),
@@ -2274,5 +2278,6 @@ server.listen(PORT, () => {
     port: PORT,
     mode: supabaseConfig.mode,
     deployment: saasConfig.deployment,
+    deploymentTarget: DEPLOYMENT_TARGET,
   });
 });

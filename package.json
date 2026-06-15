@@ -64,7 +64,8 @@
     "test:pass30": "node backend/testPass30.js",
     "test:e2e:supabase:report": "node scripts/runSupabaseE2EReport.js",
     "cleanup:e2e:supabase-users": "node scripts/cleanupSupabaseE2EUsers.js",
-    "preflight:azure": "node scripts/preflightAzure.js"
+    "preflight:azure": "node scripts/preflightAzure.js",
+    "verify:azure-deployment": "node scripts/verifyAzureDeployment.js"
   },
   "engines": {
     "node": ">=20.16.0"

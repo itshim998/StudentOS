@@ -13,8 +13,31 @@ REGISTRY_SERVER="${REGISTRY_SERVER:-ghcr.io}"
 REGISTRY_USERNAME="${REGISTRY_USERNAME:-}"
 REGISTRY_PASSWORD="${GHCR_PULL_TOKEN:-}"
 
-if [[ -z "$IMAGE" ]]; then
-  echo "Set STUDENTOS_IMAGE to the image tag to deploy, for example ghcr.io/itshim998/studentos-api:<sha>." >&2
+require_value() {
+  local name="$1"
+  local value="$2"
+  if [[ -z "$value" ]]; then
+    echo "$name is required." >&2
+    exit 1
+  fi
+}
+
+require_value "AZURE_RESOURCE_GROUP" "$RESOURCE_GROUP"
+require_value "AZURE_CONTAINER_APP_NAME" "$CONTAINER_APP_NAME"
+require_value "AZURE_CONTAINER_APP_ENVIRONMENT" "$ENVIRONMENT_NAME"
+require_value "AZURE_LOCATION" "$LOCATION"
+require_value "STUDENTOS_IMAGE" "$IMAGE"
+
+if [[ "$MIN_REPLICAS" != "0" ]]; then
+  echo "Cost-saving first deploy requires STUDENTOS_MIN_REPLICAS=0." >&2
+  exit 1
+fi
+if [[ "$MAX_REPLICAS" != "1" ]]; then
+  echo "Cost-saving first deploy requires STUDENTOS_MAX_REPLICAS=1." >&2
+  exit 1
+fi
+if [[ "$TARGET_PORT" != "3101" ]]; then
+  echo "StudentOS first deploy expects STUDENTOS_TARGET_PORT=3101." >&2
   exit 1
 fi
 
@@ -44,6 +67,14 @@ az deployment group create \
     maxReplicas="$MAX_REPLICAS" \
     registryServer="$REGISTRY_SERVER" \
     registryUsername="$REGISTRY_USERNAME" \
-    registryPassword="$REGISTRY_PASSWORD"
+    registryPassword="$REGISTRY_PASSWORD" \
+  --output none
 
-echo "Deployment command finished. Configure runtime secrets in Azure Container Apps before production use."
+echo "Safe deployment summary:"
+az containerapp show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$CONTAINER_APP_NAME" \
+  --query "{name:name,fqdn:properties.configuration.ingress.fqdn,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas,latestRevision:properties.latestRevisionName}" \
+  --output table
+
+echo "Runtime Supabase/provider secrets must be configured as Container Apps secrets before production use."

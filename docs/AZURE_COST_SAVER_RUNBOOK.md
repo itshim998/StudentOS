@@ -84,3 +84,7 @@ az group delete --name rg-studentos-dev --yes
 ## Worker Cost Policy
 
 Do not run `jobs:dev`, `jobs:work`, `exports:dev`, or `exports:work` continuously in the web app. Use future Azure Container Apps Jobs for manual/scheduled processing after a separate review.
+
+## No Cron or Warmup Policy
+
+Do not add cron, scheduler, uptime monitor, or warmup pinger for the first deployment. Keep background workers off in the web app. Use future Azure Container Apps Jobs only after a separate manual/scheduled job review.
