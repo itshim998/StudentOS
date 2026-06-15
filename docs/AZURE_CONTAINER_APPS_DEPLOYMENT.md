@@ -4,10 +4,10 @@ StudentOS backend is prepared for Azure Container Apps Consumption. This pass do
 
 ## Target Architecture
 
-- Backend: Azure Container Apps Consumption
+- Backend: Azure Container Apps Consumption, API-only image
 - Image registry: GHCR, to avoid Azure Container Registry cost
 - Database/Auth/Storage: existing Supabase projects and private buckets
-- Frontend: Cloudflare Pages later
+- Frontend: Cloudflare Pages, deployed separately from this backend image
 - Min replicas: 0
 - Max replicas: 1
 - Ingress: external HTTP ingress
@@ -24,6 +24,20 @@ StudentOS backend is prepared for Azure Container Apps Consumption. This pass do
 - `infra/azure/deploy-containerapp.ps1`
 - `infra/azure/deploy-containerapp.sh`
 - `.github/workflows/azure-container-apps-studentos.yml`
+
+
+## Backend Image Boundary
+
+Azure Container Apps is the StudentOS backend target only. The backend Docker image must not copy or depend on `frontend/` because the frontend deploys separately to Cloudflare Pages.
+
+Required safeguards:
+
+- `.dockerignore` excludes `frontend/` from the Docker build context.
+- `Dockerfile` does not `COPY frontend` into the image.
+- Azure runtime sets `STUDENTOS_DEPLOYMENT=azure-container-apps` and `STUDENTOS_SERVE_FRONTEND=false`.
+- Local development may still serve `frontend/` from the Node backend when `STUDENTOS_DEPLOYMENT` is not `azure-container-apps` and `STUDENTOS_SERVE_FRONTEND` is not `false`.
+
+Cloudflare Pages should own all browser assets. Azure should expose only API, health, config, OAuth callback, and other backend routes.
 
 ## GitHub Actions Workflow
 
@@ -65,6 +79,7 @@ Non-secret runtime values:
 - `STUDENTOS_PORT=3101`
 - `STUDENTOS_ENV=production`
 - `STUDENTOS_DEPLOYMENT=azure-container-apps`
+- `STUDENTOS_SERVE_FRONTEND=false`
 - `STUDENTOS_MODE=supabase`
 - `STUDENTOS_BACKGROUND_WORKERS_ENABLED=false`
 - `STUDENTOS_DEMO_SEED_ENABLED=false`

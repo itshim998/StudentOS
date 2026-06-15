@@ -8,7 +8,6 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 COPY backend ./backend
-COPY frontend ./frontend
 COPY scripts ./scripts
 COPY supabase ./supabase
 COPY README.md ./README.md

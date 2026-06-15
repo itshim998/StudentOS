@@ -57,6 +57,16 @@ Required scale settings:
 - target port `3101`
 - smallest safe resources: `0.25` CPU and `0.5Gi` memory
 
+
+Backend-only image check before deployment:
+
+```powershell
+Select-String -Path .dockerignore -Pattern "^frontend/"
+Select-String -Path Dockerfile -Pattern "COPY frontend"
+```
+
+Expected: `.dockerignore` contains `frontend/`; `Dockerfile` has no `COPY frontend` result. Azure Container Apps serves the backend only. Cloudflare Pages serves the frontend only. Supabase remains the data/auth/storage layer.
+
 ## 5. GitHub Actions Manual Workflow
 
 Workflow name:

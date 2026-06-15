@@ -16,6 +16,7 @@ az containerapp update --resource-group $ResourceGroup --name $ContainerAppName 
   STUDENTOS_PORT=3101 `
   STUDENTOS_ENV=production `
   STUDENTOS_DEPLOYMENT=azure-container-apps `
+  STUDENTOS_SERVE_FRONTEND=false `
   STUDENTOS_MODE=supabase `
   STUDENTOS_BACKGROUND_WORKERS_ENABLED=false `
   STUDENTOS_DEMO_SEED_ENABLED=false `

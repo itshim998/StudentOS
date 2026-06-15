@@ -196,6 +196,7 @@ const repository = new StudentOsRepository({
 
 const PORT = Number(process.env.STUDENTOS_PORT || process.env.PORT || 3101);
 const DEPLOYMENT_TARGET = String(process.env.STUDENTOS_DEPLOYMENT || "local").trim() || "local";
+const SERVE_FRONTEND = DEPLOYMENT_TARGET !== "azure-container-apps" && process.env.STUDENTOS_SERVE_FRONTEND !== "false";
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const SOURCE_UPLOAD_STAGE_TIMEOUT_MS = Number(process.env.STUDENTOS_SOURCE_UPLOAD_STAGE_TIMEOUT_MS || 20000);
 const SOURCE_UPLOAD_PARSE_TIMEOUT_MS = Number(process.env.STUDENTOS_SOURCE_UPLOAD_PARSE_TIMEOUT_MS || 15000);
@@ -727,6 +728,7 @@ async function handleApi(req, res, url) {
       frontend: "pure_html_css_js",
       brand: saasConfig.product,
       deploymentTarget: DEPLOYMENT_TARGET,
+      frontendServedByBackend: SERVE_FRONTEND,
       storageMode: supabaseConfig.mode,
       aiProviders: getSafeAiProviderStatus(aiProviderConfig),
       embeddings: getSafeEmbeddingStatus(embeddingConfig),
@@ -2197,6 +2199,10 @@ async function handleApi(req, res, url) {
 }
 
 async function serveStatic(req, res, url) {
+  if (!SERVE_FRONTEND) {
+    notFound(res);
+    return;
+  }
   let pathname = decodeURIComponent(url.pathname);
   if (pathname === "/") pathname = "/index.html";
   if (pathname === "/auth/complete") pathname = "/auth-complete.html";

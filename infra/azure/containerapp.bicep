@@ -108,6 +108,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: 'azure-container-apps'
             }
             {
+              name: 'STUDENTOS_SERVE_FRONTEND'
+              value: 'false'
+            }
+            {
               name: 'STUDENTOS_MODE'
               value: studentosMode
             }

@@ -8,6 +8,7 @@ npm-debug.log
 .git
 .gitignore
 .github
+frontend/
 playwright-report
 test-results
 .playwright

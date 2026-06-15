@@ -65,8 +65,9 @@ addCheck("Dockerfile excludes env copy", dockerfile && !/COPY\s+\.env/i.test(doc
 addCheck("Dockerfile production install", /npm\s+ci\s+--omit=dev/.test(dockerfile));
 addCheck("Dockerfile exposes 3101", /EXPOSE\s+3101/.test(dockerfile));
 addCheck("Dockerfile runs npm start", dockerfile.includes('CMD ["npm", "start"]'));
+addCheck("Dockerfile does not copy frontend", !/^COPY\s+frontend\b/im.test(dockerfile));
 
-for (const pattern of [".env", ".env.*", "node_modules", "test-results", "playwright-report", ".playwright", "uploads", "local_uploads", "*.log", "secrets", "*.key", "*.pem"]) {
+for (const pattern of [".env", ".env.*", "node_modules", "frontend/", "test-results", "playwright-report", ".playwright", "uploads", "local_uploads", "*.log", "secrets", "*.key", "*.pem"]) {
   addCheck(`.dockerignore protects ${pattern}`, dockerignore.includes(pattern));
 }
 
@@ -77,6 +78,7 @@ addCheck("server reads PORT", /process\.env\.PORT/.test(server));
 addCheck("health route exists", server.includes('url.pathname === "/api/health"'));
 addCheck("config route exists", server.includes('url.pathname === "/api/config"'));
 addCheck("config exposes safe deployment target", server.includes("deploymentTarget: DEPLOYMENT_TARGET"));
+addCheck("Azure disables backend frontend serving", server.includes("const SERVE_FRONTEND") && server.includes("DEPLOYMENT_TARGET !== \"azure-container-apps\"") && server.includes("frontendServedByBackend: SERVE_FRONTEND"));
 
 const healthBlock = server.slice(server.indexOf('url.pathname === "/api/health"'), server.indexOf('url.pathname === "/api/status"'));
 addCheck("health route avoids state/database/provider calls", !/getStateContext|repository\.|fetch\(|runStudentOsVerb|syncGoogleClassroom|embedSourceChunks/.test(healthBlock));
@@ -139,7 +141,9 @@ addCheck("workflow is manual-only", workflow.includes("workflow_dispatch:") && !
 addCheck("workflow uses GHCR", workflow.includes("ghcr.io") && workflow.includes("docker/build-push-action"));
 addCheck("workflow selects Azure subscription", workflow.includes("AZURE_SUBSCRIPTION_ID") && workflow.includes("az account set"));
 addCheck("workflow does not use secret build args", !/build-args:|--build-arg|STUDENTOS_SUPABASE_SERVICE_ROLE_KEY|GOOGLE_CLIENT_SECRET|GROQ_API_KEY|POLLINATIONS_API_KEY/.test(workflow));
-addCheck("Container Apps scale to zero configured", read("infra/azure/containerapp.bicep").includes("param minReplicas int = 0") && read("infra/azure/containerapp.bicep").includes("param maxReplicas int = 1"));
+const bicep = read("infra/azure/containerapp.bicep");
+addCheck("Container Apps scale to zero configured", bicep.includes("param minReplicas int = 0") && bicep.includes("param maxReplicas int = 1"));
+addCheck("Bicep disables backend frontend serving", bicep.includes("name: 'STUDENTOS_SERVE_FRONTEND'") && bicep.includes("value: 'false'"));
 const psDeploy = read("infra/azure/deploy-containerapp.ps1");
 const shDeploy = read("infra/azure/deploy-containerapp.sh");
 addCheck("deploy scripts refuse unsafe replica settings", psDeploy.includes("MinReplicas=0") && psDeploy.includes("MaxReplicas=1") && shDeploy.includes("MIN_REPLICAS=0") && shDeploy.includes("MAX_REPLICAS=1"));
