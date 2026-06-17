@@ -78,6 +78,18 @@ jobs:
               --location "${{ inputs.location || secrets.AZURE_LOCATION }}" \
               --output none
 
+      - name: Validate existing ACA environment settings
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.AZURE_CONTAINER_APP_ENVIRONMENT }}" ]; then
+            echo "AZURE_CONTAINER_APP_ENVIRONMENT is required." >&2
+            exit 1
+          fi
+          if [ -z "${{ secrets.AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP }}" ]; then
+            echo "AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP is required to reuse the existing ACA environment." >&2
+            exit 1
+          fi
+
       - name: Deploy Container App infrastructure
         uses: azure/cli@v2
         env:
@@ -91,6 +103,9 @@ jobs:
                 location="${{ inputs.location || secrets.AZURE_LOCATION }}" \
                 containerAppName="${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
                 managedEnvironmentName="${{ secrets.AZURE_CONTAINER_APP_ENVIRONMENT }}" \
+                useExistingEnvironment=true \
+                existingEnvironmentName="${{ secrets.AZURE_CONTAINER_APP_ENVIRONMENT }}" \
+                existingEnvironmentResourceGroup="${{ secrets.AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP }}" \
                 image="${{ steps.image.outputs.image }}" \
                 targetPort=3101 \
                 minReplicas=0 \

@@ -33,13 +33,13 @@ az group create --name rg-studentos-dev --location centralindia
 
 ## 3. Container Apps Environment
 
-The Bicep template creates or updates the environment:
+The Bicep template reuses the existing environment by default:
 
 ```text
-cae-studentos-dev
+cae-sentiqgpt-prod
 ```
 
-No Azure SQL, Azure Storage, or Azure Container Registry is required for the first deployment.
+Existing environment resource group: `rg-sentiqgpt-prod`. StudentOS still deploys as its own Container App in `rg-studentos-dev`; this does not share or modify SentIQ Chat / SentIQGPT app secrets or runtime state. No Azure SQL, Azure Storage, or Azure Container Registry is required for the first deployment.
 
 ## 4. Container App
 
@@ -92,6 +92,7 @@ Configure these without values in documentation or commits:
 - `AZURE_RESOURCE_GROUP`
 - `AZURE_CONTAINER_APP_NAME`
 - `AZURE_CONTAINER_APP_ENVIRONMENT`
+- `AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP`
 - `AZURE_LOCATION`
 - `GHCR_PULL_TOKEN`
 

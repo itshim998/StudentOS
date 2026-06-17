@@ -1,11 +1,20 @@
-﻿@description('Azure region for the Container Apps environment and app.')
+﻿@description('Azure region for the Container App. Existing environment deployments must use the existing environment region.')
 param location string = resourceGroup().location
 
 @description('StudentOS Azure Container App name.')
 param containerAppName string = 'studentos-api-dev'
 
-@description('Azure Container Apps managed environment name.')
+@description('Azure Container Apps managed environment name used only when creating a new environment.')
 param managedEnvironmentName string = 'cae-studentos-dev'
+
+@description('Reuse an existing Azure Container Apps managed environment instead of creating a new one.')
+param useExistingEnvironment bool = true
+
+@description('Existing Azure Container Apps managed environment name. For the current subscription quota, reuse cae-sentiqgpt-prod.')
+param existingEnvironmentName string = 'cae-sentiqgpt-prod'
+
+@description('Resource group containing the existing Azure Container Apps managed environment.')
+param existingEnvironmentResourceGroup string = 'rg-sentiqgpt-prod'
 
 @description('Container image to deploy, for example ghcr.io/itshim998/studentos-api:<sha>.')
 param image string
@@ -47,8 +56,10 @@ param registryPassword string = ''
 
 var registrySecretName = 'ghcr-pull-token'
 var hasRegistryCredential = !empty(registryUsername) && !empty(registryPassword)
+var existingManagedEnvironmentId = resourceId(existingEnvironmentResourceGroup, 'Microsoft.App/managedEnvironments', existingEnvironmentName)
+var managedEnvironmentId = useExistingEnvironment ? existingManagedEnvironmentId : managedEnvironment.id
 
-resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
+resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (!useExistingEnvironment) {
   name: managedEnvironmentName
   location: location
   properties: {}
@@ -58,7 +69,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: containerAppName
   location: location
   properties: {
-    managedEnvironmentId: managedEnvironment.id
+    managedEnvironmentId: managedEnvironmentId
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
@@ -169,6 +180,9 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
 
 output containerAppName string = containerApp.name
 output containerAppFqdn string = containerApp.properties.configuration.ingress.fqdn
+output managedEnvironmentMode string = useExistingEnvironment ? 'existing' : 'created'
+output containerAppEnvironmentName string = useExistingEnvironment ? existingEnvironmentName : managedEnvironmentName
+output managedEnvironmentResourceGroup string = useExistingEnvironment ? existingEnvironmentResourceGroup : resourceGroup().name
 output scaleSummary object = {
   minReplicas: minReplicas
   maxReplicas: maxReplicas

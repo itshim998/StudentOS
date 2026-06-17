@@ -3,7 +3,10 @@ set -euo pipefail
 
 RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-rg-studentos-dev}"
 CONTAINER_APP_NAME="${AZURE_CONTAINER_APP_NAME:-studentos-api-dev}"
-ENVIRONMENT_NAME="${AZURE_CONTAINER_APP_ENVIRONMENT:-cae-studentos-dev}"
+ENVIRONMENT_NAME="${AZURE_CONTAINER_APP_ENVIRONMENT:-cae-sentiqgpt-prod}"
+USE_EXISTING_ENVIRONMENT="${AZURE_USE_EXISTING_CONTAINER_APP_ENVIRONMENT:-true}"
+EXISTING_ENVIRONMENT_NAME="${AZURE_CONTAINER_APP_ENVIRONMENT:-cae-sentiqgpt-prod}"
+EXISTING_ENVIRONMENT_RESOURCE_GROUP="${AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP:-rg-sentiqgpt-prod}"
 LOCATION="${AZURE_LOCATION:-centralindia}"
 IMAGE="${STUDENTOS_IMAGE:-}"
 TARGET_PORT="${STUDENTOS_TARGET_PORT:-3101}"
@@ -28,6 +31,11 @@ require_value "AZURE_CONTAINER_APP_ENVIRONMENT" "$ENVIRONMENT_NAME"
 require_value "AZURE_LOCATION" "$LOCATION"
 require_value "STUDENTOS_IMAGE" "$IMAGE"
 
+if [[ "$USE_EXISTING_ENVIRONMENT" == "true" ]]; then
+  require_value "AZURE_CONTAINER_APP_ENVIRONMENT" "$EXISTING_ENVIRONMENT_NAME"
+  require_value "AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP" "$EXISTING_ENVIRONMENT_RESOURCE_GROUP"
+fi
+
 if [[ "$MIN_REPLICAS" != "0" ]]; then
   echo "Cost-saving first deploy requires STUDENTOS_MIN_REPLICAS=0." >&2
   exit 1
@@ -51,8 +59,14 @@ if [[ -n "$REGISTRY_USERNAME" && -z "$REGISTRY_PASSWORD" ]]; then
   exit 1
 fi
 
-echo "Creating/updating resource group $RESOURCE_GROUP in $LOCATION"
+echo "Creating/updating StudentOS resource group $RESOURCE_GROUP in $LOCATION"
 az group create --name "$RESOURCE_GROUP" --location "$LOCATION" --output none
+
+if [[ "$USE_EXISTING_ENVIRONMENT" == "true" ]]; then
+  echo "Reusing existing ACA environment $EXISTING_ENVIRONMENT_NAME from resource group $EXISTING_ENVIRONMENT_RESOURCE_GROUP"
+else
+  echo "Creating/updating ACA environment $ENVIRONMENT_NAME in StudentOS resource group $RESOURCE_GROUP"
+fi
 
 echo "Deploying StudentOS Container App $CONTAINER_APP_NAME with min=0 max=1"
 az deployment group create \
@@ -61,6 +75,9 @@ az deployment group create \
   --parameters location="$LOCATION" \
     containerAppName="$CONTAINER_APP_NAME" \
     managedEnvironmentName="$ENVIRONMENT_NAME" \
+    useExistingEnvironment="$USE_EXISTING_ENVIRONMENT" \
+    existingEnvironmentName="$EXISTING_ENVIRONMENT_NAME" \
+    existingEnvironmentResourceGroup="$EXISTING_ENVIRONMENT_RESOURCE_GROUP" \
     image="$IMAGE" \
     targetPort="$TARGET_PORT" \
     minReplicas="$MIN_REPLICAS" \

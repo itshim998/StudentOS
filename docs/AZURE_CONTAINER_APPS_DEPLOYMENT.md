@@ -39,6 +39,21 @@ Required safeguards:
 
 Cloudflare Pages should own all browser assets. Azure should expose only API, health, config, OAuth callback, and other backend routes.
 
+
+## Existing Container Apps Environment
+
+StudentOS reuses the existing Azure Container Apps Environment because the Azure for Students subscription permits only one Container Apps Environment in `centralindia`.
+
+Current environment boundary:
+
+- Existing ACA environment: `cae-sentiqgpt-prod`
+- Existing environment resource group: `rg-sentiqgpt-prod`
+- StudentOS Container App resource group: `rg-studentos-dev`
+- StudentOS Container App name: `studentos-api-dev`
+- Region: `centralindia`
+
+This does not merge app secrets, runtime state, images, revisions, scaling, or traffic. StudentOS remains a separate Container App with its own runtime environment variables and secrets. Do not modify the SentIQ Chat / SentIQGPT app or its secrets when deploying StudentOS.
+
 ## GitHub Actions Workflow
 
 Workflow name: `Azure Container Apps - StudentOS API`
@@ -61,6 +76,7 @@ Do not commit values. Configure these in GitHub repository secrets or environmen
 - `AZURE_RESOURCE_GROUP`
 - `AZURE_CONTAINER_APP_NAME`
 - `AZURE_CONTAINER_APP_ENVIRONMENT`
+- `AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP`
 - `AZURE_LOCATION`
 - `GHCR_PULL_TOKEN`
 
@@ -125,7 +141,10 @@ $env:GHCR_PULL_TOKEN="<set in local shell only>"
 .\infra\azure\deploy-containerapp.ps1 `
   -ResourceGroup rg-studentos-dev `
   -ContainerAppName studentos-api-dev `
-  -EnvironmentName cae-studentos-dev `
+  -EnvironmentName cae-sentiqgpt-prod `
+  -ExistingEnvironmentName cae-sentiqgpt-prod `
+  -ExistingEnvironmentResourceGroup rg-sentiqgpt-prod `
+  -UseExistingEnvironment $true `
   -Location centralindia `
   -Image ghcr.io/itshim998/studentos-api:<tag> `
   -RegistryUsername itshim998
@@ -137,7 +156,9 @@ Bash example:
 ```bash
 export AZURE_RESOURCE_GROUP=rg-studentos-dev
 export AZURE_CONTAINER_APP_NAME=studentos-api-dev
-export AZURE_CONTAINER_APP_ENVIRONMENT=cae-studentos-dev
+export AZURE_CONTAINER_APP_ENVIRONMENT=cae-sentiqgpt-prod
+export AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP=rg-sentiqgpt-prod
+export AZURE_USE_EXISTING_CONTAINER_APP_ENVIRONMENT=true
 export AZURE_LOCATION=centralindia
 export STUDENTOS_IMAGE=ghcr.io/itshim998/studentos-api:<tag>
 export REGISTRY_USERNAME=itshim998
