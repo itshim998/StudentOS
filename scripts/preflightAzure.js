@@ -1,4 +1,4 @@
-﻿import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
@@ -74,11 +74,15 @@ for (const pattern of [".env", ".env.*", "node_modules", "frontend/", "test-resu
 addCheck("package start exists", pkg.scripts?.start === "node backend/server.js");
 addCheck("package preflight:azure exists", pkg.scripts?.["preflight:azure"] === "node scripts/preflightAzure.js");
 addCheck("package verify:azure-deployment exists", pkg.scripts?.["verify:azure-deployment"] === "node scripts/verifyAzureDeployment.js");
+addCheck("package cloudflare:config exists", pkg.scripts?.["cloudflare:config"] === "node scripts/writeCloudflareFrontendConfig.js");
+addCheck("package verify:cloudflare-azure exists", pkg.scripts?.["verify:cloudflare-azure"] === "node scripts/verifyCloudflareAzureWiring.js");
 addCheck("server reads PORT", /process\.env\.PORT/.test(server));
 addCheck("health route exists", server.includes('url.pathname === "/api/health"'));
 addCheck("config route exists", server.includes('url.pathname === "/api/config"'));
 addCheck("config exposes safe deployment target", server.includes("deploymentTarget: DEPLOYMENT_TARGET"));
 addCheck("Azure disables backend frontend serving", server.includes("const SERVE_FRONTEND") && server.includes("DEPLOYMENT_TARGET !== \"azure-container-apps\"") && server.includes("frontendServedByBackend: SERVE_FRONTEND"));
+addCheck("Cloudflare runtime config scaffold exists", exists("frontend/runtime-config.js") && exists("scripts/writeCloudflareFrontendConfig.js"));
+addCheck("frontend API config reads runtime config", read("frontend/scripts/config.js").includes("StudentOSRuntimeConfig") && read("frontend/index.html").includes("runtime-config.js"));
 
 const healthBlock = server.slice(server.indexOf('url.pathname === "/api/health"'), server.indexOf('url.pathname === "/api/status"'));
 addCheck("health route avoids state/database/provider calls", !/getStateContext|repository\.|fetch\(|runStudentOsVerb|syncGoogleClassroom|embedSourceChunks/.test(healthBlock));
@@ -144,6 +148,14 @@ addCheck("workflow passes existing ACA environment resource group", workflow.inc
 addCheck("workflow does not create a second Central India ACA environment", !workflow.includes("cae-studentos-dev") && workflow.includes("Validate existing ACA environment settings"));
 addCheck("workflow does not use secret build args", !/build-args:|--build-arg|STUDENTOS_SUPABASE_SERVICE_ROLE_KEY|GOOGLE_CLIENT_SECRET|GROQ_API_KEY|POLLINATIONS_API_KEY/.test(workflow));
 const bicep = read("infra/azure/containerapp.bicep");
+const requiredCorsOrigins = [
+  "https://studentos.sentiqlabs.com",
+  "https://studentos-39s.pages.dev",
+  "http://localhost:3101",
+  "http://localhost:3102",
+];
+addCheck("Cloudflare production CORS origins configured", requiredCorsOrigins.every((origin) => bicep.includes(origin) && read("backend/config/saasConfig.js").includes(origin)));
+addCheck("Azure CORS does not use wildcard", !/CORS_ORIGINS[^\n]*\*/.test(bicep) && !/corsOrigins string = '\*/.test(bicep));
 addCheck("Container Apps scale to zero configured", bicep.includes("param minReplicas int = 0") && bicep.includes("param maxReplicas int = 1"));
 addCheck("Bicep disables backend frontend serving", bicep.includes("name: 'STUDENTOS_SERVE_FRONTEND'") && bicep.includes("value: 'false'"));
 addCheck("Bicep can reuse existing ACA environment", bicep.includes("param useExistingEnvironment bool = true") && bicep.includes("existingEnvironmentResourceGroup") && bicep.includes("resourceId(existingEnvironmentResourceGroup") && bicep.includes("if (!useExistingEnvironment)"));

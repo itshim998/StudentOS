@@ -1,3 +1,4 @@
+const API_BASE = window.StudentOSConfig?.apiBase || "";
 const els = {
   form: document.getElementById("operator-query-form"),
   userId: document.getElementById("operator-user-id"),
@@ -46,7 +47,7 @@ function headers() {
 }
 
 async function internalApi(path, options = {}) {
-  const response = await fetch(path, { ...options, headers: { ...headers(), ...(options.headers || {}) } });
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers: { ...headers(), ...(options.headers || {}) } });
   const body = await response.json().catch(() => ({}));
   if (response.status === 401 || response.status === 403) operatorSession = null;
   if (!response.ok) throw new Error(body.error || `Request failed with ${response.status}`);
@@ -54,7 +55,7 @@ async function internalApi(path, options = {}) {
 }
 
 async function authorizeOperator() {
-  const response = await fetch("/api/internal/operator/session", {
+  const response = await fetch(`${API_BASE}/api/internal/operator/session`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

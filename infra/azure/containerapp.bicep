@@ -1,4 +1,4 @@
-﻿@description('Azure region for the Container App. Existing environment deployments must use the existing environment region.')
+@description('Azure region for the Container App. Existing environment deployments must use the existing environment region.')
 param location string = resourceGroup().location
 
 @description('StudentOS Azure Container App name.')
@@ -41,8 +41,8 @@ param memorySize string = '0.5Gi'
 @description('StudentOS persistence mode. Use supabase for real deployments after runtime secrets are configured.')
 param studentosMode string = 'supabase'
 
-@description('CORS origins. Add Cloudflare frontend origin before public launch.')
-param corsOrigins string = 'http://localhost:3101,http://127.0.0.1:3101'
+@description('CORS origins for Cloudflare frontend and local development. Do not use wildcard CORS in production.')
+param corsOrigins string = 'https://studentos.sentiqlabs.com,https://studentos-39s.pages.dev,http://localhost:3101,http://localhost:3102,http://127.0.0.1:3101,http://127.0.0.1:3102'
 
 @description('Container registry server. GHCR is preferred to avoid Azure Container Registry cost.')
 param registryServer string = 'ghcr.io'

@@ -1,4 +1,4 @@
-﻿# Azure Container Apps Deployment Readiness
+# Azure Container Apps Deployment Readiness
 
 StudentOS backend is prepared for Azure Container Apps Consumption. This pass does not deploy automatically.
 
@@ -105,7 +105,7 @@ Non-secret runtime values:
 - `STUDENTOS_FINAL_ACCOUNT_DELETION_ENABLED=false`
 - `STUDENTOS_AUTH_ADMIN_DELETE_ENABLED=false`
 - `STUDENTOS_INTERNAL_OPS_ENABLED=false`
-- `CORS_ORIGINS=http://localhost:3101,http://127.0.0.1:3101`
+- `CORS_ORIGINS=https://studentos.sentiqlabs.com,https://studentos-39s.pages.dev,http://localhost:3101,http://localhost:3102,http://127.0.0.1:3101,http://127.0.0.1:3102`
 
 Backend-only secret values:
 
@@ -181,7 +181,20 @@ Future option: Azure Container Apps Jobs for manual or scheduled jobs. Keep jobs
 
 ## CORS and Domains
 
-Current defaults support local development. Before connecting Cloudflare Pages, update `CORS_ORIGINS` to include the Cloudflare frontend origin.
+Azure production must use an exact CORS allowlist. Do not use wildcard CORS in production.
+
+Required Azure Container App env var:
+
+```text
+CORS_ORIGINS=https://studentos.sentiqlabs.com,https://studentos-39s.pages.dev,http://localhost:3101,http://localhost:3102,http://127.0.0.1:3101,http://127.0.0.1:3102
+```
+
+Current frontend origins:
+
+- `https://studentos.sentiqlabs.com`
+- `https://studentos-39s.pages.dev`
+
+Local development origins remain allowed for direct local testing on ports `3101` and `3102`.
 
 Future API domain options:
 
@@ -220,6 +233,36 @@ Remove-Item Env:STUDENTOS_AZURE_API_URL
 
 The verifier checks `/api/health`, `/api/config`, cold-start timing, safe `deploymentTarget`, and dangerous toggles.
 
-## Cloudflare Frontend Wiring Plan
+## Cloudflare Frontend Wiring
 
-Do not wire Cloudflare until the Azure backend URL is stable. The future public frontend config name should be `STUDENTOS_PUBLIC_API_BASE_URL`. Cloudflare Pages can inject it as an environment variable during build or write a small static config artifact. Update Azure `CORS_ORIGINS` to include the Cloudflare `pages.dev` preview URL, `https://studentos.sentiqlabs.com`, and localhost development origins.
+Cloudflare Pages serves the static frontend. The only public runtime value it needs is the Azure backend API base URL.
+
+Set this Cloudflare Pages environment variable:
+
+```text
+STUDENTOS_PUBLIC_API_BASE_URL=https://<azure-backend-fqdn>
+```
+
+Use this Cloudflare Pages build command so `frontend/runtime-config.js` is generated during the frontend deployment:
+
+```bash
+npm run cloudflare:config
+```
+
+The generated runtime config contains only a public API URL. It must not contain Supabase service-role keys, Google client secrets, model keys, OAuth tokens, or Azure credentials.
+
+Post-deploy browser/API checks:
+
+- `https://studentos.sentiqlabs.com`
+- `https://<azure-backend-fqdn>/api/health`
+- `https://<azure-backend-fqdn>/api/config`
+
+Optional CORS verification:
+
+```powershell
+$env:STUDENTOS_PUBLIC_FRONTEND_URL="https://studentos.sentiqlabs.com"
+$env:STUDENTOS_AZURE_API_URL="https://<azure-backend-fqdn>"
+npm.cmd run verify:cloudflare-azure
+Remove-Item Env:STUDENTOS_PUBLIC_FRONTEND_URL
+Remove-Item Env:STUDENTOS_AZURE_API_URL
+```

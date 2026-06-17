@@ -1,4 +1,4 @@
-﻿# Azure First Deploy Checklist
+# Azure First Deploy Checklist
 
 This checklist is for the first manual StudentOS backend deployment to Azure Container Apps. Do not paste secrets into terminals, screenshots, commits, GitHub issues, or chat logs.
 
@@ -135,24 +135,43 @@ Expected checks:
 - no dangerous toggles are enabled
 - no secrets appear in responses
 
-## 10. Cloudflare Frontend Wiring Later
+## 10. Cloudflare Frontend Wiring
 
-Do not wire Cloudflare yet unless the Azure URL is final.
+Cloudflare Pages is the frontend target. Azure Container Apps remains API-only.
 
-Future public frontend config name:
+Set the Cloudflare Pages environment variable:
 
 ```text
-STUDENTOS_PUBLIC_API_BASE_URL
+STUDENTOS_PUBLIC_API_BASE_URL=https://<azure-backend-fqdn>
 ```
 
-Cloudflare Pages can use either an environment variable at build time or a small static config file generated during deployment.
+Use this Cloudflare Pages build command to generate the public runtime config:
 
-Future Azure CORS allowlist should include:
+```bash
+npm run cloudflare:config
+```
 
-- Cloudflare `pages.dev` preview URL
+Set the Azure Container App CORS allowlist env var:
+
+```text
+CORS_ORIGINS=https://studentos.sentiqlabs.com,https://studentos-39s.pages.dev,http://localhost:3101,http://localhost:3102,http://127.0.0.1:3101,http://127.0.0.1:3102
+```
+
+Post-deploy checks:
+
 - `https://studentos.sentiqlabs.com`
-- `http://localhost:3101`
-- `http://127.0.0.1:3101`
+- `https://<azure-backend-fqdn>/api/health`
+- `https://<azure-backend-fqdn>/api/config`
+
+Optional CORS verification:
+
+```powershell
+$env:STUDENTOS_PUBLIC_FRONTEND_URL="https://studentos.sentiqlabs.com"
+$env:STUDENTOS_AZURE_API_URL="https://<azure-backend-fqdn>"
+npm.cmd run verify:cloudflare-azure
+Remove-Item Env:STUDENTOS_PUBLIC_FRONTEND_URL
+Remove-Item Env:STUDENTOS_AZURE_API_URL
+```
 
 ## 11. Rollback and Scale-to-Zero
 

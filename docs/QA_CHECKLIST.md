@@ -158,3 +158,13 @@ Review:
 - `test-results/supabase-live/latest.md`
 
 The report should show a routed shard label, masked disposable email, masked user id, row counts, cleanup counts, and skipped cleanup reasons only. For stale disposable users, first list with `npm.cmd run cleanup:e2e:supabase-users`; delete only with `STUDENTOS_E2E_DELETE_STALE_USERS=true`.
+
+
+## Cloudflare / Azure Wiring QA
+
+1. Set Cloudflare Pages `STUDENTOS_PUBLIC_API_BASE_URL` to `https://<azure-backend-fqdn>` and use `npm run cloudflare:config` as the frontend build command.
+2. Set Azure Container App `CORS_ORIGINS` to `https://studentos.sentiqlabs.com,https://studentos-39s.pages.dev,http://localhost:3101,http://localhost:3102,http://127.0.0.1:3101,http://127.0.0.1:3102`.
+3. Open `https://studentos.sentiqlabs.com` and verify API-backed UI sections load without same-origin fallback errors.
+4. Open `https://<azure-backend-fqdn>/api/health` and verify `ok: true`.
+5. Open `https://<azure-backend-fqdn>/api/config` and verify `deploymentTarget: azure-container-apps`, `frontendServedByBackend: false`, and no secrets appear.
+6. Optionally run `npm.cmd run verify:cloudflare-azure` with `STUDENTOS_AZURE_API_URL` set locally.

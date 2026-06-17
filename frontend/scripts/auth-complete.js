@@ -1,3 +1,4 @@
+const API_BASE = window.StudentOSConfig?.apiBase || "";
 const result = document.getElementById("completion-result");
 const copy = document.getElementById("completion-copy");
 const form = document.getElementById("recovery-complete-form");
@@ -8,7 +9,7 @@ function fragmentParams() {
 }
 
 async function loadConfig() {
-  const response = await fetch("/api/config", { headers: { Accept: "application/json" } });
+  const response = await fetch(`${API_BASE}/api/config`, { headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error("StudentOS account configuration is unavailable.");
   return response.json();
 }

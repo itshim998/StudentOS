@@ -65,6 +65,8 @@
     "test:e2e:supabase:report": "node scripts/runSupabaseE2EReport.js",
     "cleanup:e2e:supabase-users": "node scripts/cleanupSupabaseE2EUsers.js",
     "preflight:azure": "node scripts/preflightAzure.js",
+    "cloudflare:config": "node scripts/writeCloudflareFrontendConfig.js",
+    "verify:cloudflare-azure": "node scripts/verifyCloudflareAzureWiring.js",
     "verify:azure-deployment": "node scripts/verifyAzureDeployment.js"
   },
   "engines": {

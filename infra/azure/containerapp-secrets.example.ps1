@@ -1,4 +1,4 @@
-﻿# Placeholder-only helper for configuring Azure Container Apps runtime secrets.
+# Placeholder-only helper for configuring Azure Container Apps runtime secrets.
 # Copy commands from this file and replace placeholder values in your local shell only.
 # Do not commit real values. Do not paste real values into logs or chats.
 
@@ -29,7 +29,7 @@ az containerapp update --resource-group $ResourceGroup --name $ContainerAppName 
   STUDENTOS_BILLING_CHECKOUT_REDIRECT_ENABLED=false `
   STUDENTOS_QUOTA_ENFORCEMENT=false `
   STUDENTOS_RATE_LIMIT_ENABLED=true `
-  CORS_ORIGINS="https://<cloudflare-preview>.pages.dev,https://studentos.sentiqlabs.com,http://localhost:3101,http://127.0.0.1:3101"
+  CORS_ORIGINS="https://studentos.sentiqlabs.com,https://studentos-39s.pages.dev,http://localhost:3101,http://localhost:3102,http://127.0.0.1:3101,http://127.0.0.1:3102"
 
 # Secret placeholders. Replace values locally or use Azure Portal secret UI.
 az containerapp secret set --resource-group $ResourceGroup --name $ContainerAppName --secrets `

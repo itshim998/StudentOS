@@ -3,6 +3,14 @@ import { getSafeEmbeddingStatus } from "../embeddings/embeddingService.js";
 import { getPlan, getPublicPlanCatalog, USER_ROLES } from "../saas/plans.js";
 import { getSafeBillingProviderStatus } from "../billing/providerConfig.js";
 
+const DEFAULT_CORS_ORIGINS = [
+  "https://studentos.sentiqlabs.com",
+  "https://studentos-39s.pages.dev",
+  "http://localhost:3101",
+  "http://localhost:3102",
+  "http://127.0.0.1:3101",
+  "http://127.0.0.1:3102",
+].join(",");
 function readValue(env, key, fallback = "") {
   return String(env[key] || fallback).trim();
 }
@@ -56,7 +64,7 @@ export function getSaasConfig({
       topology: "1 auth project + 3 data shards per environment",
       activeEnvironment: deployment,
     },
-    corsOrigins: readValue(env, "CORS_ORIGINS", "http://localhost:3101,http://127.0.0.1:3101")
+    corsOrigins: readValue(env, "CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean),
