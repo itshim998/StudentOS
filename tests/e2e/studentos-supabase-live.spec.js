@@ -259,8 +259,18 @@ async function waitForExportSettled(page) {
   return locator.innerText();
 }
 async function clickNav(page, name) {
-  await page.getByRole("button", { name }).click();
+  await page.getByRole("button", { name, exact: true }).click();
   await expect(page.locator("#view-title")).toHaveText(name);
+}
+
+async function openAiDrawer(page) {
+  await page.getByRole("button", { name: /Ask StudentOS/i }).click();
+  await expect(page.locator("#ai-panel")).toBeVisible();
+}
+
+async function closeAiDrawer(page) {
+  await page.getByRole("button", { name: "Close AI drawer" }).click();
+  await expect(page.locator("#ai-panel")).not.toBeVisible();
 }
 
 function requireLiveSupabaseConfig(config) {
@@ -569,6 +579,7 @@ test.describe("StudentOS live Supabase E2E", () => {
     await expect(page.locator("#source-result")).toContainText("not public");
 
     await clickNav(page, "Studio");
+    await openAiDrawer(page);
     for (const verb of ["Ask", "Plan", "Make", "Review"]) {
       await page.locator(`.verb-tab[data-verb='${verb}']`).click();
       await page.locator("#ai-message").fill(`${verb}: answer from the uploaded quadratics note with citations.`);
@@ -577,6 +588,7 @@ test.describe("StudentOS live Supabase E2E", () => {
       await expect(page.locator("#ai-response")).toContainText(`${verb} result`, { timeout: 20_000 });
       await expect(page.locator("#ai-response")).toContainText(/Cited snippets|uploaded material|source|retrieval/i);
     }
+    await closeAiDrawer(page);
 
     await page.getByRole("button", { name: "Analyze flow" }).click();
     await waitForNotLoading(page.locator("#flow-result"), "Checking coverage and next learning step");

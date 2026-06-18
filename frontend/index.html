@@ -93,6 +93,11 @@
         </div>
       </header>
 
+      <button id="ai-launcher" class="ai-launcher" type="button" aria-controls="ai-panel" aria-expanded="false">
+        <span aria-hidden="true">AI</span>
+        <strong>Ask StudentOS</strong>
+      </button>
+
       <section class="view active" id="view-today" aria-labelledby="view-title">
         <div id="dashboard-summary" class="dashboard-summary"></div>
         <div class="overview-grid">
@@ -102,9 +107,12 @@
                 <p class="eyebrow">Now</p>
                 <h3>Study Queue</h3>
               </div>
-              <button class="icon-button" id="refresh-btn" type="button" title="Refresh">
-                <span class="refresh-icon" aria-hidden="true"></span>
-              </button>
+              <div class="inline-actions">
+                <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Plan" data-ai-prompt="Plan today from my study queue, classes, and due work. Keep it concise and practical.">Plan today</button>
+                <button class="icon-button" id="refresh-btn" type="button" title="Refresh">
+                  <span class="refresh-icon" aria-hidden="true"></span>
+                </button>
+              </div>
             </div>
             <div id="roadmap-list" class="stack-list"></div>
           </section>
@@ -218,6 +226,13 @@ Thu|19:00|English writing sprint|English</textarea>
       </section>
 
       <section class="view" id="view-courses" aria-labelledby="view-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Courses</p>
+            <h3>Course Workspaces</h3>
+          </div>
+          <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="Help me choose the most important course focus for this week based on my current StudentOS data.">Ask about course</button>
+        </div>
         <div id="courses-grid" class="courses-grid"></div>
       </section>
 
@@ -229,6 +244,7 @@ Thu|19:00|English writing sprint|English</textarea>
                 <p class="eyebrow">Sources</p>
                 <h3>Student Materials</h3>
               </div>
+              <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="Answer from my uploaded sources where possible, and call out what is not covered yet.">Ask from sources</button>
             </div>
             <div id="source-list" class="source-list"></div>
           </section>
@@ -267,6 +283,7 @@ Thu|19:00|English writing sprint|English</textarea>
                 <p class="eyebrow">Assignment Loop</p>
                 <h3>Coverage To Learning Flow</h3>
               </div>
+              <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Review" data-ai-prompt="Review this workflow and tell me the next safe academic step before submission.">Review workflow</button>
             </div>
             <form id="assignment-flow-form" class="form-grid inline-form">
               <label>
@@ -484,13 +501,18 @@ Thu|19:00|English writing sprint|English</textarea>
       </section>
     </main>
 
-    <aside class="ai-panel" aria-label="AI panel">
+    <div id="ai-scrim" class="ai-scrim" hidden></div>
+
+    <aside class="ai-panel" id="ai-panel" aria-label="AI drawer" aria-hidden="true" tabindex="-1">
       <div class="ai-panel-head">
         <div>
           <p class="eyebrow">AI Verbs</p>
           <h3>Academic Copilot</h3>
         </div>
-        <span class="brain-badge">SentIQGPT powered</span>
+        <div class="heading-actions">
+          <span class="brain-badge">SentIQGPT powered</span>
+          <button id="ai-close-btn" class="icon-button ai-close-button" type="button" aria-label="Close AI drawer">X</button>
+        </div>
       </div>
       <div class="verb-tabs" role="tablist" aria-label="AI verbs">
         <button class="verb-tab active" data-verb="Ask" type="button">Ask</button>

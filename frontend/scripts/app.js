@@ -11,6 +11,7 @@ let runtimeConfig = { auth: { enabled: false } };
 let authSession = readStoredSession();
 let accountSnapshot = null;
 let classroomStatus = null;
+let aiDrawerReturnFocus = null;
 
 const els = {
   viewTitle: document.getElementById("view-title"),
@@ -79,6 +80,10 @@ const els = {
   upgradeBtn: document.getElementById("upgrade-btn"),
   manageBillingBtn: document.getElementById("manage-billing-btn"),
   pricingPanel: document.getElementById("pricing-panel"),
+  aiLauncher: document.getElementById("ai-launcher"),
+  aiPanel: document.getElementById("ai-panel"),
+  aiCloseBtn: document.getElementById("ai-close-btn"),
+  aiScrim: document.getElementById("ai-scrim"),
 };
 
 function readStoredSession() {
@@ -946,6 +951,49 @@ function setVerb(verb) {
   });
 }
 
+function isAiDrawerOpen() {
+  return document.body.classList.contains("ai-drawer-open");
+}
+
+function openAiDrawer(options = {}) {
+  const { verb, prompt } = options;
+  if (!isAiDrawerOpen()) {
+    aiDrawerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+  if (verb) {
+    setVerb(verb);
+  }
+  if (typeof prompt === "string" && prompt.trim()) {
+    els.aiMessage.value = prompt.trim();
+  }
+  document.body.classList.add("ai-drawer-open");
+  els.aiPanel.setAttribute("aria-hidden", "false");
+  els.aiLauncher.setAttribute("aria-expanded", "true");
+  els.aiScrim.hidden = false;
+  window.requestAnimationFrame(() => {
+    els.aiMessage.focus();
+  });
+}
+
+function closeAiDrawer({ restoreFocus = true } = {}) {
+  if (!isAiDrawerOpen()) return;
+  document.body.classList.remove("ai-drawer-open");
+  els.aiPanel.setAttribute("aria-hidden", "true");
+  els.aiLauncher.setAttribute("aria-expanded", "false");
+  els.aiScrim.hidden = true;
+  if (restoreFocus && aiDrawerReturnFocus && document.contains(aiDrawerReturnFocus)) {
+    aiDrawerReturnFocus.focus();
+  }
+  aiDrawerReturnFocus = null;
+}
+
+function handleAiContextButton(button) {
+  openAiDrawer({
+    verb: button.dataset.aiVerb,
+    prompt: button.dataset.aiPrompt,
+  });
+}
+
 async function loadAccountSnapshot() {
   try {
     accountSnapshot = await api("/api/account");
@@ -1547,6 +1595,17 @@ async function disconnectClassroom() {
 function wireEvents() {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.addEventListener("click", () => setView(button.dataset.view));
+  });
+  els.aiLauncher.addEventListener("click", () => openAiDrawer());
+  els.aiCloseBtn.addEventListener("click", () => closeAiDrawer());
+  els.aiScrim.addEventListener("click", () => closeAiDrawer());
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && isAiDrawerOpen()) {
+      closeAiDrawer();
+    }
+  });
+  document.querySelectorAll("[data-ai-open]").forEach((button) => {
+    button.addEventListener("click", () => handleAiContextButton(button));
   });
   document.querySelectorAll(".verb-tab").forEach((button) => {
     button.addEventListener("click", () => setVerb(button.dataset.verb));

@@ -49,8 +49,18 @@ async function waitForNotLoading(locator, loadingText) {
 }
 
 async function clickNav(page, name) {
-  await page.getByRole("button", { name }).click();
+  await page.getByRole("button", { name, exact: true }).click();
   await expect(page.locator("#view-title")).toHaveText(name);
+}
+
+async function openAiDrawer(page) {
+  await page.getByRole("button", { name: /Ask StudentOS/i }).click();
+  await expect(page.locator("#ai-panel")).toBeVisible();
+}
+
+async function closeAiDrawer(page) {
+  await page.getByRole("button", { name: "Close AI drawer" }).click();
+  await expect(page.locator("#ai-panel")).not.toBeVisible();
 }
 
 let serverProcess;
@@ -135,6 +145,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#source-result")).toContainText("not public");
   await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
 
+  await openAiDrawer(page);
   for (const verb of ["Ask", "Plan", "Make", "Review"]) {
     await page.locator(`.verb-tab[data-verb='${verb}']`).click();
     await page.locator("#ai-message").fill(`${verb}: use the uploaded quadratics source in one concise response.`);
@@ -142,6 +153,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
     await waitForNotLoading(page.locator("#ai-response"), "Thinking with source context");
     await expect(page.locator("#ai-response")).toContainText(/uploaded material|Cited snippets|source|fallback/i, { timeout: 20_000 });
   }
+  await closeAiDrawer(page);
 
   await clickNav(page, "Studio");
   await page.getByRole("button", { name: "Analyze flow" }).click();
