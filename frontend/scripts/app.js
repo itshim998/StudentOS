@@ -1,4 +1,9 @@
 const API_BASE = window.StudentOSConfig?.apiBase || "";
+const PUBLIC_FRONTEND_HOSTS = new Set([
+  "studentos.sentiqlabs.com",
+  "studentos-39s.pages.dev",
+]);
+const API_BASE_MISCONFIGURED_MESSAGE = "API base URL misconfigured. Cloudflare Pages must set STUDENTOS_PUBLIC_API_BASE_URL to the Azure backend URL.";
 
 let state = null;
 let activeVerb = "Ask";
@@ -127,6 +132,35 @@ function renderClassroomError(error) {
   `;
 }
 
+function isPublicFrontendOrigin() {
+  return PUBLIC_FRONTEND_HOSTS.has(window.location.hostname);
+}
+
+function apiBaseMisconfiguredError() {
+  return new Error(API_BASE_MISCONFIGURED_MESSAGE);
+}
+
+function apiUrl(path) {
+  if (!API_BASE && isPublicFrontendOrigin()) {
+    throw apiBaseMisconfiguredError();
+  }
+  return `${API_BASE}${path}`;
+}
+
+async function readJsonResponse(response, fallbackMessage) {
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+  const looksHtml = contentType.includes("text/html") || /^\s*<!doctype\s+html/i.test(text) || /^\s*<html[\s>]/i.test(text);
+  if (looksHtml) {
+    throw apiBaseMisconfiguredError();
+  }
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(fallbackMessage || "StudentOS API returned an invalid JSON response.");
+  }
+}
+
 async function api(path, options = {}) {
   const isFormData = options.body instanceof FormData;
   const headers = isFormData
@@ -138,18 +172,18 @@ async function api(path, options = {}) {
   if (authSession?.access_token) {
     headers.Authorization = `Bearer ${authSession.access_token}`;
   }
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(apiUrl(path), {
     ...options,
     headers,
   });
+  const body = await readJsonResponse(response, `StudentOS API returned invalid JSON for ${path}.`);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
     if (response.status === 401) {
       handleSessionExpiry();
     }
     throw new Error(body.error || `HTTP ${response.status}`);
   }
-  return response.json();
+  return body;
 }
 
 async function loadRuntimeConfig() {
@@ -195,7 +229,7 @@ async function authRequest(path, body, token = "") {
     headers,
     body: JSON.stringify(body || {}),
   });
-  const payload = await response.json().catch(() => ({}));
+  const payload = await readJsonResponse(response, "StudentOS Auth returned an invalid JSON response.").catch(() => ({}));
   if (!response.ok) {
     throw new Error(payload.error_description || payload.msg || payload.error || "Auth request failed");
   }
@@ -369,9 +403,12 @@ function render() {
   els.planBadge.textContent = plan.label || "Free";
   els.studyRhythm.textContent = humanize(state.studentProfile.studyRhythm || "steady");
   els.creditEligibility.textContent = humanize(state.studentProfile.convenienceEligibility || "learning first");
-  els.connectorStatus.textContent = state.persistence?.mode === "supabase"
-    ? state.persistence.shard.label
-    : "Mock mode";
+  const backendPersistence = runtimeConfig.persistence || {};
+  els.connectorStatus.textContent = backendPersistence.mode === "supabase"
+    ? "Supabase mode"
+    : backendPersistence.mode === "mock"
+      ? "Mock mode"
+      : humanize(backendPersistence.mode || state.persistence?.mode || "unknown mode");
   renderClassroomPanel();
   renderDashboardSummary();
   renderRoadmap();
@@ -1356,9 +1393,9 @@ async function downloadReadyExport(requestId) {
   els.accountActionResult.innerHTML = `<p>Preparing your private export download...</p>`;
   const headers = {};
   if (authSession?.access_token) headers.Authorization = `Bearer ${authSession.access_token}`;
-  const response = await fetch(`${API_BASE}/api/account/exports/${encodeURIComponent(requestId)}/download`, { headers });
+  const response = await fetch(apiUrl(`/api/account/exports/${encodeURIComponent(requestId)}/download`), { headers });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    const body = await readJsonResponse(response, "StudentOS API returned invalid JSON for export download.").catch((error) => ({ error: error.message || `HTTP ${response.status}` }));
     if (response.status === 401) handleSessionExpiry();
     throw new Error(body.error || `HTTP ${response.status}`);
   }

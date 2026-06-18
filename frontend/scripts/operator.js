@@ -1,4 +1,9 @@
 const API_BASE = window.StudentOSConfig?.apiBase || "";
+const PUBLIC_FRONTEND_HOSTS = new Set([
+  "studentos.sentiqlabs.com",
+  "studentos-39s.pages.dev",
+]);
+const API_BASE_MISCONFIGURED_MESSAGE = "API base URL misconfigured. Cloudflare Pages must set STUDENTOS_PUBLIC_API_BASE_URL to the Azure backend URL.";
 const els = {
   form: document.getElementById("operator-query-form"),
   userId: document.getElementById("operator-user-id"),
@@ -46,16 +51,35 @@ function headers() {
   };
 }
 
+function apiUrl(path) {
+  if (!API_BASE && PUBLIC_FRONTEND_HOSTS.has(window.location.hostname)) {
+    throw new Error(API_BASE_MISCONFIGURED_MESSAGE);
+  }
+  return `${API_BASE}${path}`;
+}
+
+async function readJsonResponse(response, fallbackMessage) {
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+  const looksHtml = contentType.includes("text/html") || /^\s*<!doctype\s+html/i.test(text) || /^\s*<html[\s>]/i.test(text);
+  if (looksHtml) throw new Error(API_BASE_MISCONFIGURED_MESSAGE);
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(fallbackMessage);
+  }
+}
+
 async function internalApi(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers: { ...headers(), ...(options.headers || {}) } });
-  const body = await response.json().catch(() => ({}));
+  const response = await fetch(apiUrl(path), { ...options, headers: { ...headers(), ...(options.headers || {}) } });
+  const body = await readJsonResponse(response, `StudentOS API returned invalid JSON for ${path}.`).catch((error) => ({ error: error.message }));
   if (response.status === 401 || response.status === 403) operatorSession = null;
   if (!response.ok) throw new Error(body.error || `Request failed with ${response.status}`);
   return body;
 }
 
 async function authorizeOperator() {
-  const response = await fetch(`${API_BASE}/api/internal/operator/session`, {
+  const response = await fetch(apiUrl("/api/internal/operator/session"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -63,7 +87,7 @@ async function authorizeOperator() {
     },
     body: JSON.stringify({ operatorId: els.operatorId.value.trim() }),
   });
-  const body = await response.json().catch(() => ({}));
+  const body = await readJsonResponse(response, "StudentOS API returned invalid JSON for operator authorization.").catch((error) => ({ error: error.message }));
   els.token.value = "";
   if (!response.ok) throw new Error(body.error || `Authorization failed with ${response.status}`);
   operatorSession = {

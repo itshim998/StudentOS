@@ -1,4 +1,9 @@
 const API_BASE = window.StudentOSConfig?.apiBase || "";
+const PUBLIC_FRONTEND_HOSTS = new Set([
+  "studentos.sentiqlabs.com",
+  "studentos-39s.pages.dev",
+]);
+const API_BASE_MISCONFIGURED_MESSAGE = "API base URL misconfigured. Cloudflare Pages must set STUDENTOS_PUBLIC_API_BASE_URL to the Azure backend URL.";
 const result = document.getElementById("completion-result");
 const copy = document.getElementById("completion-copy");
 const form = document.getElementById("recovery-complete-form");
@@ -8,10 +13,30 @@ function fragmentParams() {
   return new URLSearchParams(window.location.hash.replace(/^#/, ""));
 }
 
+function apiUrl(path) {
+  if (!API_BASE && PUBLIC_FRONTEND_HOSTS.has(window.location.hostname)) {
+    throw new Error(API_BASE_MISCONFIGURED_MESSAGE);
+  }
+  return `${API_BASE}${path}`;
+}
+
+async function readJsonResponse(response, fallbackMessage) {
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+  const looksHtml = contentType.includes("text/html") || /^\s*<!doctype\s+html/i.test(text) || /^\s*<html[\s>]/i.test(text);
+  if (looksHtml) throw new Error(API_BASE_MISCONFIGURED_MESSAGE);
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(fallbackMessage);
+  }
+}
+
 async function loadConfig() {
-  const response = await fetch(`${API_BASE}/api/config`, { headers: { Accept: "application/json" } });
+  const response = await fetch(apiUrl("/api/config"), { headers: { Accept: "application/json" } });
+  const body = await readJsonResponse(response, "StudentOS account configuration returned invalid JSON.");
   if (!response.ok) throw new Error("StudentOS account configuration is unavailable.");
-  return response.json();
+  return body;
 }
 
 function show(message) {
@@ -28,7 +53,7 @@ async function updatePassword(config, accessToken, nextPassword) {
     },
     body: JSON.stringify({ password: nextPassword }),
   });
-  const body = await response.json().catch(() => ({}));
+  const body = await readJsonResponse(response, "StudentOS Auth returned invalid JSON.").catch(() => ({}));
   if (!response.ok) throw new Error(body.error_description || body.msg || body.error || "Password update failed.");
   return body;
 }

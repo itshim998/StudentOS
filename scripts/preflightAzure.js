@@ -72,6 +72,7 @@ for (const pattern of [".env", ".env.*", "node_modules", "frontend/", "test-resu
 }
 
 addCheck("package start exists", pkg.scripts?.start === "node backend/server.js");
+addCheck("package preflight exists", pkg.scripts?.preflight === "npm run preflight:azure && npm run preflight:production");
 addCheck("package preflight:azure exists", pkg.scripts?.["preflight:azure"] === "node scripts/preflightAzure.js");
 addCheck("package verify:azure-deployment exists", pkg.scripts?.["verify:azure-deployment"] === "node scripts/verifyAzureDeployment.js");
 addCheck("package cloudflare:config exists", pkg.scripts?.["cloudflare:config"] === "node scripts/writeCloudflareFrontendConfig.js");
@@ -83,6 +84,7 @@ addCheck("config exposes safe deployment target", server.includes("deploymentTar
 addCheck("Azure disables backend frontend serving", server.includes("const SERVE_FRONTEND") && server.includes("DEPLOYMENT_TARGET !== \"azure-container-apps\"") && server.includes("frontendServedByBackend: SERVE_FRONTEND"));
 addCheck("Cloudflare runtime config scaffold exists", exists("frontend/runtime-config.js") && exists("scripts/writeCloudflareFrontendConfig.js"));
 addCheck("frontend API config reads runtime config", read("frontend/scripts/config.js").includes("StudentOSRuntimeConfig") && read("frontend/index.html").includes("runtime-config.js"));
+addCheck("frontend detects Cloudflare API base misconfiguration", read("frontend/scripts/app.js").includes("API base URL misconfigured") && read("frontend/scripts/app.js").includes("text/html"));
 
 const healthBlock = server.slice(server.indexOf('url.pathname === "/api/health"'), server.indexOf('url.pathname === "/api/status"'));
 addCheck("health route avoids state/database/provider calls", !/getStateContext|repository\.|fetch\(|runStudentOsVerb|syncGoogleClassroom|embedSourceChunks/.test(healthBlock));
@@ -165,7 +167,9 @@ addCheck("deploy scripts refuse unsafe replica settings", psDeploy.includes("Min
 addCheck("deploy scripts show safe final URL summary", psDeploy.includes("Safe deployment summary") && shDeploy.includes("Safe deployment summary"));
 addCheck("deploy scripts support existing ACA environment", psDeploy.includes("ExistingEnvironmentResourceGroup") && psDeploy.includes("useExistingEnvironment=$UseExistingEnvironment") && shDeploy.includes("EXISTING_ENVIRONMENT_RESOURCE_GROUP") && shDeploy.includes("useExistingEnvironment=\"$USE_EXISTING_ENVIRONMENT\""));
 const verifier = read("scripts/verifyAzureDeployment.js");
+const cloudflareVerifier = read("scripts/verifyCloudflareAzureWiring.js");
 addCheck("verify script checks health and config", verifier.includes("/api/health") && verifier.includes("/api/config"));
+addCheck("verify script checks AI JSON wiring", cloudflareVerifier.includes("/api/ai/verb") && cloudflareVerifier.includes("aiReturnedHtml"));
 addCheck("verify script rejects missing Azure URL", verifier.includes("STUDENTOS_AZURE_API_URL"));
 addCheck("verify script checks deployment target", verifier.includes("azure-container-apps"));
 

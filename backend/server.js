@@ -216,7 +216,7 @@ function corsOriginForRequest(req) {
   const origin = req.headers.origin || "";
   if (saasConfig.deployment !== "production") return origin || "*";
   if (origin && saasConfig.corsOrigins.includes(origin)) return origin;
-  return saasConfig.corsOrigins[0] || "null";
+  return "";
 }
 
 function createStageTimeoutError(stage, timeoutMs) {
@@ -277,29 +277,31 @@ async function runUploadStage(req, stage, action, options = {}) {
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload, null, 2);
-  res.writeHead(status, {
+  const headers = {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
     "X-Request-Id": res.requestId || "",
-    "Access-Control-Allow-Origin": res.corsOrigin || "*",
     "Vary": "Origin",
     "Access-Control-Allow-Headers": "Content-Type, Authorization, X-StudentOS-Internal-Token",
     "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
-  });
+  };
+  if (res.corsOrigin) headers["Access-Control-Allow-Origin"] = res.corsOrigin;
+  res.writeHead(status, headers);
   res.end(body);
 }
 
 function sendPrivateDownload(res, bytes, filename = "studentos-export.json") {
-  res.writeHead(200, {
+  const headers = {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Disposition": `attachment; filename="${filename}"`,
     "Content-Length": String(bytes.length),
     "Cache-Control": "private, no-store, max-age=0",
     "X-Content-Type-Options": "nosniff",
     "X-Request-Id": res.requestId || "",
-    "Access-Control-Allow-Origin": res.corsOrigin || "*",
     "Vary": "Origin",
-  });
+  };
+  if (res.corsOrigin) headers["Access-Control-Allow-Origin"] = res.corsOrigin;
+  res.writeHead(200, headers);
   res.end(bytes);
 }
 

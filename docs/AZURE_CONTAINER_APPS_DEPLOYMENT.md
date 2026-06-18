@@ -243,6 +243,14 @@ Set this Cloudflare Pages environment variable:
 STUDENTOS_PUBLIC_API_BASE_URL=https://<azure-backend-fqdn>
 ```
 
+Current Azure backend FQDN:
+
+```text
+STUDENTOS_PUBLIC_API_BASE_URL=https://studentos-api-dev.ashygrass-913d190e.centralindia.azurecontainerapps.io
+```
+
+For a dedicated backend API custom domain, use that API origin instead, for example `https://studentos-api.sentiqlabs.com`. Do not set this value to the Cloudflare frontend origin.
+
 Use this Cloudflare Pages build command so `frontend/runtime-config.js` is generated during the frontend deployment:
 
 ```bash
@@ -256,6 +264,7 @@ Post-deploy browser/API checks:
 - `https://studentos.sentiqlabs.com`
 - `https://<azure-backend-fqdn>/api/health`
 - `https://<azure-backend-fqdn>/api/config`
+- `POST https://<azure-backend-fqdn>/api/ai/verb` returns JSON, not HTML.
 
 Optional CORS verification:
 

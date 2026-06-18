@@ -60,6 +60,7 @@
     "verify:pass22-schema": "node scripts/verifyPass22SafetySchemaLive.js",
     "verify:classroom-live": "node scripts/verifyGoogleClassroomLive.js",
     "verify:classroom-config": "node scripts/verifyGoogleClassroomConfig.js",
+    "preflight": "npm run preflight:azure && npm run preflight:production",
     "preflight:production": "node scripts/preflightProduction.js",
     "test:pass30": "node backend/testPass30.js",
     "test:e2e:supabase:report": "node scripts/runSupabaseE2EReport.js",
