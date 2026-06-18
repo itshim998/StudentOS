@@ -1,0 +1,47 @@
+name: Supabase Keepalive - StudentOS
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studentos-supabase-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      STUDENTOS_KEEPALIVE_SKIP_DOTENV: "true"
+      STUDENTOS_SUPABASE_URL_1: ${{ secrets.STUDENTOS_SUPABASE_URL_1 }}
+      STUDENTOS_SUPABASE_ANON_KEY_1: ${{ secrets.STUDENTOS_SUPABASE_ANON_KEY_1 }}
+      STUDENTOS_SUPABASE_URL_2: ${{ secrets.STUDENTOS_SUPABASE_URL_2 }}
+      STUDENTOS_SUPABASE_ANON_KEY_2: ${{ secrets.STUDENTOS_SUPABASE_ANON_KEY_2 }}
+      STUDENTOS_SUPABASE_URL_3: ${{ secrets.STUDENTOS_SUPABASE_URL_3 }}
+      STUDENTOS_SUPABASE_ANON_KEY_3: ${{ secrets.STUDENTOS_SUPABASE_ANON_KEY_3 }}
+      STUDENTOS_SUPABASE_URL_4: ${{ secrets.STUDENTOS_SUPABASE_URL_4 }}
+      STUDENTOS_SUPABASE_ANON_KEY_4: ${{ secrets.STUDENTOS_SUPABASE_ANON_KEY_4 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Redact keepalive credentials
+        shell: bash
+        run: |
+          for value in \
+            "$STUDENTOS_SUPABASE_ANON_KEY_1" \
+            "$STUDENTOS_SUPABASE_ANON_KEY_2" \
+            "$STUDENTOS_SUPABASE_ANON_KEY_3" \
+            "$STUDENTOS_SUPABASE_ANON_KEY_4"; do
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+
+      - name: Ping Supabase projects
+        run: node scripts/verifySupabaseKeepalive.js
