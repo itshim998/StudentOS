@@ -99,51 +99,56 @@
       </button>
 
       <section class="view active" id="view-today" aria-labelledby="view-title">
-        <div id="dashboard-summary" class="dashboard-summary"></div>
-        <div class="overview-grid">
-          <section class="focus-board">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Now</p>
-                <h3>Study Queue</h3>
-              </div>
-              <div class="inline-actions">
-                <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Plan" data-ai-prompt="Plan today from my study queue, classes, and due work. Keep it concise and practical.">Plan today</button>
-                <button class="icon-button" id="refresh-btn" type="button" title="Refresh">
-                  <span class="refresh-icon" aria-hidden="true"></span>
-                </button>
-              </div>
-            </div>
-            <div id="roadmap-list" class="stack-list"></div>
-          </section>
+        <div class="today-command-center">
+          <div id="dashboard-summary" class="dashboard-summary today-brief"></div>
 
-          <section class="agenda-board">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Schedule</p>
-                <h3>Classes And Blocks</h3>
+          <div class="overview-grid today-grid">
+            <section class="focus-board today-board today-study-board">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">Now</p>
+                  <h3>Study Queue</h3>
+                </div>
+                <div class="inline-actions">
+                  <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Plan" data-ai-prompt="Plan today from my study queue, classes, and due work. Keep it concise and practical.">Plan today</button>
+                  <button class="icon-button" id="refresh-btn" type="button" title="Refresh">
+                    <span class="refresh-icon" aria-hidden="true"></span>
+                  </button>
+                </div>
               </div>
-            </div>
-            <div id="timetable-list" class="stack-list compact"></div>
-          </section>
+              <div id="roadmap-list" class="stack-list today-study-list"></div>
+            </section>
 
-          <section class="assignment-board">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Due Work</p>
-                <h3>Assignments</h3>
-              </div>
-              <div class="inline-actions">
-                <button class="text-button" id="classroom-connect-btn" type="button">Connect Classroom</button>
-                <button class="text-button" id="classroom-sync-btn" type="button">Sync Classroom</button>
-                <button class="text-button" id="classroom-disconnect-btn" type="button">Disconnect</button>
-              </div>
+            <div class="today-side-stack">
+              <section class="agenda-board today-board today-agenda-board">
+                <div class="section-heading">
+                  <div>
+                    <p class="eyebrow">Schedule</p>
+                    <h3>Classes And Blocks</h3>
+                  </div>
+                </div>
+                <div id="timetable-list" class="stack-list compact today-agenda-list"></div>
+              </section>
+
+              <section class="assignment-board today-board today-due-board">
+                <div class="section-heading">
+                  <div>
+                    <p class="eyebrow">Due Work</p>
+                    <h3>Assignments</h3>
+                  </div>
+                  <div class="inline-actions">
+                    <button class="text-button" id="classroom-connect-btn" type="button">Connect Classroom</button>
+                    <button class="text-button" id="classroom-sync-btn" type="button">Sync Classroom</button>
+                    <button class="text-button" id="classroom-disconnect-btn" type="button">Disconnect</button>
+                  </div>
+                </div>
+                <div id="classroom-panel" class="result-box compact-result today-classroom-panel" aria-live="polite">
+                  <p>Read-only import. StudentOS will not submit or modify Classroom work.</p>
+                </div>
+                <div id="assignment-list" class="stack-list today-assignment-list"></div>
+              </section>
             </div>
-            <div id="classroom-panel" class="result-box compact-result" aria-live="polite">
-              <p>Read-only import. StudentOS will not submit or modify Classroom work.</p>
-            </div>
-            <div id="assignment-list" class="stack-list"></div>
-          </section>
+          </div>
         </div>
       </section>
 

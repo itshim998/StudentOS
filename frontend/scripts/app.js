@@ -357,6 +357,38 @@ function assignmentInsightById(assignmentId) {
   return state?.assignmentInsights?.find((insight) => insight.assignmentId === assignmentId);
 }
 
+function timestampFor(value) {
+  if (!value) return Number.POSITIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+}
+
+function sortedByDate(items, getValue) {
+  return [...(items || [])].sort((left, right) => timestampFor(getValue(left)) - timestampFor(getValue(right)));
+}
+
+function getNextActions() {
+  const roadmap = (state.roadmap || []).filter((item) => item.status === "open");
+  return state.todayNextActions?.length ? state.todayNextActions : sortedByDate(roadmap, (item) => item.dueAt);
+}
+
+function getDueAssignments() {
+  return sortedByDate(state.assignments || [], (assignment) => assignment.dueDate);
+}
+
+function getNextTimetableBlock() {
+  return sortedByDate(state.timetable || [], (item) => item.startsAt)[0] || null;
+}
+
+function buildTodayPlanPrompt(nextAction, dueAssignment, nextBlock) {
+  const parts = [
+    nextAction ? `Start with ${nextAction.title}.` : "Choose my first study block.",
+    dueAssignment ? `Protect due work: ${dueAssignment.title} due ${formatDate(dueAssignment.dueDate)}.` : "No due work is listed yet.",
+    nextBlock ? `Fit around ${nextBlock.title} at ${formatTime(nextBlock.startsAt)}.` : "Use my available study window.",
+  ];
+  return `Plan today from my StudentOS command center. ${parts.join(" ")} Keep it concise and practical.`;
+}
+
 function formatDate(value) {
   if (!value) return "No date";
   const date = new Date(value);
@@ -428,7 +460,7 @@ function render() {
 function renderDashboardSummary() {
   const preferences = state.studentProfile?.preferences || {};
   const upcomingExams = [...(state.exams || [])]
-    .sort((left, right) => Date.parse(left.examDate || "") - Date.parse(right.examDate || ""))
+    .sort((left, right) => timestampFor(left.examDate) - timestampFor(right.examDate))
     .slice(0, 3);
   const weakTopics = (state.topics || [])
     .filter((topic) => (topic.weakSignals || []).length || topic.mastery === "revision_required")
@@ -436,47 +468,97 @@ function renderDashboardSummary() {
   const openRoadmap = (state.roadmap || []).filter((item) => item.status === "open");
   const completedRoadmap = (state.roadmap || []).filter((item) => item.status === "done" || item.status === "completed");
   const activeSources = (state.sourceMaterials || []).filter((source) => !source.deletedAt);
+  const indexedSources = activeSources.filter((source) => source.status === "indexed");
+  const dueAssignments = getDueAssignments();
+  const dueSoon = dueAssignments[0] || null;
+  const nextBlock = getNextTimetableBlock();
+  const nextActions = getNextActions();
+  const nextAction = nextActions[0] || null;
+  const nextCourse = courseById(nextAction?.courseId || dueSoon?.courseId);
+  const nextTopic = topicById(nextAction?.topicId || dueSoon?.topicIds?.[0]);
+  const nextExam = upcomingExams[0] || null;
+  const availability = preferences.dailyStudyAvailabilityMinutes || preferences.dailyStudyWindowMinutes || 90;
+  const doNowTitle = nextAction?.title || dueSoon?.title || "Plan first study block";
+  const doNowContext = [
+    nextCourse?.title || nextAction?.courseTitle,
+    nextTopic?.title || nextAction?.topicTitle,
+  ].filter(Boolean).join(" / ") || "Academic focus";
+  const riskCopy = weakTopics.map((topic) => topic.title).join(" / ") || "No weak topics yet";
+  const planPrompt = buildTodayPlanPrompt(nextAction, dueSoon, nextBlock);
   els.dashboardSummary.innerHTML = `
-    <article class="summary-card">
-      <span>Goal</span>
-      <strong>${escapeHtml(getAcademicGoalLabel())}</strong>
-      <p>${escapeHtml(preferences.stream || state.studentProfile.gradeBand || "Academic plan")}</p>
+    <article class="today-brief-card">
+      <div class="today-brief-copy">
+        <p class="eyebrow">Today Command Center</p>
+        <h3><span>Do now</span>${escapeHtml(doNowTitle)}</h3>
+        <p>Goal: ${escapeHtml(getAcademicGoalLabel())} / ${escapeHtml(preferences.stream || state.studentProfile?.gradeBand || "Academic plan")}</p>
+        <div class="tag-row">
+          ${tag(doNowContext, "source")}
+          ${tag(`${availability} min available`, "source")}
+          ${tag(preferences.studyBreakPattern || "25/5 cycle", "medium")}
+        </div>
+      </div>
+      <div class="today-brief-actions">
+        <button class="primary-button ai-context-button" type="button" data-ai-open data-ai-verb="Plan" data-ai-prompt="${escapeHtml(planPrompt)}">Plan this block</button>
+      </div>
     </article>
-    <article class="summary-card">
-      <span>Upcoming exams</span>
-      <strong>${escapeHtml(upcomingExams[0] ? formatDate(upcomingExams[0].examDate) : "None")}</strong>
-      <p>${escapeHtml(upcomingExams.map((exam) => `${exam.title} ${formatDate(exam.examDate)}`).join(" / ") || "Add exams in setup")}</p>
-    </article>
-    <article class="summary-card">
-      <span>Today focus</span>
-      <strong>${escapeHtml(state.todayNextActions?.[0]?.title || "Plan first block")}</strong>
-      <p>${escapeHtml(`${preferences.dailyStudyAvailabilityMinutes || preferences.dailyStudyWindowMinutes || 90} min / ${preferences.studyBreakPattern || "25/5"} cycle`)}</p>
-    </article>
-    <article class="summary-card">
-      <span>Weak topics</span>
-      <strong>${weakTopics.length}</strong>
-      <p>${escapeHtml(weakTopics.map((topic) => topic.title).join(" / ") || "No weak topics yet")}</p>
-    </article>
-    <article class="summary-card">
-      <span>Materials</span>
-      <strong>${activeSources.length}</strong>
-      <p>${escapeHtml(`${activeSources.filter((source) => source.status === "indexed").length} indexed / ${activeSources.filter((source) => source.status === "needs_ocr").length} need OCR`)}</p>
-    </article>
-    <article class="summary-card">
-      <span>Roadmap</span>
-      <strong>${openRoadmap.length} open</strong>
-      <p>${escapeHtml(`${completedRoadmap.length} completed / ${state.creditBalance || 0} credits`)}</p>
-    </article>
+    <div class="today-status-strip" role="list" aria-label="Today status">
+      <article class="today-status-item" role="listitem">
+        <span>Next exam</span>
+        <strong>${escapeHtml(nextExam ? formatDate(nextExam.examDate) : "None")}</strong>
+        <p>${escapeHtml(nextExam ? nextExam.title : "Add exams in setup")}</p>
+      </article>
+      <article class="today-status-item" role="listitem">
+        <span>Risk</span>
+        <strong>${weakTopics.length ? `${weakTopics.length} topic(s)` : "Clear"}</strong>
+        <p>${escapeHtml(riskCopy)}</p>
+      </article>
+      <article class="today-status-item" role="listitem">
+        <span>Due soon</span>
+        <strong>${escapeHtml(dueSoon ? formatDate(dueSoon.dueDate) : "None")}</strong>
+        <p>${escapeHtml(dueSoon?.title || "No due work listed")}</p>
+      </article>
+      <article class="today-status-item" role="listitem">
+        <span>Next block</span>
+        <strong>${escapeHtml(nextBlock ? formatTime(nextBlock.startsAt) : "Open")}</strong>
+        <p>${escapeHtml(nextBlock?.title || "Use the study window")}</p>
+      </article>
+      <article class="today-status-item" role="listitem">
+        <span>Materials</span>
+        <strong>${indexedSources.length}/${activeSources.length}</strong>
+        <p>${escapeHtml(`${activeSources.filter((source) => source.status === "needs_ocr").length} need OCR`)}</p>
+      </article>
+      <article class="today-status-item" role="listitem">
+        <span>Roadmap</span>
+        <strong>${openRoadmap.length} open</strong>
+        <p>${escapeHtml(`${completedRoadmap.length} completed / ${state.creditBalance || 0} credits`)}</p>
+      </article>
+    </div>
   `;
 }
 
 function renderRoadmap() {
-  const actions = state.todayNextActions?.length ? state.todayNextActions : state.roadmap;
+  const actions = getNextActions();
+  if (!actions.length) {
+    els.roadmapList.innerHTML = `
+      <article class="item-card roadmap-empty-card">
+        <strong>Queue is clear</strong>
+        <p>Generate a roadmap in Setup or sync Classroom to build today's study queue.</p>
+        <div class="item-meta">
+          ${tag("Today ready", "source")}
+          ${tag("student controlled", "source")}
+        </div>
+      </article>
+    `;
+    return;
+  }
   els.roadmapList.innerHTML = actions.slice(0, 5).map((item) => {
     const topic = topicById(item.topicId);
     const course = courseById(item.courseId);
+    const isPrimary = item === actions[0];
+    const prompt = `Plan a focused study block for ${item.title}. Use my course context, due work, timetable, and sources.`;
     return `
-      <article class="item-card">
+      <article class="item-card roadmap-card ${isPrimary ? "roadmap-primary" : "roadmap-secondary"}">
+        ${isPrimary ? `<span class="queue-label">First up</span>` : ""}
         <strong>${escapeHtml(item.title)}</strong>
         <p>${escapeHtml(item.courseTitle || course?.title || "Course")} / ${escapeHtml(item.topicTitle || topic?.title || "Topic")}</p>
         <div class="item-meta">
@@ -485,16 +567,28 @@ function renderRoadmap() {
           ${tag(humanize(item.kind))}
           ${item.examPressure ? tag(`Exam pressure: ${item.examPressure}`, item.examPressure === "critical" ? "urgent" : "medium") : ""}
         </div>
+        ${isPrimary ? `<button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Plan" data-ai-prompt="${escapeHtml(prompt)}">Plan item</button>` : ""}
       </article>
     `;
   }).join("");
 }
 
 function renderTimetable() {
-  els.timetableList.innerHTML = state.timetable.map((item) => {
+  const blocks = sortedByDate(state.timetable || [], (item) => item.startsAt);
+  if (!blocks.length) {
+    els.timetableList.innerHTML = `
+      <article class="item-card timetable-empty-card">
+        <strong>No blocks listed</strong>
+        <p>Add classes or study blocks in Setup so Today can protect your time.</p>
+        <div class="item-meta">${tag("schedule open", "medium")}</div>
+      </article>
+    `;
+    return;
+  }
+  els.timetableList.innerHTML = blocks.map((item) => {
     const course = courseById(item.courseId);
     return `
-      <article class="item-card">
+      <article class="item-card timetable-card">
         <strong>${escapeHtml(item.title)}</strong>
         <p>${formatTime(item.startsAt)} - ${formatTime(item.endsAt)} / ${escapeHtml(item.location)}</p>
         <div class="item-meta">${tag(course?.title || "Study")}</div>
@@ -518,28 +612,37 @@ function renderClassroomPanel() {
   const safeErrorCode = connector.lastErrorCode || history.find((run) => run.payload?.errorCode)?.payload?.errorCode || "";
   const emptyClassroom = summary?.emptyClassroom || history.some((run) => run.payload?.emptyClassroom);
   els.classroomPanel.innerHTML = `
-    <strong>${escapeHtml(humanize(connector.state || connector.mode || "mock"))}</strong>
-    <p>StudentOS can read Classroom assignments but cannot submit, grade, turn in, or modify Classroom work.</p>
+    <div class="classroom-compact-head">
+      <div>
+        <strong>${escapeHtml(humanize(connector.state || connector.mode || "mock"))}</strong>
+        <p>Read-only Classroom import. StudentOS cannot submit, grade, turn in, or modify Classroom work.</p>
+      </div>
+      ${summary ? `<span>${escapeHtml(`${summary.importedAssignments || 0} new / ${summary.updatedAssignments || 0} updated`)}</span>` : ""}
+    </div>
     ${reconnectCopy}
     <div class="tag-row">
       ${tag(humanize(connector.mode || "mock"), "source")}
       ${tag(connector.readOnlyImport === false ? "not ready" : "read only", "source")}
       ${tag(connector.writeScopesEnabled ? "write scope risk" : "no write scopes", connector.writeScopesEnabled ? "urgent" : "source")}
-      ${connector.tokenPersistence ? tag(humanize(connector.tokenPersistence), "source") : ""}
-      ${connector.tokenMetadata?.encryptedAtRest ? tag("encrypted tokens", "source") : ""}
       ${lastSync ? tag(`synced ${formatDate(lastSync)}`, "source") : ""}
     </div>
     <p>${providerEmail ? `Account: ${escapeHtml(providerEmail)} / ` : ""}${lastSync ? `Last sync ${escapeHtml(formatDate(lastSync))}` : "Manual sync only"}</p>
     ${safeError ? `<p class="warning-copy">${escapeHtml(safeErrorCode ? `${humanize(safeErrorCode)}: ${safeError}` : safeError)}</p>` : ""}
     ${emptyClassroom ? `<p class="muted-copy">No active Classroom courses or coursework were found. StudentOS is connected and ready; sync again after new Classroom work appears.</p>` : ""}
-    ${scopes.length ? `<p class="muted-copy">Scopes: ${scopes.map((scope) => escapeHtml(scope.replace("https://www.googleapis.com/auth/", ""))).join(", ")}</p>` : ""}
-    ${summary ? `<p>${escapeHtml(`${summary.importedCourses || 0} course(s), ${summary.importedAssignments || 0} new assignment(s), ${summary.updatedAssignments || 0} updated${summary.emptyClassroom ? " / empty Classroom account" : ""}`)}</p>` : ""}
-    ${history.length ? `
-      <div class="mini-history">
-        ${history.slice(0, 4).map((run) => `
-          <span>${escapeHtml(humanize(run.status))}: ${escapeHtml(formatDate(run.completedAt || run.startedAt))} / ${run.importedAssignments || 0}+${run.updatedAssignments || 0} assignments${run.errorCount ? ` / ${run.errorCount} issue(s)` : ""}</span>
-        `).join("")}
-      </div>
+    ${summary || scopes.length || history.length || connector.tokenPersistence || connector.tokenMetadata?.encryptedAtRest ? `
+      <details class="classroom-details">
+        <summary>Sync details</summary>
+        ${summary ? `<p>${escapeHtml(`${summary.importedCourses || 0} course(s), ${summary.importedAssignments || 0} new assignment(s), ${summary.updatedAssignments || 0} updated${summary.emptyClassroom ? " / empty Classroom account" : ""}`)}</p>` : ""}
+        ${scopes.length ? `<p class="muted-copy">Scopes: ${scopes.map((scope) => escapeHtml(scope.replace("https://www.googleapis.com/auth/", ""))).join(", ")}</p>` : ""}
+        ${connector.tokenPersistence ? `<p class="muted-copy">Token storage: ${escapeHtml(humanize(connector.tokenPersistence))}${connector.tokenMetadata?.encryptedAtRest ? " / encrypted at rest" : ""}</p>` : ""}
+        ${history.length ? `
+          <div class="mini-history">
+            ${history.slice(0, 4).map((run) => `
+              <span>${escapeHtml(humanize(run.status))}: ${escapeHtml(formatDate(run.completedAt || run.startedAt))} / ${run.importedAssignments || 0}+${run.updatedAssignments || 0} assignments${run.errorCount ? ` / ${run.errorCount} issue(s)` : ""}</span>
+            `).join("")}
+          </div>
+        ` : ""}
+      </details>
     ` : ""}
   `;
 }
@@ -588,12 +691,15 @@ function renderAssignments() {
     `;
     return;
   }
-  els.assignmentList.innerHTML = state.assignments.map((assignment) => {
+  const assignments = getDueAssignments();
+  els.assignmentList.innerHTML = assignments.map((assignment, index) => {
     const course = courseById(assignment.courseId);
     const insight = assignmentInsightById(assignment.id);
     const isClassroom = assignment.source === "google_classroom";
+    const isPrimary = index === 0;
     return `
-      <article class="item-card assignment-card">
+      <article class="item-card assignment-card ${isPrimary ? "assignment-card-primary" : ""}">
+        ${isPrimary ? `<span class="queue-label">Nearest due</span>` : ""}
         <strong>${escapeHtml(assignment.title)}</strong>
         <p>${escapeHtml(course?.title || "Course")} / due ${formatDate(assignment.dueDate)}</p>
         <div class="item-meta">
@@ -1604,8 +1710,11 @@ function wireEvents() {
       closeAiDrawer();
     }
   });
-  document.querySelectorAll("[data-ai-open]").forEach((button) => {
-    button.addEventListener("click", () => handleAiContextButton(button));
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-ai-open]");
+    if (button) {
+      handleAiContextButton(button);
+    }
   });
   document.querySelectorAll(".verb-tab").forEach((button) => {
     button.addEventListener("click", () => setVerb(button.dataset.verb));

@@ -120,7 +120,12 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "StudentOS" })).toBeVisible();
   await expect(page.locator("#auth-session")).toContainText("Local demo");
   await expect(page.locator("#connector-status")).toContainText("Mock mode");
+  await expect(page.locator("#dashboard-summary")).toContainText("Do now");
   await expect(page.locator("#dashboard-summary")).toContainText("Goal");
+  await page.getByRole("button", { name: "Plan today" }).click();
+  await expect(page.locator("#ai-panel")).toBeVisible();
+  await expect(page.locator("#ai-message")).toHaveValue(/Plan today from my study queue/i);
+  await closeAiDrawer(page);
 
   for (const view of ["Today", "Setup", "Courses", "Memory", "Studio", "Account"]) {
     await clickNav(page, view);
