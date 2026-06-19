@@ -1257,6 +1257,46 @@ function billingStatusLabel(status) {
   return humanize(status || "Preview ready");
 }
 
+function policyVersionNote(value, label) {
+  const raw = String(value || "").trim();
+  if (!raw) return `${label} ready`;
+  const cleaned = raw.replace(/^(privacy|terms)[-_]/i, "").replace(/_/g, " ");
+  if (!cleaned || cleaned.toLowerCase() === "current") return "Current version";
+  return `Version ${cleaned}`;
+}
+
+function requestReference(id) {
+  return id ? `<small class="account-request-meta">Reference ${escapeHtml(id)}</small>` : "";
+}
+
+function exportStatusCopy(request, job) {
+  if (!request) return "No export requests yet.";
+  if (request.downloadAvailable) return "Your private export is ready to download.";
+  const jobStatus = String(job?.status || request.status || "queued").toLowerCase();
+  if (jobStatus.includes("failed")) return "Export packaging needs another try.";
+  if (jobStatus.includes("complete")) return "Export package is ready.";
+  return "Export request is queued for private packaging.";
+}
+
+function deletionStatusCopy(request) {
+  if (!request) return "No deletion requests.";
+  const gracePeriod = request.gracePeriodEndsAt ? ` Grace period active until ${formatDate(request.gracePeriodEndsAt)}.` : "";
+  return `Deletion request recorded.${gracePeriod} Nothing is deleted immediately.`;
+}
+
+function familyAccessStatusCopy(invitations = []) {
+  if (!invitations.length) return "Family, guardian, teacher, and institution access is inactive.";
+  return `${invitations.length} sharing preview ${invitations.length === 1 ? "record" : "records"} saved. Access stays off until you consent.`;
+}
+
+function familyAccessLabel(status) {
+  const value = String(status || "").toLowerCase();
+  if (value.includes("enabled")) return "Sharing preview ready";
+  if (value.includes("disabled") || value.includes("inactive")) return "Access inactive";
+  if (value.includes("consent")) return "Consent required";
+  return "Safeguards previewed";
+}
+
 function localAccountSnapshot() {
   const plan = runtimeConfig.saas?.quotas?.defaultPlan || { id: "free", label: "Free", quotas: {}, features: {} };
   const activeSources = (state?.sourceMaterials || []).filter((source) => !source.deletedAt);
@@ -1348,7 +1388,7 @@ function renderAccount() {
       <span class="avatar large-avatar" aria-hidden="true">${escapeHtml((account.profile?.displayName || "S").slice(0, 1).toUpperCase())}</span>
       <div>
         <strong>${escapeHtml(account.profile?.displayName || "Student")}</strong>
-        <p>${escapeHtml(account.user?.email || "No email session")} / ${escapeHtml(accountAuthLabel(account.user?.authMode || "local_demo"))}</p>
+        <p>${escapeHtml(account.user?.email || "No email session")} - ${escapeHtml(accountAuthLabel(account.user?.authMode || "local_demo"))}</p>
       </div>
     </div>
     <div class="account-summary-list">
@@ -1375,7 +1415,7 @@ function renderAccount() {
       ${quotaBar("AI requests", usage.aiRequestsToday, limits.aiRequestsPerDay || 0)}
       ${quotaBar("Sources", usage.sourceCount, limits.maxSources || 0)}
       ${quotaBar("Courses", usage.courses, limits.maxCourses || 0)}
-      ${quotaBar("Background work", usage.workerJobsToday, limits.workerJobsPerDay || 0)}
+      ${quotaBar("Study updates", usage.workerJobsToday, limits.workerJobsPerDay || 0)}
       ${quotaBar("Storage", usage.storageBytes, limits.storageBytes || 0, formatBytes)}
     </div>
   `;
@@ -1393,8 +1433,8 @@ function renderLifecycle(lifecycle = {}) {
     els.legalStatus.innerHTML = `
       <div class="account-status-list">
         <span><strong>${escapeHtml(legal.accepted ? "Accepted" : "Review needed")}</strong> current notice</span>
-        <span>Privacy: ${escapeHtml(legal.privacyVersion || "pending")}</span>
-        <span>Terms: ${escapeHtml(legal.termsVersion || "pending")}</span>
+        <span><strong>Privacy notice</strong><small>${escapeHtml(policyVersionNote(legal.privacyVersion, "Privacy notice"))}</small></span>
+        <span><strong>Terms</strong><small>${escapeHtml(policyVersionNote(legal.termsVersion, "Terms"))}</small></span>
       </div>
     `;
   }
@@ -1404,18 +1444,20 @@ function renderLifecycle(lifecycle = {}) {
     const latestDeletion = deletions[0];
     els.accountLifecycleStatus.innerHTML = `
       <article class="lifecycle-item">
-        <strong>Latest export</strong>
-        <p>${latestExport ? `${escapeHtml(humanize(latestExport.status))} / ${escapeHtml(humanize(latestJob?.status || "queued"))}` : "No export requests yet."}</p>
+        <strong>Export</strong>
+        <p>${escapeHtml(exportStatusCopy(latestExport, latestJob))}</p>
+        ${latestExport ? requestReference(latestExport.id) : ""}
         ${latestExport?.downloadAvailable ? `<button class="mini-action" type="button" data-download-export-id="${escapeHtml(latestExport.id)}">Download private export</button>` : ""}
       </article>
       <article class="lifecycle-item">
         <strong>Deletion review</strong>
-        <p>${latestDeletion ? `${escapeHtml(humanize(latestDeletion.status))} / grace period until ${escapeHtml(formatDate(latestDeletion.gracePeriodEndsAt))}` : "No deletion requests."}</p>
-        ${latestDeletion ? `<button class="mini-action danger-action" type="button" data-deletion-dry-run-id="${escapeHtml(latestDeletion.id)}">Preview deletion dry run</button>` : ""}
+        <p>${escapeHtml(deletionStatusCopy(latestDeletion))}</p>
+        ${latestDeletion ? requestReference(latestDeletion.id) : ""}
+        ${latestDeletion ? `<button class="mini-action danger-action" type="button" data-deletion-dry-run-id="${escapeHtml(latestDeletion.id)}">Preview deletion review</button>` : ""}
       </article>
       <article class="lifecycle-item">
         <strong>Family access</strong>
-        <p>${invitations.length ? `${invitations.length} preview record(s), still off until you consent.` : "Guardian, teacher, and institution access is inactive."}</p>
+        <p>${escapeHtml(familyAccessStatusCopy(invitations))}</p>
       </article>
     `;
   }
@@ -1650,16 +1692,16 @@ async function createContract() {
 
 function renderFlow(flow) {
   els.flowResult.innerHTML = `
-    <strong>${escapeHtml(humanize(flow.coverage.status))}: ${escapeHtml(humanize(flow.action))}</strong>
+    <strong>Study plan ready: ${escapeHtml(humanize(flow.action))}</strong>
     <p>${escapeHtml(flow.nextAction)}</p>
-    <div class="tag-row">
-      ${tag("student review required", "medium")}
-      ${tag("no real submission", "urgent")}
-      ${flow.testSession ? tag(`${flow.testSession.questions.length} MCQs`, "source") : tag("lesson before test", "medium")}
+    <div class="studio-result-strip">
+      <span><strong>${escapeHtml(humanize(flow.coverage.status))}</strong> assignment readiness</span>
+      <span><strong>${flow.testSession ? `${flow.testSession.questions.length} questions` : "Lesson first"}</strong> practice path</span>
+      <span><strong>No submission</strong> student review required</span>
     </div>
     <strong>Topic coverage</strong>
     ${list(flow.coverage.topicCoverages.map((coverage) => `${coverage.title}: ${humanize(coverage.status)} (${coverage.reasons.join(", ") || "no signal"})`))}
-    <strong>Roadmap update</strong>
+    <strong>Study queue update</strong>
     <p>${escapeHtml(flow.roadmapItem.title)} / ${escapeHtml(flow.roadmapItem.priority)}</p>
   `;
   renderLesson(flow.lesson);
@@ -1733,9 +1775,13 @@ async function recordScore(event) {
   });
 
   els.scoreResult.innerHTML = `
-    <strong>${result.result.scorePercent}% / ${result.result.creditsAwarded} credit(s)</strong>
+    <strong>Practice saved: ${result.result.scorePercent}%</strong>
     <p>${escapeHtml(result.scoreSummary)}</p>
-    <strong>Corrections</strong>
+    <div class="studio-result-strip">
+      <span><strong>${escapeHtml(String(result.result.creditsAwarded))}</strong> study credit${result.result.creditsAwarded === 1 ? "" : "s"} updated</span>
+      <span><strong>${escapeHtml((result.weakTopics || []).length ? "Review needed" : "On track")}</strong> weak-topic signal</span>
+    </div>
+    <strong>What to repair next</strong>
     ${list(result.correctionSheet.corrections.map((item) => `${item.concept}: ${item.repair}`))}
     <div class="tag-row">
       ${(result.weakTopics || []).map((weak) => tag(weak, "medium")).join("")}
@@ -1757,9 +1803,13 @@ async function draftExtension(event) {
     }),
   });
   els.extensionResult.innerHTML = `
-    <strong>${escapeHtml(humanize(result.draft.recommendation))}</strong>
+    <strong>Draft recommendation: ${escapeHtml(humanize(result.draft.recommendation))}</strong>
     <p>${escapeHtml(result.draft.explanation)}</p>
-    <div class="tag-row">${result.draft.safeguards.map((item) => tag(humanize(item), "source")).join("")}</div>
+    <div class="tag-row">
+      ${tag("draft only", "source")}
+      ${tag("student review required", "medium")}
+      ${result.draft.safeguards.map((item) => tag(humanize(item), "source")).join("")}
+    </div>
   `;
 }
 
@@ -1918,22 +1968,27 @@ async function acceptCurrentLegalTerms() {
   accountSnapshot = result.account;
   els.legalResult.innerHTML = `
     <strong>Acceptance recorded</strong>
-    <p>${escapeHtml(result.acceptance.privacyVersion)} / ${escapeHtml(result.acceptance.termsVersion)}</p>
+    <p>Your current terms and privacy notice acceptance is saved.</p>
+    <div class="tag-row">
+      ${tag(policyVersionNote(result.acceptance.privacyVersion, "Privacy notice"), "source")}
+      ${tag(policyVersionNote(result.acceptance.termsVersion, "Terms"), "source")}
+    </div>
   `;
   renderAccount();
 }
 
 async function requestConsentWithdrawal() {
-  els.consentResult.innerHTML = `<p>Creating consent withdrawal request...</p>`;
+  els.consentResult.innerHTML = `<p>Creating consent review request...</p>`;
   const result = await api("/api/account/consent/withdrawal-request", {
     method: "POST",
     body: JSON.stringify({ consentKey: "externalProgressSharing" }),
   });
   accountSnapshot = result.account;
   els.consentResult.innerHTML = `
-    <strong>Withdrawal request recorded</strong>
-    <p>${escapeHtml(humanize(result.request.consentKey))} / ${escapeHtml(humanize(result.request.status))}</p>
+    <strong>Consent review request recorded</strong>
+    <p>StudentOS recorded a review request for external progress sharing. No sharing changes until the request is reviewed.</p>
     <div class="tag-row">${tag("review request", "medium")}${tag("no sharing change yet", "source")}</div>
+    ${requestReference(result.request.id)}
   `;
   renderAccount();
 }
@@ -1948,8 +2003,9 @@ async function requestDataExport() {
     accountSnapshot = result.account;
     els.accountActionResult.innerHTML = `
       <strong>Export request created</strong>
-      <p>${escapeHtml(result.request.id)} / ${escapeHtml(humanize(result.request.status))}</p>
+      <p>Your private export request was queued. StudentOS will package your account data for authenticated download.</p>
       <div class="tag-row">${tag("private export queued", "medium")}${tag("handled privately", "source")}</div>
+      ${requestReference(result.request.id)}
     `;
     renderAccount();
   } catch (error) {
@@ -1997,8 +2053,9 @@ async function requestAccountDeletion() {
   accountSnapshot = result.account;
   els.accountActionResult.innerHTML = `
     <strong>Deletion request recorded</strong>
-    <p>${escapeHtml(result.request.id)} / grace period until ${escapeHtml(formatDate(result.request.gracePeriodEndsAt))}</p>
-    <div class="tag-row">${tag("no immediate deletion", "urgent")}${tag("manual review", "medium")}${tag("handled privately", "source")}</div>
+    <p>Grace period active until ${escapeHtml(formatDate(result.request.gracePeriodEndsAt))}. Nothing is deleted immediately, and the request stays in private review.</p>
+    <div class="tag-row">${tag("no immediate deletion", "urgent")}${tag("private review", "medium")}${tag("handled privately", "source")}</div>
+    ${requestReference(result.request.id)}
   `;
   renderAccount();
 }
@@ -2018,32 +2075,34 @@ async function requestDeletionDryRun(requestId) {
       ? "Affected counts changed since the previous preview."
       : "Affected counts match the previous preview.";
   els.accountActionResult.innerHTML = `
-    <strong>Deletion dry run ready</strong>
+    <strong>Deletion review preview ready</strong>
     <p>No data was deleted. This preview covers ${escapeHtml(summary.databaseRows || 0)} account record(s) and ${escapeHtml(summary.storageObjects || 0)} private file(s). ${escapeHtml(diffCopy)}</p>
     <div class="tag-row">
-      ${tag(indexedSectionsLabel(summary.sourceChunks || 0), "source")}
-      ${tag(`${summary.memoryItems || 0} memory items`, "source")}
-      ${tag(`${summary.embeddingMetadata || 0} learning index entries`, "source")}
-      ${tag(`${summary.backgroundJobs || 0} background work item(s)`, "source")}
-      ${tag("destructive actions disabled", "urgent")}
+      ${tag(`${summary.sourceChunks || 0} source sections`, "source")}
+      ${tag(`${summary.memoryItems || 0} study records`, "source")}
+      ${tag(`${summary.embeddingMetadata || 0} search records`, "source")}
+      ${tag(`${summary.backgroundJobs || 0} study update records`, "source")}
+      ${tag("no deletion performed", "urgent")}
     </div>
+    ${requestReference(requestId)}
   `;
   renderAccount();
 }
 
 async function previewGuardianGroundwork() {
-  els.invitationResult.innerHTML = `<p>Checking guardian invitation groundwork...</p>`;
+  els.invitationResult.innerHTML = `<p>Checking family and institution sharing safeguards...</p>`;
   const result = await api("/api/account/invitations/guardian-preview", {
     method: "POST",
     body: JSON.stringify({ explicitStudentConsent: false }),
   });
   els.invitationResult.innerHTML = `
-    <strong>${escapeHtml(humanize(result.invitation.status))}</strong>
-    <p>${escapeHtml(result.message)}</p>
+    <strong>${escapeHtml(familyAccessLabel(result.invitation.status))}</strong>
+    <p>No family, guardian, teacher, or institution access was enabled. Student consent is required before sharing is turned on.</p>
     <div class="tag-row">
       ${tag("student consent required", "source")}
       ${tag(result.invitation.enabled ? "enabled" : "inactive", result.invitation.enabled ? "medium" : "source")}
     </div>
+    ${requestReference(result.invitation.id)}
   `;
   await loadAccountSnapshot();
 }

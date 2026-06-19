@@ -189,11 +189,16 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await closeAiDrawer(page);
 
   await clickNav(page, "Studio");
-  await page.getByRole("button", { name: "Analyze flow" }).click();
+  await expect(page.locator("#view-studio")).toContainText("Focused academic workflows");
+  await page.getByRole("button", { name: "Review workflow" }).click();
+  await expect(page.locator("#ai-panel")).toBeVisible();
+  await expect(page.locator("#ai-message")).toHaveValue(/current Studio workflow/i);
+  await closeAiDrawer(page);
+  await page.getByRole("button", { name: "Check readiness" }).click();
   await waitForNotLoading(page.locator("#flow-result"), "Checking coverage and next learning step");
   await expect(page.locator("#flow-result")).toContainText("Topic coverage");
-  await expect(page.locator("#flow-result")).toContainText("Roadmap update");
-  await expect(page.locator("#flow-result")).toContainText("no real submission");
+  await expect(page.locator("#flow-result")).toContainText("Study queue update");
+  await expect(page.locator("#flow-result")).toContainText("No submission");
 
   await clickNav(page, "Today");
   await expect(page.locator("#classroom-panel")).toContainText(/read only|connected|mock/i);
@@ -211,6 +216,8 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#account-summary")).toContainText(/Student|local demo/i);
   await expect(page.locator("#view-account")).toContainText("Profile / Identity");
   await expect(page.locator("#view-account")).toContainText("Privacy and consent");
+  await expect(page.locator("#view-account")).toContainText("Your data rights");
+  await expect(page.locator("#view-account")).toContainText("Access sharing");
   await expect(page.locator("#quota-panel")).toContainText(/sources|AI|storage/i);
   await expect(page.locator("#quota-panel")).toContainText("Limits are visible here, but relaxed for this preview.");
   await expect(page.locator("#pricing-panel")).toContainText(/Free|Pro|Institution/i);
@@ -220,6 +227,15 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#pricing")).toBeVisible();
   await page.getByRole("button", { name: "Request data export" }).click();
   await expect(page.locator("#account-action-result")).toContainText("Export request created");
+  await expect(page.locator("#account-action-result")).toContainText("Reference");
+  await page.getByRole("button", { name: "Request account deletion" }).click();
+  await expect(page.locator("#account-action-result")).toContainText("Deletion request recorded");
+  await expect(page.locator("#account-action-result")).toContainText("Grace period active");
+  await page.locator("#account-lifecycle-status").getByRole("button", { name: "Preview deletion review" }).click();
+  await expect(page.locator("#account-action-result")).toContainText("Deletion review preview ready");
+  await expect(page.locator("#account-action-result")).toContainText("No data was deleted");
+  await page.getByRole("button", { name: "Preview sharing safeguards" }).click();
+  await expect(page.locator("#invitation-result")).toContainText(/Access inactive|Safeguards previewed|Consent required/i);
   await page.getByRole("button", { name: "Upgrade" }).click();
   await expect(page.locator("#account-action-result")).toContainText(/Preview|redirect|payment|checkout/i);
 
@@ -230,7 +246,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
     body: JSON.stringify({ error: "StudentOS could not analyze this assignment flow. Refresh synced data and try again." }),
   }));
   await clickNav(page, "Studio");
-  await page.getByRole("button", { name: "Analyze flow" }).click();
+  await page.getByRole("button", { name: "Check readiness" }).click();
   await waitForNotLoading(page.locator("#flow-result"), "Checking coverage and next learning step");
   await expect(page.locator("#flow-result")).toContainText("Assignment flow unavailable");
   await expect(page.locator("#flow-result")).toContainText("try again");

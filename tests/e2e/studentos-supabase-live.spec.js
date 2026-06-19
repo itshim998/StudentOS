@@ -594,11 +594,11 @@ test.describe("StudentOS live Supabase E2E", () => {
     }
     await closeAiDrawer(page);
 
-    await page.getByRole("button", { name: "Analyze flow" }).click();
+    await page.getByRole("button", { name: "Check readiness" }).click();
     await waitForNotLoading(page.locator("#flow-result"), "Checking coverage and next learning step");
     await expect(page.locator("#flow-result")).toContainText("Topic coverage", { timeout: 20_000 });
-    await expect(page.locator("#flow-result")).toContainText("Roadmap update");
-    await expect(page.locator("#flow-result")).toContainText("no real submission");
+    await expect(page.locator("#flow-result")).toContainText("Study queue update");
+    await expect(page.locator("#flow-result")).toContainText("No submission");
 
     await clickNav(page, "Account");
     await expect(page.locator("#pricing-panel")).toContainText(/Free|Pro|Institution/i, { timeout: 15_000 });

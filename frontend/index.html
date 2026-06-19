@@ -410,32 +410,54 @@ Thu|19:00|English writing sprint|English</textarea>
       </section>
 
       <section class="view" id="view-studio" aria-labelledby="view-title">
-        <div class="studio-layout">
-          <section class="studio-wide">
+        <div class="studio-layout studio-workbench">
+          <section class="studio-brief-panel studio-wide">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">Assignment Loop</p>
-                <h3>Coverage To Learning Flow</h3>
+                <p class="eyebrow">Studio workbench</p>
+                <h3>Focused academic workflows</h3>
               </div>
-              <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Review" data-ai-prompt="Review this workflow and tell me the next safe academic step before submission.">Review workflow</button>
+              <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Review" data-ai-prompt="Review my current Studio workflow and tell me the next safe academic step.">Review workflow</button>
             </div>
+            <div class="studio-brief-grid">
+              <p>Use Studio when you need to turn work into a concrete study action, save a practice result, or draft a careful request for more time.</p>
+              <div class="studio-workflow-steps" aria-label="Studio workflow areas">
+                <span>Assignment readiness</span>
+                <span>Practice result</span>
+                <span>Extension draft</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="studio-primary-workflow studio-wide">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Assignment coverage</p>
+                <h3>Turn assignment into a study plan</h3>
+              </div>
+              <span class="brain-badge">No submission happens here</span>
+            </div>
+            <p class="studio-helper-copy">Choose an assignment to check source coverage, weak topics, and the next learning step before you submit anything.</p>
             <form id="assignment-flow-form" class="form-grid inline-form">
               <label>
                 Assignment
                 <select name="assignmentId" id="flow-assignment-select"></select>
               </label>
-              <button class="primary-button" type="submit">Analyze flow</button>
+              <button class="primary-button" type="submit">Check readiness</button>
             </form>
             <div id="flow-result" class="result-box rich-result" aria-live="polite"></div>
           </section>
 
-          <section>
+          <div class="studio-workflow-support-grid">
+          <section class="studio-workflow-card">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">MCQ Scoring</p>
-                <h3>Credit Engine</h3>
+                <p class="eyebrow">Practice and credit</p>
+                <h3>Record practice result</h3>
               </div>
+              <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Review" data-ai-prompt="Help me review a practice score and decide what to repair next.">Help review</button>
             </div>
+            <p class="studio-helper-copy">Save a test score so StudentOS can update weak topics, corrections, and earned study credit.</p>
             <form id="score-form" class="form-grid">
               <label>
                 Topic
@@ -445,18 +467,20 @@ Thu|19:00|English writing sprint|English</textarea>
                 Score
                 <input name="scorePercent" type="number" min="0" max="100" value="82" required>
               </label>
-              <button class="primary-button" type="submit">Record score</button>
+              <button class="primary-button" type="submit">Save test score</button>
             </form>
             <div id="score-result" class="result-box rich-result" aria-live="polite"></div>
           </section>
 
-          <section>
+          <section class="studio-workflow-card">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">Extension Draft</p>
-                <h3>Decision Support</h3>
+                <p class="eyebrow">Need more time?</p>
+                <h3>Draft an extension request</h3>
               </div>
+              <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Make" data-ai-prompt="Help me draft a respectful extension request. Keep it honest, concise, and student-safe.">Help draft</button>
             </div>
+            <p class="studio-helper-copy">Create a draft only. StudentOS does not contact your teacher or submit anything for you.</p>
             <form id="extension-form" class="form-grid">
               <label>
                 Assignment
@@ -470,14 +494,16 @@ Thu|19:00|English writing sprint|English</textarea>
             </form>
             <div id="extension-result" class="result-box" aria-live="polite"></div>
           </section>
+          </div>
 
-          <section class="studio-wide">
+          <section class="studio-lesson-panel studio-wide">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">Tutor Lesson</p>
-                <h3>Corrections And Source-Grounded Repair</h3>
+                <p class="eyebrow">Repair lesson</p>
+                <h3>What to study after the workflow</h3>
               </div>
             </div>
+            <p class="studio-helper-copy">When a workflow produces corrections or a lesson, it appears here so you can return to it without leaving Studio.</p>
             <div id="lesson-result" class="result-box rich-result"></div>
           </section>
         </div>
@@ -489,7 +515,7 @@ Thu|19:00|English writing sprint|English</textarea>
             <div class="section-heading">
               <div>
                 <p class="eyebrow">Profile / Identity</p>
-                <h3>Account Settings</h3>
+                <h3>Your StudentOS profile</h3>
               </div>
             </div>
             <div id="account-summary" class="account-summary"></div>
@@ -523,7 +549,7 @@ Thu|19:00|English writing sprint|English</textarea>
             <div class="section-heading">
               <div>
                 <p class="eyebrow">Plan and usage</p>
-                <h3>Current Plan</h3>
+                <h3>Current plan</h3>
               </div>
               <div class="heading-actions">
                 <button class="text-button" type="button" id="manage-billing-btn">Manage</button>
@@ -549,7 +575,7 @@ Thu|19:00|English writing sprint|English</textarea>
             <div class="section-heading">
               <div>
                 <p class="eyebrow">Privacy and consent</p>
-                <h3>Control How StudentOS Uses Your Data</h3>
+                <h3>Control how StudentOS uses your data</h3>
               </div>
             </div>
             <div class="privacy-grid">
@@ -572,15 +598,15 @@ Thu|19:00|English writing sprint|English</textarea>
                   </label>
                   <label class="check-row">
                     <input name="productResearch" type="checkbox">
-                    <span>Allow de-identified product quality review.</span>
+                    <span>Allow de-identified quality review to improve StudentOS.</span>
                   </label>
                   <label class="check-row">
                     <input name="externalProgressSharing" type="checkbox">
-                    <span>Share progress outside my account.</span>
+                    <span>Allow progress sharing outside my account only after I approve it.</span>
                   </label>
                   <label class="check-row">
                     <input name="guardianSharingFuture" type="checkbox">
-                    <span>Prepare guardian or mentor sharing for a future consent flow.</span>
+                    <span>Prepare family or mentor sharing for a future consent flow.</span>
                   </label>
                   <div class="account-actions-grid">
                     <button class="secondary-button" type="submit">Save preferences</button>
@@ -596,10 +622,10 @@ Thu|19:00|English writing sprint|English</textarea>
             <div class="section-heading">
               <div>
                 <p class="eyebrow">Data export and deletion</p>
-                <h3>Your Data Rights</h3>
+                <h3>Your data rights</h3>
               </div>
             </div>
-            <p class="muted-copy">Exports are packaged privately and downloaded through your signed-in StudentOS session. Deletion requests always enter a grace-period review; dry runs do not delete data.</p>
+            <p class="muted-copy">Exports are packaged privately and downloaded through your signed-in StudentOS session. Deletion requests always enter a grace-period review; previews do not delete data.</p>
             <div class="account-actions-grid">
               <button id="export-request-btn" class="secondary-button" type="button">Request data export</button>
               <button id="deletion-request-btn" class="secondary-button danger-action" type="button">Request account deletion</button>
@@ -612,12 +638,12 @@ Thu|19:00|English writing sprint|English</textarea>
             <div class="section-heading">
               <div>
                 <p class="eyebrow">Family and institution access</p>
-                <h3>Guardian Access Groundwork</h3>
+                <h3>Access sharing</h3>
               </div>
               <span class="brain-badge">Off until you consent</span>
             </div>
             <p class="muted-copy">Guardian, teacher, and institution access remains inactive. Any future invitation requires an explicit student consent flow.</p>
-            <button id="guardian-preview-btn" class="secondary-button" type="button">Preview guardian groundwork</button>
+            <button id="guardian-preview-btn" class="secondary-button" type="button">Preview sharing safeguards</button>
             <div id="invitation-result" class="result-box" aria-live="polite"></div>
           </section>
         </div>
