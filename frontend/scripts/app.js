@@ -380,6 +380,42 @@ function getNextTimetableBlock() {
   return sortedByDate(state.timetable || [], (item) => item.startsAt)[0] || null;
 }
 
+function getCourseTopics(courseId) {
+  return (state.topics || []).filter((topic) => topic.courseId === courseId);
+}
+
+function getCourseAssignments(courseId) {
+  return sortedByDate((state.assignments || []).filter((assignment) => assignment.courseId === courseId), (assignment) => assignment.dueDate);
+}
+
+function getCourseSources(courseId) {
+  return (state.sourceMaterials || []).filter((source) => source.courseId === courseId && !source.deletedAt);
+}
+
+function getCourseRoadmap(courseId) {
+  return sortedByDate((state.roadmap || []).filter((item) => item.courseId === courseId && item.status === "open"), (item) => item.dueAt);
+}
+
+function sourceIsIndexed(source) {
+  return source.status === "indexed" || source.embeddingStatus === "embedded" || Number(source.chunkCount || 0) > 0;
+}
+
+function courseNextAction(course, assignments, roadmap) {
+  const todayAction = getNextActions().find((item) => item.courseId === course.id);
+  return todayAction || roadmap[0] || assignments[0] || null;
+}
+
+function buildCourseAiPrompt(course, weakTopics, assignments, sources, nextAction) {
+  const parts = [
+    `Course workspace: ${course.title}.`,
+    weakTopics.length ? `Weak topics: ${weakTopics.map((topic) => topic.title).join(", ")}.` : "No weak topics listed.",
+    assignments.length ? `Due work: ${assignments.slice(0, 2).map((assignment) => assignment.title).join(", ")}.` : "No due work listed.",
+    sources.length ? `Sources available: ${sources.map((source) => source.title).slice(0, 2).join(", ")}.` : "No sources uploaded yet.",
+    nextAction ? `Next action: ${nextAction.title}.` : "Choose the safest next action.",
+  ];
+  return `Help me focus this course. ${parts.join(" ")} Keep the answer practical and grounded in StudentOS data.`;
+}
+
 function buildTodayPlanPrompt(nextAction, dueAssignment, nextBlock) {
   const parts = [
     nextAction ? `Start with ${nextAction.title}.` : "Choose my first study block.",
@@ -659,17 +695,27 @@ function classroomStatusCard() {
   const safeErrorCode = connector.lastErrorCode || history.find((run) => run.payload?.errorCode)?.payload?.errorCode || "";
   const emptyClassroom = summary?.emptyClassroom || history.some((run) => run.payload?.emptyClassroom);
   return `
-    <article class="course-card classroom-import-card" data-color="sky">
-      <div>
-        <strong>Google Classroom import</strong>
-        <p>${providerEmail ? `Connected as ${escapeHtml(providerEmail)}` : "Read-only Classroom connector"}</p>
-      </div>
+    <article class="course-card course-workspace-card classroom-import-card" data-color="sky">
+      <header class="course-card-head">
+        <div>
+          <span class="workspace-label">Connector workspace</span>
+          <strong>Google Classroom import</strong>
+          <p>${providerEmail ? `Connected as ${escapeHtml(providerEmail)}` : "Read-only Classroom connector"}</p>
+        </div>
+      </header>
       <div class="tag-row">
         ${tag(humanize(connector.state || connector.mode || "disconnected"), ["expired", "error"].includes(connector.state) ? "urgent" : "source")}
         ${tag(`${classroomCourses} course(s)`, "source")}
         ${tag(`${classroomAssignments} assignment(s)`, "source")}
+        ${tag(connector.readOnlyImport === false ? "not ready" : "read only", "source")}
+        ${tag(connector.writeScopesEnabled ? "write scope risk" : "no write scopes", connector.writeScopesEnabled ? "urgent" : "source")}
         ${lastSync ? tag(`synced ${formatDate(lastSync)}`, "source") : tag("manual sync", "medium")}
         ${tag("no writeback", "urgent")}
+      </div>
+      <div class="course-signal-grid">
+        <span><strong>${classroomCourses}</strong> imported courses</span>
+        <span><strong>${classroomAssignments}</strong> imported assignments</span>
+        <span><strong>${lastSync ? formatDate(lastSync) : "Manual"}</strong> sync</span>
       </div>
       ${emptyClassroom ? `<p class="muted-copy">No active Classroom courses or coursework were found yet.</p>` : ""}
       ${safeError ? `<p class="warning-copy">${escapeHtml(safeErrorCode ? `${humanize(safeErrorCode)}: ${safeError}` : safeError)}</p>` : ""}
@@ -719,33 +765,78 @@ function renderAssignments() {
 
 function renderCourses() {
   const courseCards = state.courses.map((course) => {
-    const topics = state.topics.filter((topic) => topic.courseId === course.id);
-    const assignments = state.assignments.filter((assignment) => assignment.courseId === course.id);
+    const topics = getCourseTopics(course.id);
+    const assignments = getCourseAssignments(course.id);
+    const sources = getCourseSources(course.id);
+    const roadmap = getCourseRoadmap(course.id);
+    const weakTopics = topics.filter((topic) => (topic.weakSignals || []).length || topic.mastery === "revision_required" || topic.mastery === "not_started");
     const classroomAssignments = assignments.filter((assignment) => assignment.source === "google_classroom");
     const secureCount = topics.filter((topic) => ["secure", "strong"].includes(topic.mastery)).length;
+    const revisionCount = topics.filter((topic) => ["revision_required", "not_started"].includes(topic.mastery)).length;
     const progress = topics.length ? Math.round((secureCount / topics.length) * 100) : 0;
+    const indexedSources = sources.filter(sourceIsIndexed);
+    const nextAction = courseNextAction(course, assignments, roadmap);
+    const nextActionLabel = nextAction?.dueAt || nextAction?.dueDate ? formatDate(nextAction.dueAt || nextAction.dueDate) : "Open";
     const isClassroom = course.source === "google_classroom";
+    const prompt = buildCourseAiPrompt(course, weakTopics, assignments, sources, nextAction);
     return `
-      <article class="course-card" data-color="${escapeHtml(course.color || "mint")}">
-        <div>
-          <strong>${escapeHtml(course.title)}</strong>
-          <p>${escapeHtml(course.teacher)} / exam ${formatDate(course.examDate)}</p>
+      <article class="course-card course-workspace-card" data-color="${escapeHtml(course.color || "mint")}">
+        <header class="course-card-head">
+          <div>
+            <span class="workspace-label">Workspace preview</span>
+            <strong>${escapeHtml(course.title)}</strong>
+            <p>${escapeHtml(course.teacher || "Teacher")} / exam ${formatDate(course.examDate)}</p>
+          </div>
+          <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}">Ask about course</button>
+        </header>
+
+        <div class="course-progress-row">
+          <div class="progress-track" aria-label="Mastery progress">
+            <div class="progress-fill" style="width:${progress}%"></div>
+          </div>
+          <span>${progress}% secure</span>
         </div>
-        <div class="progress-track" aria-label="Mastery progress">
-          <div class="progress-fill" style="width:${progress}%"></div>
+
+        <div class="course-signal-grid">
+          <span><strong>${weakTopics.length}</strong> weak topics</span>
+          <span><strong>${assignments.length}</strong> due items</span>
+          <span><strong>${indexedSources.length}/${sources.length}</strong> sources</span>
+          <span><strong>${roadmap.length}</strong> open actions</span>
         </div>
+
         <div class="tag-row">
           ${isClassroom ? tag("Google Classroom", "source") : ""}
           ${course.readOnly ? tag("read only", "source") : ""}
+          ${isClassroom || course.readOnly ? tag("no writeback", "urgent") : ""}
           ${classroomAssignments.length ? tag(`${classroomAssignments.length} imported assignment(s)`, "medium") : ""}
-          ${topics.map((topic) => tag(`${topic.title}: ${humanize(topic.mastery)}`, topic.mastery === "revision_required" ? "urgent" : "")).join("")}
+          ${revisionCount ? tag(`${revisionCount} revision focus`, "medium") : tag("revision steady", "source")}
+        </div>
+
+        <div class="course-workspace-sections">
+          <div>
+            <span>Weak topics</span>
+            <p>${escapeHtml(weakTopics.map((topic) => topic.title).slice(0, 3).join(" / ") || "No weak topics listed")}</p>
+          </div>
+          <div>
+            <span>Due work</span>
+            <p>${escapeHtml(assignments.slice(0, 2).map((assignment) => `${assignment.title} (${formatDate(assignment.dueDate)})`).join(" / ") || "No due work listed")}</p>
+          </div>
+          <div>
+            <span>Source coverage</span>
+            <p>${escapeHtml(sources.slice(0, 2).map((source) => source.title).join(" / ") || "Upload course material in Memory")}</p>
+          </div>
+          <div>
+            <span>Next action</span>
+            <p>${escapeHtml(nextAction ? `${nextAction.title} / ${nextActionLabel}` : "Generate or sync work to create a next action")}</p>
+          </div>
         </div>
         ${isClassroom && !classroomAssignments.length ? `<p class="muted-copy">Classroom course imported. Sync again when coursework is published.</p>` : ""}
       </article>
     `;
   }).join("");
   const empty = state.courses.length ? "" : `
-    <article class="course-card" data-color="sky">
+    <article class="course-card course-workspace-card" data-color="sky">
+      <span class="workspace-label">Workspace preview</span>
       <strong>No courses yet</strong>
       <p>Use Setup or sync Google Classroom to create your StudentOS course map.</p>
       <div class="tag-row">

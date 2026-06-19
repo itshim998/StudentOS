@@ -132,6 +132,9 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   }
 
   await clickNav(page, "Setup");
+  await expect(page.locator("#onboarding-form")).toContainText("Identity");
+  await expect(page.locator("#onboarding-form")).toContainText("Academic structure");
+  await expect(page.locator("#onboarding-form")).toContainText("Study rhythm");
   await page.locator("#onboarding-form input[name='displayName']").fill("E2E Student");
   await page.locator("#onboarding-form input[name='stream']").fill("Science");
   await page.locator("#onboarding-form textarea[name='subjectsText']").fill("Mathematics|2026-07-01|Quadratics, Trigonometry\nPhysics|2026-07-04|Motion graphs");
@@ -140,6 +143,15 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await page.getByRole("button", { name: "Generate roadmap" }).click();
   await expect(page.locator("#onboarding-result")).toContainText("course roadmap generated");
   await expect(page.locator("#view-title")).toHaveText("Today");
+
+  await clickNav(page, "Courses");
+  await expect(page.locator("#courses-grid")).toContainText("Workspace preview");
+  await expect(page.locator("#courses-grid")).toContainText("Source coverage");
+  await expect(page.locator("#courses-grid")).toContainText("Next action");
+  await page.locator("#courses-grid").getByRole("button", { name: "Ask about course" }).first().click();
+  await expect(page.locator("#ai-panel")).toBeVisible();
+  await expect(page.locator("#ai-message")).toHaveValue(/Course workspace/i);
+  await closeAiDrawer(page);
 
   await clickNav(page, "Memory");
   await page.locator("#source-form input[name='title']").fill("E2E quadratics note");

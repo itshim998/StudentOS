@@ -712,9 +712,20 @@ button {
 
 .wide { width: 100%; }
 
+.courses-shell {
+  display: grid;
+  gap: 14px;
+}
+
+.surface-intro {
+  max-width: 780px;
+  margin: -4px 0 4px;
+  color: var(--muted);
+}
+
 .courses-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: 16px;
 }
 
@@ -729,6 +740,98 @@ button {
 .course-card[data-color="amber"] { border-top-color: var(--amber); }
 .course-card[data-color="violet"] { border-top-color: var(--violet); }
 .course-card[data-color="sky"] { border-top-color: var(--sky); }
+
+.course-workspace-card {
+  min-width: 0;
+  gap: 14px;
+}
+
+.classroom-import-card {
+  grid-column: 1 / -1;
+}
+
+.course-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.course-card-head > div {
+  min-width: 0;
+}
+
+.course-card-head .mini-action {
+  flex: 0 0 auto;
+}
+
+.workspace-label {
+  display: inline-flex;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: var(--font-size-meta);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.course-progress-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.course-progress-row span {
+  color: var(--muted);
+  font-size: var(--font-size-small);
+  font-weight: 800;
+}
+
+.course-signal-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.course-signal-grid span {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 8px;
+  color: var(--muted);
+  font-size: var(--font-size-small);
+  overflow-wrap: anywhere;
+}
+
+.course-signal-grid strong {
+  display: block;
+  margin: 0 0 2px;
+  color: var(--ink);
+}
+
+.course-workspace-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.course-workspace-sections > div {
+  min-width: 0;
+}
+
+.course-workspace-sections span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: var(--font-size-meta);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.course-workspace-sections p {
+  overflow-wrap: anywhere;
+}
 
 .progress-track {
   height: 8px;
@@ -752,7 +855,48 @@ button {
 }
 
 .setup-layout {
-  grid-template-columns: minmax(0, 860px);
+  grid-template-columns: minmax(240px, 0.38fr) minmax(0, 1fr);
+  align-items: start;
+}
+
+.setup-intro-panel {
+  position: sticky;
+  top: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px;
+  display: grid;
+  gap: 12px;
+}
+
+.setup-intro-panel h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.setup-intro-panel p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.setup-step-list {
+  display: grid;
+  gap: 7px;
+}
+
+.setup-step-list span {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  padding: 4px 9px;
+  color: var(--ink);
+  font-size: var(--font-size-small);
+  font-weight: 800;
 }
 
 .onboarding-panel {
@@ -763,7 +907,53 @@ button {
 }
 
 .onboarding-form {
-  max-width: 820px;
+  max-width: none;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.setup-section {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fbfdfb;
+  padding: 14px;
+}
+
+.setup-section-wide,
+.setup-submit-row {
+  grid-column: 1 / -1;
+}
+
+.setup-section legend {
+  padding: 0 6px;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.setup-section p,
+.setup-submit-row p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-small);
+}
+
+.setup-submit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 14px;
+}
+
+.setup-submit-row > div {
+  min-width: 0;
 }
 
 .form-row {
@@ -1038,6 +1228,15 @@ textarea:focus {
   .app-shell {
     grid-template-columns: 220px minmax(0, 1fr);
   }
+  .setup-layout {
+    grid-template-columns: 1fr;
+  }
+  .setup-intro-panel {
+    position: static;
+  }
+  .setup-step-list {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
   .dashboard-summary.today-brief,
   .today-grid {
     grid-template-columns: 1fr;
@@ -1092,6 +1291,22 @@ textarea:focus {
   }
   .classroom-compact-head {
     display: grid;
+  }
+  .onboarding-form,
+  .course-workspace-sections {
+    grid-template-columns: 1fr;
+  }
+  .setup-step-list,
+  .course-signal-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .setup-submit-row,
+  .course-card-head {
+    display: grid;
+  }
+  .course-card-head .mini-action,
+  .setup-submit-row .primary-button {
+    justify-self: start;
   }
   .ai-panel {
     inset: auto 12px 12px;
@@ -1201,6 +1416,10 @@ textarea:focus {
   .brand-lockup { width: 100%; }
   .profile-strip { justify-content: flex-start; }
   .topbar h2 { font-size: 1.55rem; }
+  .setup-step-list,
+  .course-signal-grid {
+    grid-template-columns: 1fr;
+  }
   .verb-tabs { grid-template-columns: repeat(2, 1fr); }
 }
 
@@ -1340,6 +1559,7 @@ body {
 .focus-board,
 .agenda-board,
 .assignment-board,
+.setup-intro-panel,
 .onboarding-panel,
 .memory-layout > section,
 .studio-layout > section,
@@ -1444,6 +1664,34 @@ body {
 .roadmap-secondary,
 .timetable-card {
   background: rgba(220, 236, 228, 0.035);
+}
+
+.setup-intro-panel,
+.setup-section,
+.setup-submit-row,
+.course-signal-grid span {
+  background: rgba(220, 236, 228, 0.035);
+  border-color: rgba(220, 236, 228, 0.08);
+  box-shadow: none;
+}
+
+.setup-step-list span {
+  background: rgba(220, 236, 228, 0.05);
+  border-color: rgba(220, 236, 228, 0.09);
+  color: #dfeee8;
+}
+
+.setup-section legend,
+.setup-submit-row strong,
+.course-signal-grid strong {
+  color: #ffffff;
+}
+
+.surface-intro,
+.workspace-label,
+.course-workspace-sections span,
+.course-progress-row span {
+  color: #8fb1a5;
 }
 
 .classroom-details {
