@@ -92,6 +92,7 @@ const els = {
   invitationResult: document.getElementById("invitation-result"),
   upgradeBtn: document.getElementById("upgrade-btn"),
   manageBillingBtn: document.getElementById("manage-billing-btn"),
+  pricingSection: document.getElementById("pricing"),
   pricingPanel: document.getElementById("pricing-panel"),
   aiLauncher: document.getElementById("ai-launcher"),
   aiPanel: document.getElementById("ai-panel"),
@@ -161,12 +162,25 @@ function setAuthShellMode(mode = "signin") {
   els.signupBtn?.classList.remove("primary-button");
 }
 
+function focusPricingSection() {
+  if (!els.pricingSection || authGateActive()) return;
+  window.requestAnimationFrame(() => {
+    els.pricingSection.scrollIntoView({ block: "start" });
+    els.pricingSection.focus({ preventScroll: true });
+  });
+}
+
 function syncAuthHash() {
   const hash = window.location.hash.toLowerCase();
   if (hash === "#signup") {
     setAuthShellMode("signup");
   } else if (hash === "#login" || hash === "#app") {
     setAuthShellMode("signin");
+  } else if (hash === "#pricing") {
+    if (!authGateActive()) {
+      setView("account");
+      focusPricingSection();
+    }
   }
   updateShellVisibility();
 }
@@ -354,6 +368,7 @@ async function signInWithPassword(event) {
     history.replaceState(null, "", "#app");
   }
   await loadBootstrap();
+  syncAuthHash();
 }
 
 async function signUpWithPassword() {
@@ -368,6 +383,7 @@ async function signUpWithPassword() {
       history.replaceState(null, "", "#app");
     }
     await loadBootstrap();
+    syncAuthHash();
   }
   renderAuth(session.access_token ? "" : "Check your email to verify this StudentOS account.");
 }
@@ -401,8 +417,8 @@ async function requestPasswordReset(email, target = els.passwordResetResult) {
     <p>${escapeHtml(result.message)}</p>
     <div class="tag-row">
       ${tag(humanize(result.mode), "source")}
-      ${tag(result.resetEmailRequested ? "reset email requested" : "scaffold", result.resetEmailRequested ? "source" : "medium")}
-      ${tag("no secrets exposed", "source")}
+      ${tag(result.resetEmailRequested ? "reset email requested" : "preview ready", result.resetEmailRequested ? "source" : "medium")}
+      ${tag("secure request", "source")}
     </div>
   `;
 }
@@ -423,7 +439,7 @@ async function requestVerificationResend(email) {
     <p>${escapeHtml(result.message)}</p>
     <div class="tag-row">
       ${tag(humanize(result.mode), "source")}
-      ${tag(result.verificationEmailRequested ? "verification email requested" : "scaffold", result.verificationEmailRequested ? "source" : "medium")}
+      ${tag(result.verificationEmailRequested ? "verification email requested" : "preview ready", result.verificationEmailRequested ? "source" : "medium")}
     </div>
   `;
 }
@@ -1156,6 +1172,35 @@ function quotaPercent(used, total) {
   return Math.max(0, Math.min(100, Math.round((Number(used || 0) / limit) * 100)));
 }
 
+function accountAuthLabel(mode) {
+  const value = String(mode || "").toLowerCase();
+  if (value === "supabase_auth") return "Signed in with StudentOS Auth";
+  if (value === "local_demo") return "Demo session";
+  return humanize(mode || "StudentOS session");
+}
+
+function accountVisibilityLabel(value) {
+  const audience = String(value || "").toLowerCase();
+  if (audience === "student_only") return "Student-only";
+  if (audience.includes("guardian")) return "Guardian access prepared";
+  if (audience.includes("institution")) return "Institution access prepared";
+  return humanize(value || "Student-only");
+}
+
+function subscriptionLabel(status) {
+  const value = String(status || "free").toLowerCase();
+  if (value === "free") return "Free plan";
+  if (value === "active") return "Active plan";
+  if (value === "past_due") return "Payment review needed";
+  return humanize(status || "Free plan");
+}
+
+function usageLimitText(value, label) {
+  const limit = Number(value || 0);
+  if (!limit) return `No ${label.toLowerCase()} limit listed`;
+  return `${limit.toLocaleString()} ${label}`;
+}
+
 function quotaBar(label, used, total, formatter = (value) => value) {
   const percent = quotaPercent(used, total);
   return `
@@ -1169,6 +1214,47 @@ function quotaBar(label, used, total, formatter = (value) => value) {
       </div>
     </div>
   `;
+}
+
+function planValueStatement(plan) {
+  const copy = {
+    free: "Start with daily planning, course context, and a private source library.",
+    pro: "More room for heavier study weeks, deeper source libraries, and advanced workflows.",
+    group: "Higher limits for study groups, mentors, or small academic teams.",
+    institution: "Institution-scale limits for schools and managed academic programs.",
+  };
+  return copy[plan.id] || "A StudentOS plan for academic planning and private materials.";
+}
+
+function planFeatureBullets(plan) {
+  const quotas = plan.quotas || {};
+  const bullets = [
+    `${usageLimitText(quotas.aiRequestsPerDay, "AI requests per day")}`,
+    `${usageLimitText(quotas.maxSources, "sources in your library")}`,
+    `${usageLimitText(quotas.maxCourses, "courses")}`,
+    `${formatBytes(quotas.storageBytes || 0)} private storage`,
+  ];
+  if (plan.features?.advancedAutomation) bullets.push("Advanced assignment and revision workflows");
+  else bullets.push("Core planning, review, and study workflows");
+  if (plan.features?.groupSpaces) bullets.push("Group workspace eligibility");
+  if (plan.features?.parentTeacherViews) bullets.push("Family and institution access groundwork");
+  return bullets.slice(0, 6);
+}
+
+function billingPreviewCopy(result, action = "checkout") {
+  if (result?.redirectAllowed) {
+    return result.message || "A payment preview is ready. No payment is completed from StudentOS until checkout is active.";
+  }
+  return action === "manage"
+    ? "Payments are not active yet, so no billing portal was opened."
+    : "Payments are not active yet, so no checkout was opened.";
+}
+
+function billingStatusLabel(status) {
+  const value = String(status || "").toLowerCase();
+  if (value === "scaffold_only" || value === "not_required") return "Preview only";
+  if (value === "provider_configuration_ready") return "Payment setup preview";
+  return humanize(status || "Preview ready");
 }
 
 function localAccountSnapshot() {
@@ -1262,35 +1348,36 @@ function renderAccount() {
       <span class="avatar large-avatar" aria-hidden="true">${escapeHtml((account.profile?.displayName || "S").slice(0, 1).toUpperCase())}</span>
       <div>
         <strong>${escapeHtml(account.profile?.displayName || "Student")}</strong>
-        <p>${escapeHtml(account.user?.email || "No email session")} / ${escapeHtml(humanize(account.user?.authMode || "local_demo"))}</p>
+        <p>${escapeHtml(account.user?.email || "No email session")} / ${escapeHtml(accountAuthLabel(account.user?.authMode || "local_demo"))}</p>
       </div>
     </div>
-    <div class="tag-row">
-      ${tag(plan.label || "Free", "source")}
-      ${tag(account.user?.emailVerified ? "email verified" : "verification ready", account.user?.emailVerified ? "source" : "medium")}
-      ${tag(humanize(account.profile?.role || "student"), "source")}
-      ${tag(humanize(account.profile?.visibility?.defaultAudience || "student_only"), "source")}
-      ${tag(`subscription ${humanize(quota.subscription?.status || "free")}`, quota.subscription?.status === "past_due" ? "medium" : "source")}
-      ${quota.subscription?.renewalAt ? tag(`renews ${formatDate(quota.subscription.renewalAt)}`, "source") : ""}
+    <div class="account-summary-list">
+      <span><strong>${escapeHtml(plan.label || "Free")}</strong> current plan</span>
+      <span><strong>${escapeHtml(account.user?.emailVerified ? "Verified" : "Verification ready")}</strong> email status</span>
+      <span><strong>${escapeHtml(accountVisibilityLabel(account.profile?.visibility?.defaultAudience || "student_only"))}</strong> visibility</span>
+      <span><strong>${escapeHtml(subscriptionLabel(quota.subscription?.status))}</strong>${quota.subscription?.renewalAt ? ` renews ${escapeHtml(formatDate(quota.subscription.renewalAt))}` : ""}</span>
     </div>
     <p>Progress visibility is student-only by default. Future parent, teacher, and institution views require explicit consent and clear permissions.</p>
   `;
   els.quotaPanel.innerHTML = `
-    <div class="plan-card">
-      <strong>${escapeHtml(plan.label || "Free")} plan</strong>
-      <p>${quota.enforcementEnabled ? "Quota enforcement is active." : "Quota enforcement is configured but relaxed for this environment."}</p>
-      <div class="tag-row">
-        ${plan.features?.essentialLearning ? tag("essential learning included", "source") : ""}
-        ${plan.features?.advancedAutomation ? tag("advanced automation", "source") : tag("automation limited", "medium")}
-        ${plan.features?.groupSpaces ? tag("group spaces", "source") : ""}
-        ${tag(billing.liveChargesEnabled ? "launch review required" : "payments inactive", "medium")}
+    <div class="plan-card account-current-plan-card">
+      <div>
+        <span class="workspace-label">Current plan</span>
+        <strong>${escapeHtml(plan.label || "Free")}</strong>
+        <p>${quota.enforcementEnabled ? "Plan limits are active for this account." : "Limits are visible here, but relaxed for this preview."}</p>
+      </div>
+      <div class="account-plan-state">
+        <span>${billing.liveChargesEnabled ? "Payment launch review required" : "Payments are not active yet"}</span>
+        <p>${plan.features?.advancedAutomation ? "Advanced workflows are eligible on this plan." : "Core study workflows are available."}</p>
       </div>
     </div>
-    ${quotaBar("AI requests", usage.aiRequestsToday, limits.aiRequestsPerDay || 0)}
-    ${quotaBar("Sources", usage.sourceCount, limits.maxSources || 0)}
-    ${quotaBar("Courses", usage.courses, limits.maxCourses || 0)}
-    ${quotaBar("Background work", usage.workerJobsToday, limits.workerJobsPerDay || 0)}
-    ${quotaBar("Storage", usage.storageBytes, limits.storageBytes || 0, formatBytes)}
+    <div class="account-usage-list">
+      ${quotaBar("AI requests", usage.aiRequestsToday, limits.aiRequestsPerDay || 0)}
+      ${quotaBar("Sources", usage.sourceCount, limits.maxSources || 0)}
+      ${quotaBar("Courses", usage.courses, limits.maxCourses || 0)}
+      ${quotaBar("Background work", usage.workerJobsToday, limits.workerJobsPerDay || 0)}
+      ${quotaBar("Storage", usage.storageBytes, limits.storageBytes || 0, formatBytes)}
+    </div>
   `;
   renderLifecycle(account.lifecycle || {});
   renderPricing(plan.id);
@@ -1304,10 +1391,10 @@ function renderLifecycle(lifecycle = {}) {
   const invitations = lifecycle.roleInvitations || [];
   if (els.legalStatus) {
     els.legalStatus.innerHTML = `
-      <div class="tag-row">
-        ${tag(legal.privacyVersion || "privacy version pending", "source")}
-        ${tag(legal.termsVersion || "terms version pending", "source")}
-        ${tag(legal.accepted ? "accepted" : "acceptance needed", legal.accepted ? "source" : "medium")}
+      <div class="account-status-list">
+        <span><strong>${escapeHtml(legal.accepted ? "Accepted" : "Review needed")}</strong> current notice</span>
+        <span>Privacy: ${escapeHtml(legal.privacyVersion || "pending")}</span>
+        <span>Terms: ${escapeHtml(legal.termsVersion || "pending")}</span>
       </div>
     `;
   }
@@ -1327,8 +1414,8 @@ function renderLifecycle(lifecycle = {}) {
         ${latestDeletion ? `<button class="mini-action danger-action" type="button" data-deletion-dry-run-id="${escapeHtml(latestDeletion.id)}">Preview deletion dry run</button>` : ""}
       </article>
       <article class="lifecycle-item">
-        <strong>Future roles</strong>
-        <p>${invitations.length ? `${invitations.length} preview record(s), still disabled by default.` : "Guardian, teacher, and institution roles are inactive."}</p>
+        <strong>Family access</strong>
+        <p>${invitations.length ? `${invitations.length} preview record(s), still off until you consent.` : "Guardian, teacher, and institution access is inactive."}</p>
       </article>
     `;
   }
@@ -1337,19 +1424,31 @@ function renderLifecycle(lifecycle = {}) {
 function renderPricing(activePlanId = "free") {
   if (!els.pricingPanel) return;
   const plans = runtimeConfig.billing?.plans || runtimeConfig.saas?.billing?.plans || [];
+  if (!plans.length) {
+    els.pricingPanel.innerHTML = `
+      <article class="pricing-card pricing-empty-card">
+        <strong>Plans unavailable</strong>
+        <p>StudentOS could not load plan previews yet. Your current account settings remain available.</p>
+      </article>
+    `;
+    return;
+  }
   els.pricingPanel.innerHTML = plans.map((plan) => `
     <article class="pricing-card ${plan.id === activePlanId ? "active" : ""}">
-      <div>
+      <div class="pricing-card-head">
+        <span>${plan.id === activePlanId ? "Current plan" : "Plan preview"}</span>
         <strong>${escapeHtml(plan.label)}</strong>
-        <p>${escapeHtml(plan.features.advancedAutomation ? "Higher limits with advanced convenience workflows." : "Essential StudentOS learning tools with safe starter limits.")}</p>
+        <p>${escapeHtml(planValueStatement(plan))}</p>
       </div>
-      <div class="tag-row">
-        ${tag(`${plan.quotas.aiRequestsPerDay} AI/day`, "source")}
-        ${tag(`${plan.quotas.maxSources} sources`, "source")}
-        ${tag(formatBytes(plan.quotas.storageBytes), "source")}
-        ${plan.features.groupSpaces ? tag("group spaces", "source") : ""}
+      <div class="pricing-limit-list" aria-label="${escapeHtml(plan.label)} usage limits">
+        <span><strong>${escapeHtml((plan.quotas.aiRequestsPerDay || 0).toLocaleString())}</strong> AI requests/day</span>
+        <span><strong>${escapeHtml((plan.quotas.maxSources || 0).toLocaleString())}</strong> sources</span>
+        <span><strong>${escapeHtml(formatBytes(plan.quotas.storageBytes || 0))}</strong> storage</span>
       </div>
-      <button class="${plan.id === activePlanId ? "secondary-button" : "primary-button"} wide" type="button" data-plan-preview="${escapeHtml(plan.id)}">
+      <ul class="pricing-feature-list">
+        ${planFeatureBullets(plan).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+      <button class="${plan.id === activePlanId ? "secondary-button" : "primary-button"} wide pricing-cta" type="button" data-plan-preview="${escapeHtml(plan.id)}">
         ${plan.id === activePlanId ? "Current plan" : `Preview ${escapeHtml(plan.label)}`}
       </button>
     </article>
@@ -1834,7 +1933,7 @@ async function requestConsentWithdrawal() {
   els.consentResult.innerHTML = `
     <strong>Withdrawal request recorded</strong>
     <p>${escapeHtml(humanize(result.request.consentKey))} / ${escapeHtml(humanize(result.request.status))}</p>
-    <div class="tag-row">${tag("review scaffold", "medium")}${tag("no external action", "source")}</div>
+    <div class="tag-row">${tag("review request", "medium")}${tag("no sharing change yet", "source")}</div>
   `;
   renderAccount();
 }
@@ -1850,7 +1949,7 @@ async function requestDataExport() {
     els.accountActionResult.innerHTML = `
       <strong>Export request created</strong>
       <p>${escapeHtml(result.request.id)} / ${escapeHtml(humanize(result.request.status))}</p>
-      <div class="tag-row">${tag("queued for private packaging", "medium")}${tag("handled privately", "source")}</div>
+      <div class="tag-row">${tag("private export queued", "medium")}${tag("handled privately", "source")}</div>
     `;
     renderAccount();
   } catch (error) {
@@ -1920,12 +2019,12 @@ async function requestDeletionDryRun(requestId) {
       : "Affected counts match the previous preview.";
   els.accountActionResult.innerHTML = `
     <strong>Deletion dry run ready</strong>
-    <p>No rows or files were deleted. This preview covers ${escapeHtml(summary.databaseRows || 0)} database row(s) and ${escapeHtml(summary.storageObjects || 0)} private storage object(s). ${escapeHtml(diffCopy)}</p>
+    <p>No data was deleted. This preview covers ${escapeHtml(summary.databaseRows || 0)} account record(s) and ${escapeHtml(summary.storageObjects || 0)} private file(s). ${escapeHtml(diffCopy)}</p>
     <div class="tag-row">
       ${tag(indexedSectionsLabel(summary.sourceChunks || 0), "source")}
       ${tag(`${summary.memoryItems || 0} memory items`, "source")}
-      ${tag(`${summary.embeddingMetadata || 0} embeddings`, "source")}
-      ${tag(`${summary.backgroundJobs || 0} jobs`, "source")}
+      ${tag(`${summary.embeddingMetadata || 0} learning index entries`, "source")}
+      ${tag(`${summary.backgroundJobs || 0} background work item(s)`, "source")}
       ${tag("destructive actions disabled", "urgent")}
     </div>
   `;
@@ -1956,11 +2055,11 @@ async function previewPlanUpgrade(planId = "pro") {
     body: JSON.stringify({ planId }),
   });
   els.accountActionResult.innerHTML = `
-    <strong>${escapeHtml(humanize(result.status))}</strong>
-    <p>${escapeHtml(result.message)}</p>
+    <strong>${escapeHtml(billingStatusLabel(result.status))}</strong>
+    <p>${escapeHtml(billingPreviewCopy(result))}</p>
     <div class="tag-row">
       ${tag(humanize(result.planId), "source")}
-      ${tag(result.redirectAllowed ? "redirect allowed" : "no payment redirect", result.redirectAllowed ? "medium" : "source")}
+      ${tag(result.redirectAllowed ? "checkout preview ready" : "no payment opened", result.redirectAllowed ? "medium" : "source")}
     </div>
   `;
 }
@@ -1972,10 +2071,10 @@ async function previewBillingManagement() {
     body: JSON.stringify({}),
   });
   els.accountActionResult.innerHTML = `
-    <strong>${escapeHtml(humanize(result.status))}</strong>
-    <p>${escapeHtml(result.message)}</p>
+    <strong>${escapeHtml(billingStatusLabel(result.status))}</strong>
+    <p>${escapeHtml(billingPreviewCopy(result, "manage"))}</p>
     <div class="tag-row">
-      ${tag(result.redirectAllowed ? "redirect allowed" : "no payment redirect", result.redirectAllowed ? "medium" : "source")}
+      ${tag(result.redirectAllowed ? "billing portal preview ready" : "no payment portal opened", result.redirectAllowed ? "medium" : "source")}
     </div>
   `;
 }

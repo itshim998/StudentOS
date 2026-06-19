@@ -2214,20 +2214,24 @@ textarea:focus-visible {
   color: #e7e0ff;
 }
 
-.account-layout {
+.account-layout,
+.account-settings-shell {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
 }
 
 .account-panel {
   border-radius: var(--radius);
-  padding: 18px;
+  padding: 20px;
   background: var(--panel-muted);
-  box-shadow: var(--shadow-soft);
+  box-shadow: none;
 }
 
-.account-wide {
+.account-wide,
+.account-pricing-section,
+.account-data-rights-panel,
+.account-roles-panel {
   grid-column: 1 / -1;
 }
 
@@ -2243,17 +2247,96 @@ textarea:focus-visible {
   font-size: 1.1rem;
 }
 
+.account-summary-list,
+.account-status-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.account-summary-list span,
+.account-status-list span,
+.account-plan-state,
+.pricing-limit-list span {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  background: rgba(220, 236, 228, 0.035);
+  color: var(--muted);
+  min-width: 0;
+}
+
+.account-summary-list strong,
+.account-status-list strong,
+.pricing-limit-list strong {
+  display: block;
+  color: var(--ink);
+  font-size: 0.98rem;
+}
+
+.account-security-grid,
+.privacy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.account-mini-section {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 14px;
+  background: rgba(220, 236, 228, 0.025);
+}
+
+.account-mini-section h4 {
+  margin: 0 0 12px;
+  font-size: 0.95rem;
+  letter-spacing: 0;
+}
+
 .quota-panel {
   display: grid;
   gap: 12px;
 }
 
-.plan-card,
+.account-current-plan-card,
 .quota-row {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 12px;
   background: rgba(220, 236, 228, 0.035);
+}
+
+.account-current-plan-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.4fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.account-current-plan-card strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 1.25rem;
+}
+
+.account-current-plan-card p,
+.account-plan-state p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.account-plan-state span {
+  color: var(--ink);
+  font-weight: 750;
+}
+
+.account-usage-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .quota-row {
@@ -2375,32 +2458,93 @@ textarea:focus-visible {
   gap: 8px;
 }
 
+.pricing-hero {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.pricing-hero h3 {
+  margin: 0;
+  font-size: 1.45rem;
+  letter-spacing: 0;
+}
+
+.pricing-hero p {
+  max-width: 720px;
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
 .pricing-panel {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 14px;
 }
 
 .pricing-card {
   display: grid;
   align-content: start;
-  gap: 12px;
-  min-height: 220px;
-  padding: 14px;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 16px;
+  min-height: 360px;
+  padding: 18px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: rgba(220, 236, 228, 0.035);
+  background: rgba(220, 236, 228, 0.025);
 }
 
 .pricing-card.active {
   border-color: rgba(88, 195, 155, 0.34);
+  background: rgba(88, 195, 155, 0.055);
   box-shadow: inset 0 0 0 1px rgba(88, 195, 155, 0.12);
 }
 
-.pricing-card p {
+.pricing-card-head span {
+  color: #8fb1a5;
+  font-size: var(--font-size-small);
+  font-weight: 750;
+}
+
+.pricing-card-head strong {
+  display: block;
+  margin-top: 5px;
+  font-size: 1.35rem;
+  color: var(--ink);
+}
+
+.pricing-card p,
+.pricing-card-head p {
   margin: 5px 0 0;
   color: var(--muted);
   font-size: 0.84rem;
+}
+
+.pricing-limit-list {
+  display: grid;
+  gap: 8px;
+}
+
+.pricing-limit-list span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pricing-limit-list strong {
+  display: inline;
+}
+
+.pricing-feature-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+  color: #dce9e4;
+  font-size: var(--font-size-small);
 }
 
 .pricing-card button {
@@ -2408,8 +2552,14 @@ textarea:focus-visible {
 }
 
 @media (max-width: 1180px) {
-  .account-layout {
+  .account-layout,
+  .account-settings-shell {
     grid-template-columns: 1fr;
+  }
+  .account-summary-list,
+  .account-status-list,
+  .account-usage-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .pricing-panel {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2418,9 +2568,23 @@ textarea:focus-visible {
 
 @media (max-width: 860px) {
   .account-wide,
+  .account-pricing-section,
+  .account-data-rights-panel,
+  .account-roles-panel,
   .account-actions-grid {
     grid-column: auto;
     grid-template-columns: 1fr;
+  }
+  .account-current-plan-card,
+  .account-security-grid,
+  .privacy-grid,
+  .account-summary-list,
+  .account-status-list,
+  .account-usage-list {
+    grid-template-columns: 1fr;
+  }
+  .pricing-hero {
+    display: grid;
   }
   .pricing-panel {
     grid-template-columns: 1fr;

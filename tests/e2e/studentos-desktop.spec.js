@@ -209,8 +209,15 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
 
   await clickNav(page, "Account");
   await expect(page.locator("#account-summary")).toContainText(/Student|local demo/i);
+  await expect(page.locator("#view-account")).toContainText("Profile / Identity");
+  await expect(page.locator("#view-account")).toContainText("Privacy and consent");
   await expect(page.locator("#quota-panel")).toContainText(/sources|AI|storage/i);
+  await expect(page.locator("#quota-panel")).toContainText("Limits are visible here, but relaxed for this preview.");
   await expect(page.locator("#pricing-panel")).toContainText(/Free|Pro|Institution/i);
+  await expect(page.locator("#pricing")).toContainText("Payments are not active yet");
+  await page.evaluate(() => { window.location.hash = "pricing"; });
+  await expect(page.locator("#view-title")).toHaveText("Account");
+  await expect(page.locator("#pricing")).toBeVisible();
   await page.getByRole("button", { name: "Request data export" }).click();
   await expect(page.locator("#account-action-result")).toContainText("Export request created");
   await page.getByRole("button", { name: "Upgrade" }).click();

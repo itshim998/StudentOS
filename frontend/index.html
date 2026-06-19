@@ -484,23 +484,46 @@ Thu|19:00|English writing sprint|English</textarea>
       </section>
 
       <section class="view" id="view-account" aria-labelledby="view-title">
-        <div class="account-layout">
-          <section class="account-panel">
+        <div class="account-settings-shell">
+          <section class="account-panel account-identity-panel">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">Account</p>
-                <h3>StudentOS Identity</h3>
+                <p class="eyebrow">Profile / Identity</p>
+                <h3>Account Settings</h3>
               </div>
-              <span class="brain-badge">SynthetIQ ecosystem</span>
             </div>
             <div id="account-summary" class="account-summary"></div>
+            <div class="account-security-grid">
+              <div class="account-mini-section">
+                <h4>Password reset</h4>
+                <form id="account-reset-form" class="form-grid">
+                  <label>
+                    Account email
+                    <input name="email" id="account-reset-email" type="email" placeholder="student@example.com" autocomplete="email">
+                  </label>
+                  <button class="secondary-button" type="submit">Request reset link</button>
+                </form>
+                <div id="password-reset-result" class="result-box" aria-live="polite"></div>
+              </div>
+              <div class="account-mini-section">
+                <h4>Email status</h4>
+                <form id="verification-resend-form" class="form-grid">
+                  <label>
+                    Account email
+                    <input name="email" id="verification-email" type="email" placeholder="student@example.com" autocomplete="email">
+                  </label>
+                  <button class="secondary-button" type="submit">Resend verification link</button>
+                </form>
+                <div id="verification-result" class="result-box" aria-live="polite"></div>
+              </div>
+            </div>
           </section>
 
-          <section class="account-panel">
+          <section class="account-panel account-plan-panel">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">Plan</p>
-                <h3>Quota And Storage</h3>
+                <p class="eyebrow">Plan and usage</p>
+                <h3>Current Plan</h3>
               </div>
               <div class="heading-actions">
                 <button class="text-button" type="button" id="manage-billing-btn">Manage</button>
@@ -510,122 +533,88 @@ Thu|19:00|English writing sprint|English</textarea>
             <div id="quota-panel" class="quota-panel"></div>
           </section>
 
-          <section class="account-panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Recovery</p>
-                <h3>Password Reset</h3>
-              </div>
-            </div>
-            <form id="account-reset-form" class="form-grid">
-              <label>
-                Account email
-                <input name="email" id="account-reset-email" type="email" placeholder="student@example.com" autocomplete="email">
-              </label>
-              <button class="secondary-button" type="submit">Request reset link</button>
-            </form>
-            <div id="password-reset-result" class="result-box" aria-live="polite"></div>
-          </section>
-
-          <section class="account-panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Verification</p>
-                <h3>Email Status</h3>
-              </div>
-            </div>
-            <form id="verification-resend-form" class="form-grid">
-              <label>
-                Account email
-                <input name="email" id="verification-email" type="email" placeholder="student@example.com" autocomplete="email">
-              </label>
-              <button class="secondary-button" type="submit">Resend verification link</button>
-            </form>
-            <div id="verification-result" class="result-box" aria-live="polite"></div>
-          </section>
-
-          <section class="account-panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Legal</p>
-                <h3>Terms And Privacy</h3>
-              </div>
-            </div>
-            <div id="legal-status" class="lifecycle-status"></div>
-            <label class="check-row">
-              <input id="legal-accept-check" type="checkbox">
-              <span>I accept the current StudentOS terms and privacy notice.</span>
-            </label>
-            <button id="legal-accept-btn" class="secondary-button" type="button">Record acceptance</button>
-            <div id="legal-result" class="result-box" aria-live="polite"></div>
-          </section>
-
-          <section class="account-panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Consent</p>
-                <h3>Privacy Preferences</h3>
-              </div>
-            </div>
-            <form id="consent-form" class="consent-form">
-              <label class="check-row">
-                <input name="aiPersonalization" type="checkbox" checked>
-                <span>Use my StudentOS activity to personalize tutoring.</span>
-              </label>
-              <label class="check-row">
-                <input name="productResearch" type="checkbox">
-                <span>Allow de-identified product quality review.</span>
-              </label>
-              <label class="check-row">
-                <input name="externalProgressSharing" type="checkbox">
-                <span>Share progress outside my account.</span>
-              </label>
-              <label class="check-row">
-                <input name="guardianSharingFuture" type="checkbox">
-                <span>Prepare guardian or mentor sharing for a future consent flow.</span>
-              </label>
-              <div class="account-actions-grid">
-                <button class="secondary-button" type="submit">Save preferences</button>
-                <button class="text-button" type="button" id="consent-withdraw-btn">Request withdrawal</button>
-              </div>
-            </form>
-            <div id="consent-result" class="result-box" aria-live="polite"></div>
-          </section>
-
-          <section class="account-panel account-wide">
-            <div class="section-heading">
+          <section class="account-panel account-pricing-section" id="pricing" tabindex="-1" aria-label="StudentOS pricing">
+            <div class="pricing-hero">
               <div>
                 <p class="eyebrow">Pricing</p>
-                <h3>StudentOS Plans</h3>
+                <h3>Choose the StudentOS plan that fits your study system.</h3>
+                <p>Plan previews show limits and feature eligibility. Payments are not active yet, so no checkout starts from this page.</p>
               </div>
-              <span class="brain-badge">No payments active</span>
+              <span class="brain-badge">Payments are not active yet</span>
             </div>
             <div id="pricing-panel" class="pricing-panel"></div>
           </section>
 
-          <section class="account-panel account-wide">
+          <section class="account-panel account-privacy-panel">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">Data Rights</p>
-                <h3>Export And Deletion Requests</h3>
+                <p class="eyebrow">Privacy and consent</p>
+                <h3>Control How StudentOS Uses Your Data</h3>
               </div>
             </div>
+            <div class="privacy-grid">
+              <div class="account-mini-section">
+                <h4>Terms and privacy notice</h4>
+                <div id="legal-status" class="lifecycle-status"></div>
+                <label class="check-row">
+                  <input id="legal-accept-check" type="checkbox">
+                  <span>I accept the current StudentOS terms and privacy notice.</span>
+                </label>
+                <button id="legal-accept-btn" class="secondary-button" type="button">Record acceptance</button>
+                <div id="legal-result" class="result-box" aria-live="polite"></div>
+              </div>
+              <div class="account-mini-section">
+                <h4>Consent preferences</h4>
+                <form id="consent-form" class="consent-form">
+                  <label class="check-row">
+                    <input name="aiPersonalization" type="checkbox" checked>
+                    <span>Use my StudentOS activity to personalize tutoring.</span>
+                  </label>
+                  <label class="check-row">
+                    <input name="productResearch" type="checkbox">
+                    <span>Allow de-identified product quality review.</span>
+                  </label>
+                  <label class="check-row">
+                    <input name="externalProgressSharing" type="checkbox">
+                    <span>Share progress outside my account.</span>
+                  </label>
+                  <label class="check-row">
+                    <input name="guardianSharingFuture" type="checkbox">
+                    <span>Prepare guardian or mentor sharing for a future consent flow.</span>
+                  </label>
+                  <div class="account-actions-grid">
+                    <button class="secondary-button" type="submit">Save preferences</button>
+                    <button class="text-button" type="button" id="consent-withdraw-btn">Request withdrawal</button>
+                  </div>
+                </form>
+                <div id="consent-result" class="result-box" aria-live="polite"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="account-panel account-data-rights-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Data export and deletion</p>
+                <h3>Your Data Rights</h3>
+              </div>
+            </div>
+            <p class="muted-copy">Exports are packaged privately and downloaded through your signed-in StudentOS session. Deletion requests always enter a grace-period review; dry runs do not delete data.</p>
             <div class="account-actions-grid">
               <button id="export-request-btn" class="secondary-button" type="button">Request data export</button>
               <button id="deletion-request-btn" class="secondary-button danger-action" type="button">Request account deletion</button>
             </div>
-            <p class="muted-copy">Exports are packaged privately and downloaded through your signed-in StudentOS session. Deletion requests always enter a grace-period review; dry runs do not delete data.</p>
             <div id="account-action-result" class="result-box" aria-live="polite"></div>
             <div id="account-lifecycle-status" class="lifecycle-grid"></div>
           </section>
 
-          <section class="account-panel account-wide">
+          <section class="account-panel account-roles-panel">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">Future Roles</p>
-                <h3>Guardian Invitation Groundwork</h3>
+                <p class="eyebrow">Family and institution access</p>
+                <h3>Guardian Access Groundwork</h3>
               </div>
-              <span class="brain-badge">Disabled by default</span>
+              <span class="brain-badge">Off until you consent</span>
             </div>
             <p class="muted-copy">Guardian, teacher, and institution access remains inactive. Any future invitation requires an explicit student consent flow.</p>
             <button id="guardian-preview-btn" class="secondary-button" type="button">Preview guardian groundwork</button>
