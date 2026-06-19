@@ -538,6 +538,15 @@ function backendModeLabel(mode) {
   return humanize(mode || "unknown mode");
 }
 
+function classroomModeLabel(value) {
+  const mode = String(value || "").toLowerCase();
+  if (mode === "mock") return "Demo Classroom";
+  if (mode === "oauth") return "Connected";
+  if (mode === "disabled") return "Not connected";
+  if (mode === "disconnected") return "Not connected";
+  return humanize(value || "Not connected");
+}
+
 function sourceStatusLabel(value) {
   const status = String(value || "").toLowerCase();
   if (status === "indexed" || status === "completed") return "Ready";
@@ -849,14 +858,14 @@ function renderClassroomPanel() {
   els.classroomPanel.innerHTML = `
     <div class="classroom-compact-head">
       <div>
-        <strong>${escapeHtml(humanize(connector.state || connector.mode || "mock"))}</strong>
+        <strong>${escapeHtml(classroomModeLabel(connector.state || connector.mode || "mock"))}</strong>
         <p>Read-only Classroom import. StudentOS cannot submit, grade, turn in, or modify Classroom work.</p>
       </div>
       ${summary ? `<span>${escapeHtml(`${summary.importedAssignments || 0} new / ${summary.updatedAssignments || 0} updated`)}</span>` : ""}
     </div>
     ${reconnectCopy}
     <div class="tag-row">
-      ${tag(humanize(connector.mode || "mock"), "source")}
+      ${tag(classroomModeLabel(connector.mode || "mock"), "source")}
       ${tag(connector.readOnlyImport === false ? "not ready" : "read only", "source")}
       ${tag(connector.writeScopesEnabled ? "write scope risk" : "no write scopes", connector.writeScopesEnabled ? "urgent" : "source")}
       ${lastSync ? tag(`synced ${formatDate(lastSync)}`, "source") : ""}
@@ -903,7 +912,7 @@ function classroomStatusCard() {
         </div>
       </header>
       <div class="tag-row">
-        ${tag(humanize(connector.state || connector.mode || "disconnected"), ["expired", "error"].includes(connector.state) ? "urgent" : "source")}
+        ${tag(classroomModeLabel(connector.state || connector.mode || "disconnected"), ["expired", "error"].includes(connector.state) ? "urgent" : "source")}
         ${tag(`${classroomCourses} course(s)`, "source")}
         ${tag(`${classroomAssignments} assignment(s)`, "source")}
         ${tag(connector.readOnlyImport === false ? "not ready" : "read only", "source")}

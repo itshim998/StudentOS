@@ -63,6 +63,58 @@ async function closeAiDrawer(page) {
   await expect(page.locator("#ai-panel")).not.toBeVisible();
 }
 
+async function expectNoHorizontalOverflow(page, label) {
+  const metrics = await page.evaluate(() => {
+    const viewportWidth = window.innerWidth;
+    const documentWidth = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth);
+    const offenders = [...document.querySelectorAll("body *")]
+      .filter((element) => {
+        if (element.closest(".nav-stack, .diagram-box")) return false;
+        const style = window.getComputedStyle(element);
+        if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0 || element.hasAttribute("hidden")) return false;
+        const rect = element.getBoundingClientRect();
+        if (rect.width < 1 || rect.height < 1) return false;
+        return rect.left < -1 || rect.right > viewportWidth + 1;
+      })
+      .slice(0, 6)
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          tag: element.tagName.toLowerCase(),
+          id: element.id || "",
+          className: String(element.className || "").slice(0, 90),
+          left: Math.round(rect.left),
+          right: Math.round(rect.right),
+        };
+      });
+    return { viewportWidth, documentWidth, offenders };
+  });
+  expect(metrics.documentWidth, `${label} document width ${metrics.documentWidth} exceeded ${metrics.viewportWidth}`).toBeLessThanOrEqual(metrics.viewportWidth + 12);
+  expect(metrics.offenders, `${label} overflow offenders: ${JSON.stringify(metrics.offenders)}`).toEqual([]);
+}
+
+async function expectAiDrawerWithinViewport(page, label) {
+  await expect.poll(async () => page.locator("#ai-panel").evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return bounds.left >= 0 && bounds.top >= 0 && bounds.right <= window.innerWidth && bounds.bottom <= window.innerHeight;
+  }), { message: `${label} drawer should settle inside viewport` }).toBe(true);
+  const rect = await page.locator("#ai-panel").evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      left: Math.round(bounds.left),
+      right: Math.round(bounds.right),
+      top: Math.round(bounds.top),
+      bottom: Math.round(bounds.bottom),
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    };
+  });
+  expect(rect.left, `${label} drawer left`).toBeGreaterThanOrEqual(0);
+  expect(rect.top, `${label} drawer top`).toBeGreaterThanOrEqual(0);
+  expect(rect.right, `${label} drawer right`).toBeLessThanOrEqual(rect.viewportWidth);
+  expect(rect.bottom, `${label} drawer bottom`).toBeLessThanOrEqual(rect.viewportHeight);
+}
+
 let serverProcess;
 let baseUrl;
 let serverLogs = [];
@@ -201,7 +253,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#flow-result")).toContainText("No submission");
 
   await clickNav(page, "Today");
-  await expect(page.locator("#classroom-panel")).toContainText(/read only|connected|mock/i);
+  await expect(page.locator("#classroom-panel")).toContainText(/read only|connected|demo/i);
   await page.getByRole("button", { name: "Sync Classroom" }).click();
   await waitForNotLoading(page.locator("#classroom-panel"), "Syncing Classroom in read-only mode");
   await expect(page.locator("#classroom-panel")).toContainText("no write scopes");
@@ -253,4 +305,82 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await page.unroute("**/api/assignment-flow");
 
   expect(pageErrors).toEqual([]);
+});
+
+test("responsive surfaces and AI drawer avoid horizontal overflow", async ({ page }) => {
+  test.setTimeout(75_000);
+  const widths = [1440, 1280, 1024, 768, 430, 390, 360];
+  const views = ["Today", "Setup", "Courses", "Memory", "Studio", "Account"];
+
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: width <= 430 ? 820 : 900 });
+    await page.goto(baseUrl);
+    await expect(page.locator("#public-auth-shell")).toBeHidden();
+
+    for (const view of views) {
+      await clickNav(page, view);
+      await expectNoHorizontalOverflow(page, `${width}px ${view}`);
+      await openAiDrawer(page);
+      await expectAiDrawerWithinViewport(page, `${width}px ${view}`);
+      await closeAiDrawer(page);
+    }
+
+    await page.evaluate(() => { window.location.hash = "pricing"; });
+    await expect(page.locator("#view-title")).toHaveText("Account");
+    await expect(page.locator("#pricing")).toBeVisible();
+    await expectNoHorizontalOverflow(page, `${width}px pricing`);
+  }
+});
+
+test("public auth shell gates the app when auth is enabled", async ({ page }) => {
+  const [config, bootstrap, account, classroom] = await Promise.all([
+    fetch(`${baseUrl}/api/config`).then((response) => response.json()),
+    fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json()),
+    fetch(`${baseUrl}/api/account`).then((response) => response.json()),
+    fetch(`${baseUrl}/api/classroom/status`).then((response) => response.json()),
+  ]);
+  await page.route("**/api/config", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      ...config,
+      auth: {
+        enabled: true,
+        url: "https://example.supabase.co",
+        anonKey: "public-anon-test-key",
+      },
+    }),
+  }));
+  await page.route("**/api/bootstrap", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify(bootstrap),
+  }));
+  await page.route("**/api/account", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify(account),
+  }));
+  await page.route("**/api/classroom/status", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify(classroom),
+  }));
+
+  await page.goto(`${baseUrl}/#signup`);
+  await expect(page.locator("#public-auth-shell")).toBeVisible();
+  await expect(page.locator("#app-shell")).toBeHidden();
+  await expect(page.locator("#auth-shell-title")).toHaveText("Create your StudentOS account");
+  await expect(page.locator("#password-reset-btn")).toBeVisible();
+
+  await page.getByRole("button", { name: "Existing account" }).click();
+  await expect(page.locator("#auth-shell-title")).toHaveText("Sign in to StudentOS");
+  await page.getByRole("button", { name: "New account" }).click();
+  await expect(page.locator("#auth-shell-title")).toHaveText("Create your StudentOS account");
+
+  await page.evaluate(() => {
+    sessionStorage.setItem("studentos.auth.session", JSON.stringify({
+      access_token: "local-test-token",
+      user: { email: "qa@studentos.local" },
+    }));
+  });
+  await page.goto(baseUrl);
+  await expect(page.locator("#public-auth-shell")).toBeHidden();
+  await expect(page.locator("#app-shell")).toBeVisible();
 });

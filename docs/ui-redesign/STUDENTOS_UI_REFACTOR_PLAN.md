@@ -412,6 +412,7 @@ Each phase must be visually reviewable, preserve existing API calls and backend 
 - Replace sidebar assumptions with bottom navigation/drawers/bottom sheets.
 - Validate no text overflow, overlapping controls, or layout jumps.
 - Test narrow mobile, tablet, laptop, and wide desktop.
+- Final Codex functional QA pass before Antigravity/Gemini aesthetic polish: verify responsive overflow, public auth shell gating, contextual AI drawer bounds, and consumer-facing copy without changing backend/API/deployment behavior.
 
 ### PASS 34.9 — Accessibility, visual QA, and regression cleanup
 

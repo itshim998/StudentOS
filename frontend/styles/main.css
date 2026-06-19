@@ -78,10 +78,16 @@ body {
 
 button, input, select, textarea {
   font: inherit;
+  max-width: 100%;
 }
 
 button {
   cursor: pointer;
+  min-width: 0;
+}
+
+input[type="file"] {
+  min-width: 0;
 }
 
 [hidden] {
@@ -714,6 +720,8 @@ button {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .section-heading h3,
@@ -809,6 +817,7 @@ button {
   border-radius: var(--radius);
   background: #fbfdfb;
   padding: 13px;
+  min-width: 0;
 }
 
 .item-card strong,
@@ -933,6 +942,7 @@ button {
   flex-wrap: wrap;
   gap: 7px;
   margin-top: 9px;
+  min-width: 0;
 }
 
 .warning-copy {
@@ -1663,17 +1673,34 @@ textarea:focus {
     flex-direction: row;
     align-items: center;
     flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    z-index: 35;
+    gap: 10px;
+    max-height: 48vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .auth-panel,
   .rail-session-card {
-    width: min(100%, 360px);
+    width: min(100%, 320px);
   }
   .nav-stack {
     display: flex;
+    width: 100%;
     overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding-bottom: 4px;
+    scrollbar-width: thin;
+  }
+  .nav-item {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
   .rail-footer { margin-left: auto; margin-top: 0; }
-  .workspace { padding: 18px; }
+  .workspace {
+    padding: 18px 18px 96px;
+  }
   .topbar { align-items: flex-start; flex-direction: column; }
   .overview-grid,
   .dashboard-summary,
@@ -1726,7 +1753,8 @@ textarea:focus {
   .ai-panel {
     inset: auto 12px 12px;
     width: auto;
-    max-height: min(82vh, 720px);
+    max-height: min(78vh, 720px);
+    padding: 14px;
     transform: translateY(calc(100% + 32px));
   }
   .ai-drawer-open .ai-panel {
@@ -1735,6 +1763,9 @@ textarea:focus {
   .ai-launcher {
     right: 14px;
     bottom: 14px;
+  }
+  .ai-context-button {
+    white-space: normal;
   }
 }
 
@@ -1838,7 +1869,26 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
   .rail { padding: 14px; }
-  .brand-lockup { width: 100%; }
+  .brand-lockup {
+    width: 100%;
+  }
+  .rail .brand-lockup p,
+  .rail-session-card p,
+  .rail-footer {
+    display: none;
+  }
+  .rail-session-card {
+    width: auto;
+    flex: 1 1 160px;
+    padding: 8px 10px;
+  }
+  .nav-stack {
+    gap: 6px;
+  }
+  .nav-item {
+    min-height: 38px;
+    padding: 0 10px;
+  }
   .profile-strip { justify-content: flex-start; }
   .topbar h2 { font-size: 1.55rem; }
   .setup-step-list,
@@ -1848,6 +1898,20 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
   .verb-tabs { grid-template-columns: repeat(2, 1fr); }
+  .ai-launcher {
+    min-height: 44px;
+    padding: 0 10px;
+  }
+  .ai-launcher strong {
+    display: none;
+  }
+  .pricing-limit-list span {
+    display: grid;
+    align-items: start;
+  }
+  .pricing-card {
+    min-height: auto;
+  }
 }
 
 /* Pass 34.1: refined dark app shell tokens */
@@ -2546,6 +2610,8 @@ textarea:focus-visible {
   align-items: center;
   margin-top: 16px;
   text-decoration: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .heading-actions {
