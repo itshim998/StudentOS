@@ -154,13 +154,27 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await closeAiDrawer(page);
 
   await clickNav(page, "Memory");
+  await expect(page.locator("#view-memory")).toContainText("Source-grounded academic memory");
+  await expect(page.locator("#view-memory")).toContainText("Search your academic memory");
+  await expect(page.locator("#view-memory")).toContainText("Upload private source");
   await page.locator("#source-form input[name='title']").fill("E2E quadratics note");
   await page.locator("#source-file").setInputFiles(path.join(FIXTURE_DIR, "quadratics-note.txt"));
   await page.getByRole("button", { name: "Upload private source" }).click();
   await expect(page.locator("#source-result")).toContainText("E2E quadratics note", { timeout: 15_000 });
   await expect(page.locator("#source-result")).toContainText("chunks");
   await expect(page.locator("#source-result")).toContainText("not public");
+  await expect(page.locator("#source-list")).toContainText("Library health");
+  await expect(page.locator("#source-list")).toContainText("source-grounded");
   await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
+  await page.locator("#source-search-input").fill("E2E quadratics");
+  await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
+  await page.locator("#source-search-input").fill("missing-memory-source");
+  await expect(page.locator("#source-list")).toContainText("No matching sources");
+  await page.locator("#source-search-input").fill("");
+  await page.locator("#source-list").getByRole("button", { name: "Explain source" }).first().click();
+  await expect(page.locator("#ai-panel")).toBeVisible();
+  await expect(page.locator("#ai-message")).toHaveValue(/Explain this source/i);
+  await closeAiDrawer(page);
 
   await openAiDrawer(page);
   for (const verb of ["Ask", "Plan", "Make", "Review"]) {

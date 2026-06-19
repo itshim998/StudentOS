@@ -300,41 +300,65 @@ Thu|19:00|English writing sprint|English</textarea>
       </section>
 
       <section class="view" id="view-memory" aria-labelledby="view-title">
-        <div class="memory-layout">
-          <section>
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Sources</p>
-                <h3>Student Materials</h3>
-              </div>
-              <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="Answer from my uploaded sources where possible, and call out what is not covered yet.">Ask from sources</button>
+        <div class="memory-shell">
+          <section class="memory-brief-panel" aria-label="Memory overview">
+            <div>
+              <p class="eyebrow">Memory</p>
+              <h3>Source-grounded academic memory</h3>
+              <p>Upload private materials, browse the source library, and keep indexing health visible without turning queue internals into the main experience.</p>
             </div>
-            <div id="source-list" class="source-list"></div>
-          </section>
-          <section>
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Private Upload</p>
-                <h3>Add Source Material</h3>
-              </div>
+            <div class="memory-brief-grid" aria-label="Memory actions">
+              <span>Upload source material</span>
+              <span>Search your academic memory</span>
+              <span>Track indexing health</span>
             </div>
-            <form id="source-form" class="form-grid">
-              <label>
-                Title
-                <input name="title" type="text" value="Chapter handout" required>
-              </label>
-              <label>
-                Course
-                <select name="courseId" id="source-course-select"></select>
-              </label>
-              <label>
-                Private file
-                <input name="file" id="source-file" type="file" accept=".txt,.md,.markdown,.pdf,.doc,.docx,.ppt,.pptx,text/plain,text/markdown,application/pdf" required>
-              </label>
-              <button class="primary-button" type="submit">Upload private source</button>
-            </form>
-            <div id="source-result" class="result-box" aria-live="polite"></div>
           </section>
+
+          <div class="memory-layout memory-library-layout">
+            <section class="memory-library-panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">Source Library</p>
+                  <h3>Student Materials</h3>
+                </div>
+                <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="Answer from my uploaded sources where possible, and call out what is not covered yet.">Ask from sources</button>
+              </div>
+              <label class="memory-search">
+                <span>Search your academic memory</span>
+                <input id="source-search-input" type="search" placeholder="Search sources, courses, snippets, or status">
+              </label>
+              <div id="source-list" class="source-list memory-source-list"></div>
+            </section>
+            <section class="memory-upload-panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">Private Upload</p>
+                  <h3>Add Source Material</h3>
+                </div>
+              </div>
+              <p class="surface-intro">Files stay private to StudentOS and are used for source-grounded explanations, citations, review, and course coverage.</p>
+              <form id="source-form" class="form-grid source-upload-form">
+                <label>
+                  Title
+                  <input name="title" type="text" value="Chapter handout" required>
+                </label>
+                <label>
+                  Course
+                  <select name="courseId" id="source-course-select"></select>
+                </label>
+                <label>
+                  Private file
+                  <input name="file" id="source-file" type="file" accept=".txt,.md,.markdown,.pdf,.doc,.docx,.ppt,.pptx,text/plain,text/markdown,application/pdf" required>
+                </label>
+                <div class="upload-privacy-copy">
+                  <strong>Private source upload</strong>
+                  <p>Accepted files keep the existing backend handling. StudentOS will label source use and avoid making private material public.</p>
+                </div>
+                <button class="primary-button" type="submit">Upload private source</button>
+              </form>
+              <div id="source-result" class="result-box source-result-panel" aria-live="polite"></div>
+            </section>
+          </div>
         </div>
       </section>
 

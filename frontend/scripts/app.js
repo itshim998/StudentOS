@@ -12,6 +12,7 @@ let authSession = readStoredSession();
 let accountSnapshot = null;
 let classroomStatus = null;
 let aiDrawerReturnFocus = null;
+let sourceSearchQuery = "";
 
 const els = {
   viewTitle: document.getElementById("view-title"),
@@ -33,6 +34,7 @@ const els = {
   timetableList: document.getElementById("timetable-list"),
   assignmentList: document.getElementById("assignment-list"),
   coursesGrid: document.getElementById("courses-grid"),
+  sourceSearchInput: document.getElementById("source-search-input"),
   sourceList: document.getElementById("source-list"),
   sourceCourseSelect: document.getElementById("source-course-select"),
   sourceFile: document.getElementById("source-file"),
@@ -398,6 +400,66 @@ function getCourseRoadmap(courseId) {
 
 function sourceIsIndexed(source) {
   return source.status === "indexed" || source.embeddingStatus === "embedded" || Number(source.chunkCount || 0) > 0;
+}
+
+function sourceEmbeddedChunks(source) {
+  if (!source?.id) return Number(source?.chunkCount || 0);
+  const embedded = (state.sourceChunks || []).filter((chunk) =>
+    chunk.sourceMaterialId === source.id && chunk.embeddingStatus === "embedded"
+  ).length;
+  return embedded || Number(source.chunkCount || 0);
+}
+
+function latestSourceJob(source) {
+  const jobTime = (job) => {
+    const parsed = Date.parse(job.updatedAt || job.createdAt || "");
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
+  return (state.backgroundJobs || [])
+    .filter((job) => job.sourceId === source.id)
+    .sort((left, right) => jobTime(right) - jobTime(left))[0];
+}
+
+function sourceTypeLabel(source) {
+  return source.filename || source.mimeType || humanize(source.kind || source.storageMode || "source");
+}
+
+function sourceHealthLabel(source, latestJob, embeddedCount) {
+  if (source.extractionError || latestJob?.status === "failed") return "needs attention";
+  if (source.ocrRequired || source.status === "needs_ocr") return "OCR needed";
+  if (sourceIsIndexed(source) || embeddedCount > 0) return "indexed";
+  return humanize(source.status || source.extractionStatus || "registered");
+}
+
+function buildSourceAiPrompt(source, course, embeddedCount) {
+  return [
+    `Explain this source for study use: ${source.title}.`,
+    `Course: ${course?.title || "Course not set"}.`,
+    `Type: ${sourceTypeLabel(source)}.`,
+    `Embedded chunks: ${embeddedCount}.`,
+    "Use uploaded source context where available and call out anything not covered.",
+  ].join(" ");
+}
+
+function sourceSearchText(source, course, latestJob, embeddedCount) {
+  return [
+    source.title,
+    source.filename,
+    source.mimeType,
+    source.kind,
+    source.status,
+    source.extractionStatus,
+    source.storageMode,
+    source.citationLabel,
+    source.extractionSummary,
+    source.extractedSnippet,
+    source.extractionError,
+    sourceHealthLabel(source, latestJob, embeddedCount),
+    latestJob?.status,
+    latestJob?.jobType,
+    latestJob?.lastError,
+    course?.title,
+  ].filter(Boolean).join(" ").toLowerCase();
 }
 
 function courseNextAction(course, assignments, roadmap) {
@@ -850,56 +912,103 @@ function renderCourses() {
 
 function renderSources() {
   const health = state.queueHealth || { counts: {}, failedJobs: [], processingJobs: [], retryableFailed: 0 };
+  const activeSources = (state.sourceMaterials || []).filter((source) => !source.deletedAt);
+  const indexedSources = activeSources.filter(sourceIsIndexed);
+  const needsAttentionCount = activeSources.filter((source) => source.extractionError || source.ocrRequired || source.status === "needs_ocr").length;
+  const search = sourceSearchQuery.trim().toLowerCase();
+  const failedCount = health.counts?.failed || 0;
+  const stuckCount = health.stuckJobsCount || 0;
   const queueCard = `
-    <article class="source-card">
-      <strong>Queue health</strong>
-      <p>Background extraction and reindex work is private and backend-run.</p>
-      <div class="tag-row">
-        ${tag(`${health.counts.queued || 0} queued`, "source")}
-        ${tag(`${health.counts.processing || 0} processing`, "source")}
-        ${tag(`${health.counts.failed || 0} failed`, (health.counts.failed || 0) ? "urgent" : "source")}
-        ${tag(`${health.counts.completed || 0} completed`, "source")}
-        ${tag(`${health.averageProcessingAgeSeconds || 0}s avg processing`, "source")}
-        ${tag(`${health.stuckJobsCount || 0} stuck`, (health.stuckJobsCount || 0) ? "urgent" : "source")}
+    <article class="source-card library-health-card">
+      <div class="library-health-head">
+        <div>
+          <span class="workspace-label">Library health</span>
+          <strong>${indexedSources.length}/${activeSources.length} sources indexed</strong>
+          <p>Background extraction and reindex work stays private and backend-run.</p>
+        </div>
+        <button class="mini-action" type="button" data-retry-failed-jobs>Retry failed</button>
       </div>
-      ${health.processingJobs?.length ? `<p>${health.processingJobs.map((job) => escapeHtml(`${humanize(job.jobType)} ${job.id}`)).join(", ")}</p>` : ""}
-      ${health.failedJobs?.length ? `<p>${health.failedJobs.map((job) => escapeHtml(`${humanize(job.jobType)}: ${humanize(job.lastError || "failed")}`)).join(" / ")}</p>` : ""}
-      ${health.failedReasons && Object.keys(health.failedReasons).length ? `<p>${Object.entries(health.failedReasons).map(([reason, count]) => escapeHtml(`${humanize(reason)} (${count})`)).join(" / ")}</p>` : ""}
-      <button class="mini-action" type="button" data-retry-failed-jobs>Retry failed</button>
+      <div class="source-health-grid">
+        <span><strong>${health.counts?.queued || 0}</strong> queued</span>
+        <span><strong>${health.counts?.processing || 0}</strong> processing</span>
+        <span><strong>${failedCount}</strong> failed</span>
+        <span><strong>${stuckCount}</strong> stuck</span>
+        <span><strong>${health.counts?.completed || 0}</strong> completed</span>
+        <span><strong>${needsAttentionCount}</strong> source issue(s)</span>
+      </div>
+      <div class="tag-row">
+        ${tag(`${health.averageProcessingAgeSeconds || 0}s avg processing`, "source")}
+        ${failedCount || stuckCount ? tag("attention needed", "urgent") : tag("healthy", "source")}
+        ${tag("not public", "urgent")}
+      </div>
+      ${health.processingJobs?.length || health.failedJobs?.length || (health.failedReasons && Object.keys(health.failedReasons).length) ? `
+        <details class="source-technical-details">
+          <summary>Queue details</summary>
+          ${health.processingJobs?.length ? `<p>${health.processingJobs.map((job) => escapeHtml(`${humanize(job.jobType)} ${job.id}`)).join(", ")}</p>` : ""}
+          ${health.failedJobs?.length ? `<p>${health.failedJobs.map((job) => escapeHtml(`${humanize(job.jobType)}: ${humanize(job.lastError || "failed")}`)).join(" / ")}</p>` : ""}
+          ${health.failedReasons && Object.keys(health.failedReasons).length ? `<p>${Object.entries(health.failedReasons).map(([reason, count]) => escapeHtml(`${humanize(reason)} (${count})`)).join(" / ")}</p>` : ""}
+        </details>
+      ` : ""}
     </article>
   `;
-  const sourceCards = state.sourceMaterials.filter((source) => !source.deletedAt).map((source) => {
+  const sourceCards = activeSources.map((source) => {
     const course = courseById(source.courseId);
-    const sourceJobs = (state.backgroundJobs || [])
-      .filter((job) => job.sourceId === source.id)
-      .sort((left, right) => Date.parse(right.updatedAt || right.createdAt || "") - Date.parse(left.updatedAt || left.createdAt || ""));
-    const latestJob = sourceJobs[0];
+    const latestJob = latestSourceJob(source);
+    const embeddedCount = sourceEmbeddedChunks(source);
+    const healthLabel = sourceHealthLabel(source, latestJob, embeddedCount);
+    const matchesSearch = !search || sourceSearchText(source, course, latestJob, embeddedCount).includes(search);
+    if (!matchesSearch) return "";
+    const prompt = buildSourceAiPrompt(source, course, embeddedCount);
     return `
-      <article class="source-card">
-        <strong>${escapeHtml(source.title)}</strong>
-        <p>${escapeHtml(course?.title || "Course")} / ${escapeHtml(source.filename || humanize(source.kind))}</p>
+      <article class="source-card source-library-card">
+        <div class="source-card-head">
+          <div>
+            <span class="workspace-label">Private source</span>
+            <strong>${escapeHtml(source.title)}</strong>
+            <p>${escapeHtml(course?.title || "Course")} / ${escapeHtml(sourceTypeLabel(source))}</p>
+          </div>
+          <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}">Explain source</button>
+        </div>
+        <div class="source-health-grid source-card-metrics">
+          <span><strong>${escapeHtml(healthLabel)}</strong> status</span>
+          <span><strong>${embeddedCount}</strong> embedded chunks</span>
+          <span><strong>${source.citationLabel ? "ready" : "pending"}</strong> citation</span>
+          <span><strong>${source.isPrivate ? "private" : "scoped"}</strong> visibility</span>
+        </div>
         <div class="tag-row">
-          ${tag(humanize(source.status || source.extractionStatus || source.storageMode))}
+          ${tag(humanize(source.status || source.extractionStatus || source.storageMode), source.extractionError ? "urgent" : "")}
           ${source.isPrivate ? tag("private", "source") : tag(humanize(source.storageMode))}
-          ${source.mimeType ? tag(source.mimeType) : ""}
-          ${source.sizeBytes ? tag(`${Math.round(source.sizeBytes / 1024)} KB`) : ""}
-          ${source.chunkCount !== undefined ? tag(`${source.chunkCount} chunks`, "source") : ""}
-          ${source.extractionProvider ? tag(source.extractionProvider, "source") : ""}
+          ${tag("source-grounded", "source")}
+          ${embeddedCount ? tag(`${embeddedCount} chunks`, "source") : ""}
           ${source.ocrRequired || source.status === "needs_ocr" ? tag("OCR needed", "urgent") : ""}
           ${latestJob ? tag(`${humanize(latestJob.jobType)} ${humanize(latestJob.status)}`, latestJob.status === "failed" ? "urgent" : "source") : ""}
-          ${source.webFallbackAllowed ? tag("web fallback labeled", "source") : tag("material only")}
+          ${source.webFallbackAllowed ? tag("web fallback labeled", "source") : tag("material only", "source")}
         </div>
         ${source.extractionSummary ? `<p>${escapeHtml(source.extractionSummary)}</p>` : ""}
-        ${source.extractionError ? `<p>${escapeHtml(humanize(source.extractionError))}</p>` : ""}
-        ${source.extractedSnippet ? `<p>${escapeHtml(source.extractedSnippet)}</p>` : ""}
-        ${source.id ? `<p>${escapeHtml((state.sourceChunks || []).filter((chunk) => chunk.sourceMaterialId === source.id && chunk.embeddingStatus === "embedded").length)} embedded chunk(s)</p>` : ""}
-        ${latestJob?.lastError ? `<p>${escapeHtml(humanize(latestJob.lastError))}</p>` : ""}
-        <button class="mini-action" type="button" data-reindex-source-id="${source.id}">Retry index</button>
-        <button class="mini-action" type="button" data-delete-source-id="${source.id}">Delete</button>
+        ${source.extractionError || latestJob?.lastError ? `<p class="warning-copy">${escapeHtml(humanize(source.extractionError || latestJob.lastError))}</p>` : ""}
+        ${source.extractedSnippet ? `<blockquote class="source-preview">${escapeHtml(source.extractedSnippet)}</blockquote>` : ""}
+        <div class="source-action-row">
+          <button class="mini-action" type="button" data-reindex-source-id="${source.id}">Retry index</button>
+          <button class="mini-action danger-action" type="button" data-delete-source-id="${source.id}">Delete</button>
+        </div>
       </article>
     `;
   }).join("");
-  els.sourceList.innerHTML = queueCard + sourceCards;
+  const noSources = activeSources.length ? "" : `
+    <article class="source-card source-empty-card">
+      <strong>No source materials yet</strong>
+      <p>Upload a private source to begin building the StudentOS memory layer.</p>
+      <div class="tag-row">${tag("private upload ready", "source")}${tag("not public", "urgent")}</div>
+    </article>
+  `;
+  const noMatches = activeSources.length && search && !sourceCards.trim() ? `
+    <article class="source-card source-empty-card">
+      <strong>No matching sources</strong>
+      <p>Search checks titles, courses, source types, snippets, citation labels, and indexing status from the loaded library.</p>
+      <div class="tag-row">${tag("client-side search", "source")}</div>
+    </article>
+  ` : "";
+  els.sourceList.innerHTML = queueCard + (sourceCards || noMatches || noSources);
 }
 
 function renderSelects() {
@@ -1825,6 +1934,10 @@ function wireEvents() {
   document.getElementById("score-form").addEventListener("submit", recordScore);
   document.getElementById("extension-form").addEventListener("submit", draftExtension);
   document.getElementById("source-form").addEventListener("submit", addSource);
+  els.sourceSearchInput?.addEventListener("input", (event) => {
+    sourceSearchQuery = event.currentTarget.value;
+    renderSources();
+  });
   els.onboardingForm.addEventListener("submit", submitOnboarding);
   els.demoSeedBtn.addEventListener("click", () => {
     seedDemoProfile().catch((error) => {
