@@ -118,8 +118,10 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await page.goto(baseUrl);
   await expect(page).toHaveTitle(/StudentOS/);
   await expect(page.getByRole("heading", { name: "StudentOS" })).toBeVisible();
+  await expect(page.locator("#public-auth-shell")).toBeHidden();
   await expect(page.locator("#auth-session")).toContainText("Local demo");
-  await expect(page.locator("#connector-status")).toContainText("Mock mode");
+  await expect(page.locator("#rail-session-status")).toContainText("Demo session");
+  await expect(page.locator("#connector-status")).toContainText("Demo mode");
   await expect(page.locator("#dashboard-summary")).toContainText("Do now");
   await expect(page.locator("#dashboard-summary")).toContainText("Goal");
   await page.getByRole("button", { name: "Plan today" }).click();
@@ -154,17 +156,17 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await closeAiDrawer(page);
 
   await clickNav(page, "Memory");
-  await expect(page.locator("#view-memory")).toContainText("Source-grounded academic memory");
+  await expect(page.locator("#view-memory")).toContainText("Your academic memory");
   await expect(page.locator("#view-memory")).toContainText("Search your academic memory");
   await expect(page.locator("#view-memory")).toContainText("Upload private source");
   await page.locator("#source-form input[name='title']").fill("E2E quadratics note");
   await page.locator("#source-file").setInputFiles(path.join(FIXTURE_DIR, "quadratics-note.txt"));
   await page.getByRole("button", { name: "Upload private source" }).click();
   await expect(page.locator("#source-result")).toContainText("E2E quadratics note", { timeout: 15_000 });
-  await expect(page.locator("#source-result")).toContainText("chunks");
-  await expect(page.locator("#source-result")).toContainText("not public");
-  await expect(page.locator("#source-list")).toContainText("Library health");
-  await expect(page.locator("#source-list")).toContainText("source-grounded");
+  await expect(page.locator("#source-result")).toContainText(/indexed section/i);
+  await expect(page.locator("#source-result")).toContainText("Private");
+  await expect(page.locator("#source-list")).toContainText("Library status");
+  await expect(page.locator("#source-list")).toContainText("uses your materials");
   await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
   await page.locator("#source-search-input").fill("E2E quadratics");
   await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
@@ -181,7 +183,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
     await page.locator(`.verb-tab[data-verb='${verb}']`).click();
     await page.locator("#ai-message").fill(`${verb}: use the uploaded quadratics source in one concise response.`);
     await page.locator("#ai-form").getByRole("button", { name: "Run" }).click();
-    await waitForNotLoading(page.locator("#ai-response"), "Thinking with source context");
+    await waitForNotLoading(page.locator("#ai-response"), "Checking your materials");
     await expect(page.locator("#ai-response")).toContainText(/uploaded material|Cited snippets|source|fallback/i, { timeout: 20_000 });
   }
   await closeAiDrawer(page);
@@ -212,7 +214,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await page.getByRole("button", { name: "Request data export" }).click();
   await expect(page.locator("#account-action-result")).toContainText("Export request created");
   await page.getByRole("button", { name: "Upgrade" }).click();
-  await expect(page.locator("#account-action-result")).toContainText(/Preview|redirect|provider|checkout/i);
+  await expect(page.locator("#account-action-result")).toContainText(/Preview|redirect|payment|checkout/i);
 
   expectingAssignmentFlowFailure = true;
   await page.route("**/api/assignment-flow", (route) => route.fulfill({
@@ -224,7 +226,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await page.getByRole("button", { name: "Analyze flow" }).click();
   await waitForNotLoading(page.locator("#flow-result"), "Checking coverage and next learning step");
   await expect(page.locator("#flow-result")).toContainText("Assignment flow unavailable");
-  await expect(page.locator("#flow-result")).toContainText("safe error");
+  await expect(page.locator("#flow-result")).toContainText("try again");
   await page.unroute("**/api/assignment-flow");
 
   expect(pageErrors).toEqual([]);

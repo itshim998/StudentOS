@@ -544,12 +544,16 @@ test.describe("StudentOS live Supabase E2E", () => {
     expect(publicConfig.auth?.enabled).toBe(true);
     expect(publicConfig.auth?.anonKey).toBeTruthy();
     expect(publicConfig.auth?.anonKey).not.toBe(config.auth.serviceRoleKey);
+    await expect(page.locator("#public-auth-shell")).toBeVisible();
+    await expect(page.locator("#app-shell")).toBeHidden();
 
     await page.locator("#auth-email").fill(disposableUser.email);
     await page.locator("#auth-password").fill(disposableUser.password);
     const firstBootstrapAfterSignIn = page.waitForResponse((response) => response.url().includes("/api/bootstrap") && response.status() === 200);
     await page.getByRole("button", { name: "Sign in" }).click();
     await firstBootstrapAfterSignIn;
+    await expect(page.locator("#public-auth-shell")).toBeHidden();
+    await expect(page.locator("#app-shell")).toBeVisible();
     await expect(page.locator("#auth-session")).toContainText(disposableUser.email, { timeout: 15_000 });
     await expect(page.locator("#auth-help")).toContainText("Session active");
 
@@ -575,8 +579,8 @@ test.describe("StudentOS live Supabase E2E", () => {
       });
     }
     expect(uploadResultText).toContain("Live E2E quadratics note");
-    await expect(page.locator("#source-result")).toContainText("chunks");
-    await expect(page.locator("#source-result")).toContainText("not public");
+    await expect(page.locator("#source-result")).toContainText(/indexed section/i);
+    await expect(page.locator("#source-result")).toContainText("Private");
 
     await clickNav(page, "Studio");
     await openAiDrawer(page);
@@ -584,9 +588,9 @@ test.describe("StudentOS live Supabase E2E", () => {
       await page.locator(`.verb-tab[data-verb='${verb}']`).click();
       await page.locator("#ai-message").fill(`${verb}: answer from the uploaded quadratics note with citations.`);
       await page.locator("#ai-form").getByRole("button", { name: "Run" }).click();
-      await waitForNotLoading(page.locator("#ai-response"), "Thinking with source context");
+      await waitForNotLoading(page.locator("#ai-response"), "Checking your materials");
       await expect(page.locator("#ai-response")).toContainText(`${verb} result`, { timeout: 20_000 });
-      await expect(page.locator("#ai-response")).toContainText(/Cited snippets|uploaded material|source|retrieval/i);
+      await expect(page.locator("#ai-response")).toContainText(/Cited snippets|uploaded material|source|materials/i);
     }
     await closeAiDrawer(page);
 

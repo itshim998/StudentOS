@@ -13,8 +13,11 @@ let accountSnapshot = null;
 let classroomStatus = null;
 let aiDrawerReturnFocus = null;
 let sourceSearchQuery = "";
+let authShellMode = "signin";
 
 const els = {
+  publicAuthShell: document.getElementById("public-auth-shell"),
+  appShell: document.getElementById("app-shell"),
   viewTitle: document.getElementById("view-title"),
   creditBalance: document.getElementById("credit-balance"),
   planBadge: document.getElementById("plan-badge"),
@@ -50,14 +53,22 @@ const els = {
   scoreResult: document.getElementById("score-result"),
   lessonResult: document.getElementById("lesson-result"),
   extensionResult: document.getElementById("extension-result"),
+  signinBtn: document.getElementById("signin-btn"),
   authForm: document.getElementById("auth-form"),
   signupBtn: document.getElementById("signup-btn"),
   passwordResetBtn: document.getElementById("password-reset-btn"),
   logoutBtn: document.getElementById("logout-btn"),
   authEmail: document.getElementById("auth-email"),
   authPassword: document.getElementById("auth-password"),
+  authResult: document.getElementById("auth-result"),
   authSession: document.getElementById("auth-session"),
   authHelp: document.getElementById("auth-help"),
+  authMessage: document.getElementById("auth-message"),
+  authModeLabel: document.getElementById("auth-mode-label"),
+  authShellTitle: document.getElementById("auth-shell-title"),
+  authShellCopy: document.getElementById("auth-shell-copy"),
+  railSessionStatus: document.getElementById("rail-session-status"),
+  railSessionHelp: document.getElementById("rail-session-help"),
   accountSummary: document.getElementById("account-summary"),
   quotaPanel: document.getElementById("quota-panel"),
   accountResetForm: document.getElementById("account-reset-form"),
@@ -105,6 +116,61 @@ function storeSession(session) {
   }
 }
 
+function setText(element, value) {
+  if (element) element.textContent = value;
+}
+
+function authGateActive() {
+  return Boolean(runtimeConfig.auth?.enabled && !authSession?.access_token);
+}
+
+function updateShellVisibility() {
+  const showPublicAuth = authGateActive();
+  if (els.publicAuthShell) {
+    els.publicAuthShell.hidden = !showPublicAuth;
+  }
+  if (els.appShell) {
+    els.appShell.hidden = showPublicAuth;
+  }
+  document.body.classList.toggle("auth-shell-active", showPublicAuth);
+}
+
+function setAuthShellMode(mode = "signin") {
+  authShellMode = mode === "signup" ? "signup" : "signin";
+  document.querySelectorAll("[data-auth-mode]").forEach((button) => {
+    const active = button.dataset.authMode === authShellMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  if (authShellMode === "signup") {
+    setText(els.authModeLabel, "Create account");
+    setText(els.authShellTitle, "Create your StudentOS account");
+    setText(els.authShellCopy, "Use your student email and a password. Email verification may be required before the account opens.");
+    els.signinBtn?.classList.remove("primary-button");
+    els.signinBtn?.classList.add("secondary-button");
+    els.signupBtn?.classList.remove("secondary-button");
+    els.signupBtn?.classList.add("primary-button");
+    return;
+  }
+  setText(els.authModeLabel, "Session");
+  setText(els.authShellTitle, "Sign in to StudentOS");
+  setText(els.authShellCopy, "Use the email and password for your StudentOS account.");
+  els.signinBtn?.classList.add("primary-button");
+  els.signinBtn?.classList.remove("secondary-button");
+  els.signupBtn?.classList.add("secondary-button");
+  els.signupBtn?.classList.remove("primary-button");
+}
+
+function syncAuthHash() {
+  const hash = window.location.hash.toLowerCase();
+  if (hash === "#signup") {
+    setAuthShellMode("signup");
+  } else if (hash === "#login" || hash === "#app") {
+    setAuthShellMode("signin");
+  }
+  updateShellVisibility();
+}
+
 function handleSessionExpiry() {
   storeSession(null);
   accountSnapshot = null;
@@ -134,7 +200,7 @@ function renderClassroomError(error) {
     <div class="tag-row">
       ${tag("read only", "source")}
       ${tag("no writeback", "urgent")}
-      ${tag("safe error", "medium")}
+      ${tag("try again", "medium")}
     </div>
   `;
 }
@@ -195,6 +261,7 @@ async function api(path, options = {}) {
 
 async function loadRuntimeConfig() {
   runtimeConfig = await api("/api/config");
+  syncAuthHash();
   renderAuth();
   if (els.demoSeedBtn) {
     els.demoSeedBtn.hidden = runtimeConfig.onboarding?.demoSeedEnabled !== true;
@@ -247,25 +314,35 @@ function renderAuth(message = "") {
   if (!runtimeConfig.auth?.enabled) {
     els.authForm.hidden = true;
     els.logoutBtn.hidden = true;
-    els.authSession.textContent = "Local demo";
-    els.authHelp.textContent = "Local mode keeps account actions scaffolded without contacting Supabase Auth.";
+    setText(els.authSession, "Local demo session");
+    setText(els.authHelp, "Local demo keeps account actions available without contacting Supabase Auth.");
+    setText(els.railSessionStatus, "Demo session");
+    setText(els.railSessionHelp, "Local preview with private-account controls simulated.");
+    updateShellVisibility();
     return;
   }
   if (authSession?.access_token) {
     els.authForm.hidden = true;
     els.logoutBtn.hidden = false;
-    els.authSession.textContent = authSession.user?.email || authSession.email || "Signed in";
-    els.authHelp.textContent = "Session active. Account settings and export requests stay backend-mediated.";
+    const email = authSession.user?.email || authSession.email || "Signed in";
+    setText(els.authSession, email);
+    setText(els.authHelp, "Session active. Account settings and export requests stay private to your session.");
+    setText(els.railSessionStatus, email);
+    setText(els.railSessionHelp, "StudentOS workspace is open.");
+    updateShellVisibility();
     return;
   }
   els.authForm.hidden = false;
   els.logoutBtn.hidden = true;
-  els.authSession.textContent = message || "Auth ready";
-  els.authHelp.textContent = "Sign up may require email verification depending on the StudentOS Auth project settings.";
+  setText(els.authSession, message || "Ready to sign in");
+  setText(els.authHelp, "Create an account or sign in. Email verification may be required.");
+  setText(els.railSessionStatus, "Sign in required");
+  setText(els.railSessionHelp, "Use the secure sign-in screen to open StudentOS.");
+  updateShellVisibility();
 }
 
 async function signInWithPassword(event) {
-  event.preventDefault();
+  event?.preventDefault();
   renderAuth("Signing in...");
   const session = await authRequest("/token?grant_type=password", {
     email: els.authEmail.value,
@@ -273,6 +350,9 @@ async function signInWithPassword(event) {
   });
   storeSession(session);
   renderAuth();
+  if (["#login", "#signup"].includes(window.location.hash.toLowerCase())) {
+    history.replaceState(null, "", "#app");
+  }
   await loadBootstrap();
 }
 
@@ -284,6 +364,9 @@ async function signUpWithPassword() {
   });
   if (session.access_token) {
     storeSession(session);
+    if (["#login", "#signup"].includes(window.location.hash.toLowerCase())) {
+      history.replaceState(null, "", "#app");
+    }
     await loadBootstrap();
   }
   renderAuth(session.access_token ? "" : "Check your email to verify this StudentOS account.");
@@ -297,7 +380,9 @@ async function logout() {
   storeSession(null);
   accountSnapshot = null;
   renderAuth();
-  await loadBootstrap();
+  if (!authGateActive()) {
+    await loadBootstrap();
+  }
 }
 
 async function requestPasswordReset(email, target = els.passwordResetResult) {
@@ -431,13 +516,51 @@ function sourceHealthLabel(source, latestJob, embeddedCount) {
   return humanize(source.status || source.extractionStatus || "registered");
 }
 
+function backendModeLabel(mode) {
+  if (mode === "supabase") return "Cloud sync";
+  if (mode === "mock") return "Demo mode";
+  return humanize(mode || "unknown mode");
+}
+
+function sourceStatusLabel(value) {
+  const status = String(value || "").toLowerCase();
+  if (status === "indexed" || status === "completed") return "Ready";
+  if (status === "queued") return "Waiting to index";
+  if (status === "processing" || status === "extracting") return "Indexing";
+  if (status === "needs_ocr") return "Needs review";
+  if (status === "failed") return "Needs attention";
+  if (status === "registered") return "Saved";
+  return humanize(value || "Saved");
+}
+
+function indexedSectionsLabel(count) {
+  return `${count} indexed section${count === 1 ? "" : "s"}`;
+}
+
+function sourceVisibilityLabel(source) {
+  return source?.isPrivate ? "Private" : "Private to your account";
+}
+
+function retrievalModeLabel(mode) {
+  const value = String(mode || "").toLowerCase();
+  if (!value) return "";
+  if (value.includes("uploaded") || value.includes("source") || value.includes("rag")) return "uses your materials";
+  if (value.includes("web")) return "outside material";
+  return "material check";
+}
+
+function providerLabel(provider) {
+  if (!provider) return "";
+  return provider === "mock" ? "Demo response" : "AI response";
+}
+
 function buildSourceAiPrompt(source, course, embeddedCount) {
   return [
     `Explain this source for study use: ${source.title}.`,
     `Course: ${course?.title || "Course not set"}.`,
     `Type: ${sourceTypeLabel(source)}.`,
-    `Embedded chunks: ${embeddedCount}.`,
-    "Use uploaded source context where available and call out anything not covered.",
+    `Indexed sections: ${embeddedCount}.`,
+    "Use my uploaded materials where available and call out anything not covered.",
   ].join(" ");
 }
 
@@ -455,6 +578,8 @@ function sourceSearchText(source, course, latestJob, embeddedCount) {
     source.extractedSnippet,
     source.extractionError,
     sourceHealthLabel(source, latestJob, embeddedCount),
+    indexedSectionsLabel(embeddedCount),
+    sourceVisibilityLabel(source),
     latestJob?.status,
     latestJob?.jobType,
     latestJob?.lastError,
@@ -539,11 +664,7 @@ function render() {
   els.studyRhythm.textContent = humanize(state.studentProfile.studyRhythm || "steady");
   els.creditEligibility.textContent = humanize(state.studentProfile.convenienceEligibility || "learning first");
   const backendPersistence = runtimeConfig.persistence || {};
-  els.connectorStatus.textContent = backendPersistence.mode === "supabase"
-    ? "Supabase mode"
-    : backendPersistence.mode === "mock"
-      ? "Mock mode"
-      : humanize(backendPersistence.mode || state.persistence?.mode || "unknown mode");
+  els.connectorStatus.textContent = backendModeLabel(backendPersistence.mode || state.persistence?.mode || "unknown mode");
   renderClassroomPanel();
   renderDashboardSummary();
   renderRoadmap();
@@ -922,29 +1043,29 @@ function renderSources() {
     <article class="source-card library-health-card">
       <div class="library-health-head">
         <div>
-          <span class="workspace-label">Library health</span>
+          <span class="workspace-label">Library status</span>
           <strong>${indexedSources.length}/${activeSources.length} sources indexed</strong>
-          <p>Background extraction and reindex work stays private and backend-run.</p>
+          <p>StudentOS indexes your materials privately so they are ready for review and citation.</p>
         </div>
-        <button class="mini-action" type="button" data-retry-failed-jobs>Retry failed</button>
+        <button class="mini-action" type="button" data-retry-failed-jobs>Retry issues</button>
       </div>
       <div class="source-health-grid">
         <span><strong>${health.counts?.queued || 0}</strong> queued</span>
-        <span><strong>${health.counts?.processing || 0}</strong> processing</span>
-        <span><strong>${failedCount}</strong> failed</span>
-        <span><strong>${stuckCount}</strong> stuck</span>
-        <span><strong>${health.counts?.completed || 0}</strong> completed</span>
+        <span><strong>${health.counts?.processing || 0}</strong> indexing</span>
+        <span><strong>${failedCount}</strong> needs attention</span>
+        <span><strong>${stuckCount}</strong> delayed</span>
+        <span><strong>${health.counts?.completed || 0}</strong> ready</span>
         <span><strong>${needsAttentionCount}</strong> source issue(s)</span>
       </div>
       <div class="tag-row">
-        ${tag(`${health.averageProcessingAgeSeconds || 0}s avg processing`, "source")}
+        ${tag(health.averageProcessingAgeSeconds ? "Indexing active" : "Ready to index", "source")}
         ${failedCount || stuckCount ? tag("attention needed", "urgent") : tag("healthy", "source")}
-        ${tag("not public", "urgent")}
+        ${tag("Private", "source")}
       </div>
       ${health.processingJobs?.length || health.failedJobs?.length || (health.failedReasons && Object.keys(health.failedReasons).length) ? `
         <details class="source-technical-details">
-          <summary>Queue details</summary>
-          ${health.processingJobs?.length ? `<p>${health.processingJobs.map((job) => escapeHtml(`${humanize(job.jobType)} ${job.id}`)).join(", ")}</p>` : ""}
+          <summary>Indexing details</summary>
+          ${health.processingJobs?.length ? `<p>${health.processingJobs.map((job) => escapeHtml(humanize(job.jobType))).join(", ")}</p>` : ""}
           ${health.failedJobs?.length ? `<p>${health.failedJobs.map((job) => escapeHtml(`${humanize(job.jobType)}: ${humanize(job.lastError || "failed")}`)).join(" / ")}</p>` : ""}
           ${health.failedReasons && Object.keys(health.failedReasons).length ? `<p>${Object.entries(health.failedReasons).map(([reason, count]) => escapeHtml(`${humanize(reason)} (${count})`)).join(" / ")}</p>` : ""}
         </details>
@@ -970,19 +1091,19 @@ function renderSources() {
           <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}">Explain source</button>
         </div>
         <div class="source-health-grid source-card-metrics">
-          <span><strong>${escapeHtml(healthLabel)}</strong> status</span>
-          <span><strong>${embeddedCount}</strong> embedded chunks</span>
+          <span><strong>${escapeHtml(sourceStatusLabel(healthLabel))}</strong> status</span>
+          <span><strong>${embeddedCount}</strong> indexed sections</span>
           <span><strong>${source.citationLabel ? "ready" : "pending"}</strong> citation</span>
-          <span><strong>${source.isPrivate ? "private" : "scoped"}</strong> visibility</span>
+          <span><strong>${escapeHtml(sourceVisibilityLabel(source))}</strong> visibility</span>
         </div>
         <div class="tag-row">
-          ${tag(humanize(source.status || source.extractionStatus || source.storageMode), source.extractionError ? "urgent" : "")}
-          ${source.isPrivate ? tag("private", "source") : tag(humanize(source.storageMode))}
-          ${tag("source-grounded", "source")}
-          ${embeddedCount ? tag(`${embeddedCount} chunks`, "source") : ""}
+          ${tag(sourceStatusLabel(source.status || source.extractionStatus || source.storageMode), source.extractionError ? "urgent" : "")}
+          ${tag(sourceVisibilityLabel(source), "source")}
+          ${tag("uses your materials", "source")}
+          ${embeddedCount ? tag(indexedSectionsLabel(embeddedCount), "source") : ""}
           ${source.ocrRequired || source.status === "needs_ocr" ? tag("OCR needed", "urgent") : ""}
-          ${latestJob ? tag(`${humanize(latestJob.jobType)} ${humanize(latestJob.status)}`, latestJob.status === "failed" ? "urgent" : "source") : ""}
-          ${source.webFallbackAllowed ? tag("web fallback labeled", "source") : tag("material only", "source")}
+          ${latestJob ? tag(sourceStatusLabel(latestJob.status), latestJob.status === "failed" ? "urgent" : "source") : ""}
+          ${source.webFallbackAllowed ? tag("outside material labeled", "source") : tag("your materials only", "source")}
         </div>
         ${source.extractionSummary ? `<p>${escapeHtml(source.extractionSummary)}</p>` : ""}
         ${source.extractionError || latestJob?.lastError ? `<p class="warning-copy">${escapeHtml(humanize(source.extractionError || latestJob.lastError))}</p>` : ""}
@@ -998,14 +1119,14 @@ function renderSources() {
     <article class="source-card source-empty-card">
       <strong>No source materials yet</strong>
       <p>Upload a private source to begin building the StudentOS memory layer.</p>
-      <div class="tag-row">${tag("private upload ready", "source")}${tag("not public", "urgent")}</div>
+      <div class="tag-row">${tag("private upload ready", "source")}${tag("Private", "source")}</div>
     </article>
   `;
   const noMatches = activeSources.length && search && !sourceCards.trim() ? `
     <article class="source-card source-empty-card">
       <strong>No matching sources</strong>
       <p>Search checks titles, courses, source types, snippets, citation labels, and indexing status from the loaded library.</p>
-      <div class="tag-row">${tag("client-side search", "source")}</div>
+      <div class="tag-row">${tag("searching this library", "source")}</div>
     </article>
   ` : "";
   els.sourceList.innerHTML = queueCard + (sourceCards || noMatches || noSources);
@@ -1152,7 +1273,7 @@ function renderAccount() {
       ${tag(`subscription ${humanize(quota.subscription?.status || "free")}`, quota.subscription?.status === "past_due" ? "medium" : "source")}
       ${quota.subscription?.renewalAt ? tag(`renews ${formatDate(quota.subscription.renewalAt)}`, "source") : ""}
     </div>
-    <p>Progress visibility is student-only by default. Future parent, teacher, and institution views require explicit consent and scoped roles.</p>
+    <p>Progress visibility is student-only by default. Future parent, teacher, and institution views require explicit consent and clear permissions.</p>
   `;
   els.quotaPanel.innerHTML = `
     <div class="plan-card">
@@ -1162,14 +1283,13 @@ function renderAccount() {
         ${plan.features?.essentialLearning ? tag("essential learning included", "source") : ""}
         ${plan.features?.advancedAutomation ? tag("advanced automation", "source") : tag("automation limited", "medium")}
         ${plan.features?.groupSpaces ? tag("group spaces", "source") : ""}
-        ${tag(billing.provider || "none", "source")}
         ${tag(billing.liveChargesEnabled ? "launch review required" : "payments inactive", "medium")}
       </div>
     </div>
     ${quotaBar("AI requests", usage.aiRequestsToday, limits.aiRequestsPerDay || 0)}
     ${quotaBar("Sources", usage.sourceCount, limits.maxSources || 0)}
     ${quotaBar("Courses", usage.courses, limits.maxCourses || 0)}
-    ${quotaBar("Worker jobs", usage.workerJobsToday, limits.workerJobsPerDay || 0)}
+    ${quotaBar("Background work", usage.workerJobsToday, limits.workerJobsPerDay || 0)}
     ${quotaBar("Storage", usage.storageBytes, limits.storageBytes || 0, formatBytes)}
   `;
   renderLifecycle(account.lifecycle || {});
@@ -1377,13 +1497,12 @@ function renderAiPayload(result) {
     <p>${escapeHtml(result.answer)}</p>
     <div class="tag-row">
       ${result.coverage?.status ? tag(humanize(result.coverage.status), toneForCoverage(result.coverage.status)) : ""}
-      ${result.provider ? tag(result.provider, result.provider === "mock" ? "medium" : "source") : ""}
-      ${result.modelUsed ? tag(result.modelUsed, "source") : ""}
-      ${result.grounding?.retrievalMode ? tag(result.grounding.retrievalMode, "source") : ""}
-      ${result.grounding?.insufficientContext ? tag("limited source context", "urgent") : ""}
-      ${result.grounding?.confidence?.label ? tag(`${result.grounding.confidence.label} retrieval`, result.grounding.confidence.lowConfidence ? "urgent" : "source") : ""}
+      ${result.provider ? tag(providerLabel(result.provider), result.provider === "mock" ? "medium" : "source") : ""}
+      ${result.grounding?.retrievalMode ? tag(retrievalModeLabel(result.grounding.retrievalMode), "source") : ""}
+      ${result.grounding?.insufficientContext ? tag("limited material context", "urgent") : ""}
+      ${result.grounding?.confidence?.label ? tag(`${result.grounding.confidence.label} material match`, result.grounding.confidence.lowConfidence ? "urgent" : "source") : ""}
       ${(result.sourceLabels || []).map((source) => tag(source.label, "source")).join("")}
-      ${result.webFallback?.allowed ? tag(result.webFallback.label, "medium") : ""}
+      ${result.webFallback?.allowed ? tag("outside material", "medium") : ""}
     </div>
     ${result.grounding?.insufficiencyReason ? `<p>${escapeHtml(result.grounding.insufficiencyReason)}</p>` : ""}
     ${extra.join("")}
@@ -1392,7 +1511,7 @@ function renderAiPayload(result) {
 
 async function runAi(event) {
   event.preventDefault();
-  els.aiResponse.innerHTML = `<p>Thinking with source context...</p>`;
+  els.aiResponse.innerHTML = `<p>Checking your materials...</p>`;
   try {
     const result = await api("/api/ai/verb", {
       method: "POST",
@@ -1404,7 +1523,7 @@ async function runAi(event) {
       <strong>AI response unavailable</strong>
       <p>${escapeHtml(error.message || "StudentOS could not finish this grounded response. Try again after checking source indexing.")}</p>
       <div class="tag-row">
-        ${tag("safe error", "medium")}
+        ${tag("try again", "medium")}
         ${tag("citations not invented", "source")}
       </div>
     `;
@@ -1461,7 +1580,7 @@ async function analyzeAssignmentFlow(assignmentId) {
       <strong>Assignment flow unavailable</strong>
       <p>${escapeHtml(error.message || "StudentOS could not analyze this assignment. Refresh synced data and try again.")}</p>
       <div class="tag-row">
-        ${tag("safe error", "medium")}
+        ${tag("try again", "medium")}
         ${tag("no submission", "urgent")}
       </div>
     `;
@@ -1562,7 +1681,7 @@ async function addSource(event) {
       <strong>${escapeHtml(result.material.title)}</strong>
       <p>${escapeHtml(result.material.extractionSummary || result.extractionSummary || "Private source registered.")}</p>
       ${result.material.extractionError ? `<p>${escapeHtml(humanize(result.material.extractionError))}</p>` : ""}
-      <div class="tag-row">${tag("private", "source")}${tag(result.material.status || result.status)}${tag(`${result.material.chunkCount || result.chunkCount || 0} chunks`, "source")}${tag("not public", "urgent")}</div>
+      <div class="tag-row">${tag("Private", "source")}${tag(sourceStatusLabel(result.material.status || result.status))}${tag(indexedSectionsLabel(result.material.chunkCount || result.chunkCount || 0), "source")}${tag("Private to your account", "source")}</div>
     `;
     await loadBootstrap();
   } catch (error) {
@@ -1570,9 +1689,9 @@ async function addSource(event) {
       <strong>Source upload unavailable</strong>
       <p>${escapeHtml(error.message || "StudentOS could not finish this source upload. Check storage and try again.")}</p>
       <div class="tag-row">
-        ${tag("safe error", "medium")}
-        ${tag("private", "source")}
-        ${tag("not public", "urgent")}
+        ${tag("try again", "medium")}
+        ${tag("Private", "source")}
+        ${tag("Private to your account", "source")}
       </div>
     `;
   }
@@ -1586,7 +1705,7 @@ async function deleteSource(sourceId) {
   els.sourceResult.innerHTML = `
     <strong>Source deleted</strong>
     <p>${escapeHtml(result.sourceId)} was removed from the active library.</p>
-    <div class="tag-row">${tag("private delete", "source")}${tag("not public", "urgent")}</div>
+    <div class="tag-row">${tag("private delete", "source")}${tag("Private", "source")}</div>
   `;
   await loadBootstrap();
 }
@@ -1599,21 +1718,21 @@ async function retrySourceIndex(sourceId) {
   });
   els.sourceResult.innerHTML = `
     <strong>${escapeHtml(result.deduped ? "Reindex already queued" : "Reindex queued")}</strong>
-    <p>${escapeHtml(result.job.id)}</p>
-    <div class="tag-row">${tag(humanize(result.job.status), "source")}${tag(humanize(result.job.jobType), "source")}</div>
+    <p>StudentOS will refresh this source privately.</p>
+    <div class="tag-row">${tag(sourceStatusLabel(result.job.status), "source")}${tag("indexing refresh", "source")}</div>
   `;
   await loadBootstrap();
 }
 
 async function retryFailedJobs() {
-  els.sourceResult.innerHTML = `<p>Retrying failed jobs...</p>`;
+  els.sourceResult.innerHTML = `<p>Retrying indexing issues...</p>`;
   const result = await api("/api/jobs/retry-failed", {
     method: "POST",
     body: JSON.stringify({}),
   });
   els.sourceResult.innerHTML = `
-    <strong>${escapeHtml(`${result.retried} failed job(s) retried`)}</strong>
-    <div class="tag-row">${tag(`${result.queueHealth?.counts?.queued || 0} queued`, "source")}${tag("backend only", "source")}</div>
+    <strong>${escapeHtml(`${result.retried} issue(s) retried`)}</strong>
+    <div class="tag-row">${tag(`${result.queueHealth?.counts?.queued || 0} queued`, "source")}${tag("handled privately", "source")}</div>
   `;
   await loadBootstrap();
 }
@@ -1731,14 +1850,14 @@ async function requestDataExport() {
     els.accountActionResult.innerHTML = `
       <strong>Export request created</strong>
       <p>${escapeHtml(result.request.id)} / ${escapeHtml(humanize(result.request.status))}</p>
-      <div class="tag-row">${tag("queued for private packaging", "medium")}${tag("backend only", "source")}</div>
+      <div class="tag-row">${tag("queued for private packaging", "medium")}${tag("handled privately", "source")}</div>
     `;
     renderAccount();
   } catch (error) {
     els.accountActionResult.innerHTML = `
       <strong>Export request unavailable</strong>
       <p>${escapeHtml(error.message || "StudentOS could not create this export request. Try again after checking account persistence.")}</p>
-      <div class="tag-row">${tag("safe error", "medium")}${tag("backend only", "source")}</div>
+      <div class="tag-row">${tag("try again", "medium")}${tag("handled privately", "source")}</div>
     `;
   }
 }
@@ -1780,7 +1899,7 @@ async function requestAccountDeletion() {
   els.accountActionResult.innerHTML = `
     <strong>Deletion request recorded</strong>
     <p>${escapeHtml(result.request.id)} / grace period until ${escapeHtml(formatDate(result.request.gracePeriodEndsAt))}</p>
-    <div class="tag-row">${tag("no immediate deletion", "urgent")}${tag("manual review", "medium")}${tag("backend only", "source")}</div>
+    <div class="tag-row">${tag("no immediate deletion", "urgent")}${tag("manual review", "medium")}${tag("handled privately", "source")}</div>
   `;
   renderAccount();
 }
@@ -1803,7 +1922,7 @@ async function requestDeletionDryRun(requestId) {
     <strong>Deletion dry run ready</strong>
     <p>No rows or files were deleted. This preview covers ${escapeHtml(summary.databaseRows || 0)} database row(s) and ${escapeHtml(summary.storageObjects || 0)} private storage object(s). ${escapeHtml(diffCopy)}</p>
     <div class="tag-row">
-      ${tag(`${summary.sourceChunks || 0} chunks`, "source")}
+      ${tag(indexedSectionsLabel(summary.sourceChunks || 0), "source")}
       ${tag(`${summary.memoryItems || 0} memory items`, "source")}
       ${tag(`${summary.embeddingMetadata || 0} embeddings`, "source")}
       ${tag(`${summary.backgroundJobs || 0} jobs`, "source")}
@@ -1840,7 +1959,6 @@ async function previewPlanUpgrade(planId = "pro") {
     <strong>${escapeHtml(humanize(result.status))}</strong>
     <p>${escapeHtml(result.message)}</p>
     <div class="tag-row">
-      ${tag(humanize(result.provider), "source")}
       ${tag(humanize(result.planId), "source")}
       ${tag(result.redirectAllowed ? "redirect allowed" : "no payment redirect", result.redirectAllowed ? "medium" : "source")}
     </div>
@@ -1857,8 +1975,7 @@ async function previewBillingManagement() {
     <strong>${escapeHtml(humanize(result.status))}</strong>
     <p>${escapeHtml(result.message)}</p>
     <div class="tag-row">
-      ${tag(humanize(result.provider), "source")}
-      ${tag(result.redirectAllowed ? "redirect allowed" : "no provider redirect", result.redirectAllowed ? "medium" : "source")}
+      ${tag(result.redirectAllowed ? "redirect allowed" : "no payment redirect", result.redirectAllowed ? "medium" : "source")}
     </div>
   `;
 }
@@ -1910,6 +2027,7 @@ function wireEvents() {
       closeAiDrawer();
     }
   });
+  window.addEventListener("hashchange", syncAuthHash);
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-ai-open]");
     if (button) {
@@ -1964,14 +2082,25 @@ function wireEvents() {
       });
     }
   });
-  els.authForm.addEventListener("submit", signInWithPassword);
+  document.querySelectorAll("[data-auth-mode]").forEach((button) => {
+    button.addEventListener("click", () => setAuthShellMode(button.dataset.authMode));
+  });
+  els.authForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const action = authShellMode === "signup" ? signUpWithPassword() : signInWithPassword();
+    action.catch((error) => renderAuth(error.message));
+  });
   els.signupBtn.addEventListener("click", () => {
+    if (authShellMode !== "signup") {
+      setAuthShellMode("signup");
+      els.authEmail?.focus();
+      return;
+    }
     signUpWithPassword().catch((error) => renderAuth(error.message));
   });
   els.passwordResetBtn.addEventListener("click", () => {
-    setView("account");
-    requestPasswordReset(els.authEmail.value, els.passwordResetResult).catch((error) => {
-      els.passwordResetResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    requestPasswordReset(els.authEmail.value, els.authMessage).catch((error) => {
+      els.authMessage.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
     });
   });
   els.logoutBtn.addEventListener("click", () => {
@@ -2065,7 +2194,10 @@ function wireEvents() {
 
 wireEvents();
 loadRuntimeConfig()
-  .then(loadBootstrap)
+  .then(() => {
+    if (authGateActive()) return null;
+    return loadBootstrap();
+  })
   .catch((error) => {
     els.aiResponse.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
   });

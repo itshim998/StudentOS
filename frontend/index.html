@@ -7,13 +7,69 @@
   <link rel="stylesheet" href="styles/main.css">
 </head>
 <body>
-  <div class="app-shell">
+  <section id="public-auth-shell" class="public-auth-shell" aria-labelledby="auth-shell-title" hidden>
+    <div class="public-auth-content">
+      <div class="public-auth-brand">
+        <div class="brand-lockup auth-brand-lockup">
+          <div class="brand-mark" aria-hidden="true">SO</div>
+          <div>
+            <h1>StudentOS</h1>
+            <p>Academic operating layer</p>
+          </div>
+        </div>
+        <div class="auth-hero-copy">
+          <p class="eyebrow">Private study workspace</p>
+          <h2>Plan the day, keep course context, and use your materials when AI helps.</h2>
+          <p>Sign in to continue your StudentOS workspace. Your courses, uploaded materials, study queue, Classroom imports, and account controls stay behind your session.</p>
+        </div>
+        <div class="auth-value-strip" aria-label="StudentOS focus areas">
+          <span>Today command center</span>
+          <span>Course workspaces</span>
+          <span>Private source library</span>
+        </div>
+      </div>
+
+      <section class="auth-panel public-auth-panel" id="auth-panel" aria-label="StudentOS session">
+        <div class="auth-panel-heading">
+          <p class="eyebrow" id="auth-mode-label">Session</p>
+          <h2 id="auth-shell-title">Sign in to StudentOS</h2>
+          <p id="auth-shell-copy">Use the email and password for your StudentOS account.</p>
+        </div>
+        <div class="auth-mode-tabs" aria-label="Authentication mode">
+          <button class="auth-mode-tab active" type="button" data-auth-mode="signin" aria-pressed="true">Existing account</button>
+          <button class="auth-mode-tab" type="button" data-auth-mode="signup" aria-pressed="false">New account</button>
+        </div>
+        <form id="auth-form" class="auth-form public-auth-form">
+          <label>
+            Email
+            <input id="auth-email" name="email" type="email" placeholder="email@student.com" autocomplete="email">
+          </label>
+          <label>
+            Password
+            <input id="auth-password" name="password" type="password" placeholder="password" autocomplete="current-password">
+          </label>
+          <div class="auth-actions">
+            <button class="primary-button" type="submit" id="signin-btn" data-auth-action="signin">Sign in</button>
+            <button class="secondary-button" type="button" id="signup-btn">Create account</button>
+          </div>
+          <button class="text-button subtle-action" type="button" id="password-reset-btn"><span id="reset-password-btn">Reset password</span></button>
+        </form>
+        <div id="auth-result" class="auth-result" aria-live="polite">
+          <div id="auth-session" class="auth-session"></div>
+          <div id="auth-help" class="auth-help">Email verification and recovery are ready for StudentOS Auth.</div>
+          <div id="auth-message" class="auth-message"></div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <div class="app-shell" id="app-shell">
     <aside class="rail" aria-label="Primary navigation">
       <div class="brand-lockup">
         <div class="brand-mark" aria-hidden="true">SO</div>
         <div>
           <h1>StudentOS</h1>
-          <p>Powered by SentIQGPT</p>
+          <p>Academic operating layer</p>
         </div>
       </div>
       <nav class="nav-stack" aria-label="Views">
@@ -42,24 +98,15 @@
           <span>Account</span>
         </button>
       </nav>
-      <section class="auth-panel" id="auth-panel" aria-label="StudentOS session">
+      <section class="rail-session-card" aria-label="StudentOS session">
         <p class="eyebrow">Session</p>
-        <form id="auth-form" class="auth-form">
-          <input id="auth-email" name="email" type="email" placeholder="email@student.com" autocomplete="email">
-          <input id="auth-password" name="password" type="password" placeholder="password" autocomplete="current-password">
-          <div class="auth-actions">
-            <button class="secondary-button" type="submit" data-auth-action="signin">Sign in</button>
-            <button class="secondary-button" type="button" id="signup-btn">Sign up</button>
-          </div>
-          <button class="text-button subtle-action" type="button" id="password-reset-btn">Reset password</button>
-        </form>
-        <div id="auth-session" class="auth-session"></div>
-        <div id="auth-help" class="auth-help">Email verification and recovery are ready for the StudentOS Auth project.</div>
-        <button id="logout-btn" class="secondary-button wide auth-logout" type="button" hidden>Logout</button>
+        <strong id="rail-session-status">Demo session</strong>
+        <p id="rail-session-help">No sign in needed for local preview.</p>
+        <button id="logout-btn" class="secondary-button wide auth-logout" type="button" hidden>Sign out</button>
       </section>
       <div class="rail-footer">
         <span class="status-dot" aria-hidden="true"></span>
-        <span id="connector-status">Mock mode</span>
+        <span id="connector-status">Demo mode</span>
       </div>
     </aside>
 
@@ -304,8 +351,8 @@ Thu|19:00|English writing sprint|English</textarea>
           <section class="memory-brief-panel" aria-label="Memory overview">
             <div>
               <p class="eyebrow">Memory</p>
-              <h3>Source-grounded academic memory</h3>
-              <p>Upload private materials, browse the source library, and keep indexing health visible without turning queue internals into the main experience.</p>
+              <h3>Your academic memory</h3>
+              <p>Upload private materials, browse the source library, and keep library status visible without making background work the main experience.</p>
             </div>
             <div class="memory-brief-grid" aria-label="Memory actions">
               <span>Upload source material</span>
@@ -336,7 +383,7 @@ Thu|19:00|English writing sprint|English</textarea>
                   <h3>Add Source Material</h3>
                 </div>
               </div>
-              <p class="surface-intro">Files stay private to StudentOS and are used for source-grounded explanations, citations, review, and course coverage.</p>
+              <p class="surface-intro">Files stay private to StudentOS and help AI answer from your materials, cite sources, support review, and show course coverage.</p>
               <form id="source-form" class="form-grid source-upload-form">
                 <label>
                   Title
@@ -352,7 +399,7 @@ Thu|19:00|English writing sprint|English</textarea>
                 </label>
                 <div class="upload-privacy-copy">
                   <strong>Private source upload</strong>
-                  <p>Accepted files keep the existing backend handling. StudentOS will label source use and avoid making private material public.</p>
+                  <p>Accepted files keep the existing upload handling. StudentOS marks private material clearly and only uses it inside your account.</p>
                 </div>
                 <button class="primary-button" type="submit">Upload private source</button>
               </form>
