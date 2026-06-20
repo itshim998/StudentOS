@@ -178,7 +178,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#dashboard-summary")).toContainText("Goal");
   await page.getByRole("button", { name: "Plan today" }).click();
   await expect(page.locator("#ai-panel")).toBeVisible();
-  await expect(page.locator("#ai-message")).toHaveValue(/Plan today from my study queue/i);
+  await expect(page.locator("#ai-message")).toHaveValue(/Plan today from my tasks/i);
   await closeAiDrawer(page);
 
   for (const view of ["Today", "Setup", "Courses", "Memory", "Studio", "Account"]) {
@@ -200,7 +200,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
 
   await clickNav(page, "Courses");
   await expect(page.locator("#courses-grid")).toContainText("Workspace preview");
-  await expect(page.locator("#courses-grid")).toContainText("Source coverage");
+  await expect(page.locator("#courses-grid")).toContainText("Materials");
   await expect(page.locator("#courses-grid")).toContainText("Next action");
   await page.locator("#courses-grid").getByRole("button", { name: "Ask about course" }).first().click();
   await expect(page.locator("#ai-panel")).toBeVisible();
@@ -215,10 +215,10 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await page.locator("#source-file").setInputFiles(path.join(FIXTURE_DIR, "quadratics-note.txt"));
   await page.getByRole("button", { name: "Upload private source" }).click();
   await expect(page.locator("#source-result")).toContainText("E2E quadratics note", { timeout: 15_000 });
-  await expect(page.locator("#source-result")).toContainText(/indexed section/i);
+  await expect(page.locator("#source-result")).toContainText(/source section/i);
   await expect(page.locator("#source-result")).toContainText("Private");
-  await expect(page.locator("#source-list")).toContainText("Library status");
-  await expect(page.locator("#source-list")).toContainText("uses your materials");
+  await expect(page.locator("#source-list")).toContainText("Sources ready");
+  await expect(page.locator("#source-list")).toContainText(/Uses your materials/i);
   await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
   await page.locator("#source-search-input").fill("E2E quadratics");
   await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
@@ -236,7 +236,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
     await page.locator("#ai-message").fill(`${verb}: use the uploaded quadratics source in one concise response.`);
     await page.locator("#ai-form").getByRole("button", { name: "Run" }).click();
     await waitForNotLoading(page.locator("#ai-response"), "Checking your materials");
-    await expect(page.locator("#ai-response")).toContainText(/uploaded material|Cited snippets|source|fallback/i, { timeout: 20_000 });
+    await expect(page.locator("#ai-response")).toContainText(/uploaded material|Cited snippets|source|reference/i, { timeout: 20_000 });
   }
   await closeAiDrawer(page);
 
@@ -283,9 +283,9 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await page.getByRole("button", { name: "Request account deletion" }).click();
   await expect(page.locator("#account-action-result")).toContainText("Deletion request recorded");
   await expect(page.locator("#account-action-result")).toContainText("Grace period active");
-  await page.locator("#account-lifecycle-status").getByRole("button", { name: "Preview deletion review" }).click();
-  await expect(page.locator("#account-action-result")).toContainText("Deletion review preview ready");
-  await expect(page.locator("#account-action-result")).toContainText("No data was deleted");
+  await page.locator("#account-lifecycle-status").getByRole("button", { name: "Preview deletion safety" }).click();
+  await expect(page.locator("#account-action-result")).toContainText("Deletion safety preview ready");
+  await expect(page.locator("#account-action-result")).toContainText("No data has been deleted yet");
   await page.getByRole("button", { name: "Preview sharing safeguards" }).click();
   await expect(page.locator("#invitation-result")).toContainText(/Access inactive|Safeguards previewed|Consent required/i);
   await page.getByRole("button", { name: "Upgrade" }).click();

@@ -418,7 +418,7 @@ async function requestPasswordReset(email, target = els.passwordResetResult) {
     <div class="tag-row">
       ${tag(humanize(result.mode), "source")}
       ${tag(result.resetEmailRequested ? "reset email requested" : "preview ready", result.resetEmailRequested ? "source" : "medium")}
-      ${tag("secure request", "source")}
+      ${tag("protected request", "source")}
     </div>
   `;
 }
@@ -528,7 +528,7 @@ function sourceTypeLabel(source) {
 function sourceHealthLabel(source, latestJob, embeddedCount) {
   if (source.extractionError || latestJob?.status === "failed") return "needs attention";
   if (source.ocrRequired || source.status === "needs_ocr") return "OCR needed";
-  if (sourceIsIndexed(source) || embeddedCount > 0) return "indexed";
+  if (sourceIsIndexed(source) || embeddedCount > 0) return "Ready";
   return humanize(source.status || source.extractionStatus || "registered");
 }
 
@@ -550,16 +550,31 @@ function classroomModeLabel(value) {
 function sourceStatusLabel(value) {
   const status = String(value || "").toLowerCase();
   if (status === "indexed" || status === "completed") return "Ready";
-  if (status === "queued") return "Waiting to index";
-  if (status === "processing" || status === "extracting") return "Indexing";
+  if (status === "queued") return "Saved privately";
+  if (status === "processing" || status === "extracting") return "Preparing source";
   if (status === "needs_ocr") return "Needs review";
-  if (status === "failed") return "Needs attention";
-  if (status === "registered") return "Saved";
-  return humanize(value || "Saved");
+  if (status === "failed") return "Needs review";
+  if (status === "registered") return "Saved privately";
+  return humanize(value || "Saved privately");
 }
 
 function indexedSectionsLabel(count) {
-  return `${count} indexed section${count === 1 ? "" : "s"}`;
+  return `${count} source section${count === 1 ? "" : "s"}`;
+}
+
+function studyBreakLabel(value) {
+  const pattern = String(value || "").trim();
+  const match = pattern.match(/^(\d+)\s*\/\s*(\d+)$/);
+  if (match) return `${match[1]} min focus / ${match[2]} min break`;
+  return pattern || "25 min focus / 5 min break";
+}
+
+function studentTaskTitle(title) {
+  return String(title || "")
+    .replace(/^Recover\s+/i, "Review ")
+    .replace(/\bgrouped-data\b/gi, "grouped data")
+    .replace(/\bTODO\b/g, "task")
+    .trim();
 }
 
 function sourceVisibilityLabel(source) {
@@ -570,7 +585,7 @@ function retrievalModeLabel(mode) {
   const value = String(mode || "").toLowerCase();
   if (!value) return "";
   if (value.includes("uploaded") || value.includes("source") || value.includes("rag")) return "uses your materials";
-  if (value.includes("web")) return "outside material";
+  if (value.includes("web")) return "outside reference shown";
   return "material check";
 }
 
@@ -584,7 +599,7 @@ function buildSourceAiPrompt(source, course, embeddedCount) {
     `Explain this source for study use: ${source.title}.`,
     `Course: ${course?.title || "Course not set"}.`,
     `Type: ${sourceTypeLabel(source)}.`,
-    `Indexed sections: ${embeddedCount}.`,
+    `Source sections: ${embeddedCount}.`,
     "Use my uploaded materials where available and call out anything not covered.",
   ].join(" ");
 }
@@ -722,7 +737,7 @@ function renderDashboardSummary() {
   const nextTopic = topicById(nextAction?.topicId || dueSoon?.topicIds?.[0]);
   const nextExam = upcomingExams[0] || null;
   const availability = preferences.dailyStudyAvailabilityMinutes || preferences.dailyStudyWindowMinutes || 90;
-  const doNowTitle = nextAction?.title || dueSoon?.title || "Plan first study block";
+  const doNowTitle = studentTaskTitle(nextAction?.title || dueSoon?.title || "Plan first study block");
   const doNowContext = [
     nextCourse?.title || nextAction?.courseTitle,
     nextTopic?.title || nextAction?.topicTitle,
@@ -738,7 +753,7 @@ function renderDashboardSummary() {
         <div class="tag-row">
           ${tag(doNowContext, "source")}
           ${tag(`${availability} min available`, "source")}
-          ${tag(preferences.studyBreakPattern || "25/5 cycle", "medium")}
+          ${tag(studyBreakLabel(preferences.studyBreakPattern), "medium")}
         </div>
       </div>
       <div class="today-brief-actions">
@@ -768,13 +783,13 @@ function renderDashboardSummary() {
       </article>
       <article class="today-status-item" role="listitem">
         <span>Materials</span>
-        <strong>${indexedSources.length}/${activeSources.length}</strong>
-        <p>${escapeHtml(`${activeSources.filter((source) => source.status === "needs_ocr").length} need OCR`)}</p>
+        <strong>${activeSources.length ? "Sources ready" : "Add sources"}</strong>
+        <p>${escapeHtml(activeSources.filter((source) => source.status === "needs_ocr").length ? "Some need review" : `${indexedSources.length} ready for study`)}</p>
       </article>
       <article class="today-status-item" role="listitem">
         <span>Roadmap</span>
-        <strong>${openRoadmap.length} open</strong>
-        <p>${escapeHtml(`${completedRoadmap.length} completed / ${state.creditBalance || 0} credits`)}</p>
+        <strong>${openRoadmap.length ? `${openRoadmap.length} next` : "Clear"}</strong>
+        <p>${escapeHtml(completedRoadmap.length ? `${completedRoadmap.length} finished` : "Generate or sync work")}</p>
       </article>
     </div>
   `;
@@ -786,7 +801,7 @@ function renderRoadmap() {
     els.roadmapList.innerHTML = `
       <article class="item-card roadmap-empty-card">
         <strong>Queue is clear</strong>
-        <p>Generate a roadmap in Setup or sync Classroom to build today's study queue.</p>
+        <p>Generate a roadmap in Setup or sync Classroom to build today's study list.</p>
         <div class="item-meta">
           ${tag("Today ready", "source")}
           ${tag("student controlled", "source")}
@@ -799,17 +814,19 @@ function renderRoadmap() {
     const topic = topicById(item.topicId);
     const course = courseById(item.courseId);
     const isPrimary = item === actions[0];
-    const prompt = `Plan a focused study block for ${item.title}. Use my course context, due work, timetable, and sources.`;
+    const itemTitle = studentTaskTitle(item.title);
+    const prompt = `Plan a focused study block for ${itemTitle}. Use my course context, due work, timetable, and sources.`;
+    const priorityLabel = item.priority ? (item.priority === "high" ? "Important" : humanize(item.priority)) : "Study focus";
     return `
       <article class="item-card roadmap-card ${isPrimary ? "roadmap-primary" : "roadmap-secondary"}">
         ${isPrimary ? `<span class="queue-label">First up</span>` : ""}
-        <strong>${escapeHtml(item.title)}</strong>
+        <strong>${escapeHtml(itemTitle)}</strong>
         <p>${escapeHtml(item.courseTitle || course?.title || "Course")} / ${escapeHtml(item.topicTitle || topic?.title || "Topic")}</p>
         <div class="item-meta">
-          ${tag(item.priority, item.priority)}
+          ${tag(priorityLabel, item.priority || "source")}
           ${tag(formatDate(item.dueAt))}
           ${tag(humanize(item.kind))}
-          ${item.examPressure ? tag(`Exam pressure: ${item.examPressure}`, item.examPressure === "critical" ? "urgent" : "medium") : ""}
+          ${item.examPressure ? tag(item.examPressure === "critical" ? "Exam soon" : "Exam focus", item.examPressure === "critical" ? "urgent" : "medium") : ""}
         </div>
         ${isPrimary ? `<button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Plan" data-ai-prompt="${escapeHtml(prompt)}">Plan item</button>` : ""}
       </article>
@@ -979,12 +996,14 @@ function renderCourses() {
     const roadmap = getCourseRoadmap(course.id);
     const weakTopics = topics.filter((topic) => (topic.weakSignals || []).length || topic.mastery === "revision_required" || topic.mastery === "not_started");
     const classroomAssignments = assignments.filter((assignment) => assignment.source === "google_classroom");
-    const secureCount = topics.filter((topic) => ["secure", "strong"].includes(topic.mastery)).length;
+    const steadyTopics = topics.filter((topic) => ["secure", "strong"].includes(topic.mastery));
     const revisionCount = topics.filter((topic) => ["revision_required", "not_started"].includes(topic.mastery)).length;
-    const progress = topics.length ? Math.round((secureCount / topics.length) * 100) : 0;
+    const progress = topics.length ? Math.round((steadyTopics.length / topics.length) * 100) : 0;
     const indexedSources = sources.filter(sourceIsIndexed);
     const nextAction = courseNextAction(course, assignments, roadmap);
     const nextActionLabel = nextAction?.dueAt || nextAction?.dueDate ? formatDate(nextAction.dueAt || nextAction.dueDate) : "Open";
+    const sourcesReadyLabel = indexedSources.length ? "Ready" : sources.length ? "Needs review" : "Add materials";
+    const nextActionReadyLabel = nextAction ? "Ready" : "Add work";
     const isClassroom = course.source === "google_classroom";
     const prompt = buildCourseAiPrompt(course, weakTopics, assignments, sources, nextAction);
     return `
@@ -1002,22 +1021,21 @@ function renderCourses() {
           <div class="progress-track" aria-label="Mastery progress">
             <div class="progress-fill" style="width:${progress}%"></div>
           </div>
-          <span>${progress}% secure</span>
+          <span>${steadyTopics.length ? `${steadyTopics.length} topic${steadyTopics.length === 1 ? "" : "s"} on track` : "Revision starting"}</span>
         </div>
 
         <div class="course-signal-grid">
           <span><strong>${weakTopics.length}</strong> weak topics</span>
           <span><strong>${assignments.length}</strong> due items</span>
-          <span><strong>${indexedSources.length}/${sources.length}</strong> sources</span>
-          <span><strong>${roadmap.length}</strong> open actions</span>
+          <span><strong>${escapeHtml(sourcesReadyLabel)}</strong> sources</span>
+          <span><strong>${escapeHtml(nextActionReadyLabel)}</strong> next action</span>
         </div>
 
         <div class="tag-row">
           ${isClassroom ? tag("Google Classroom", "source") : ""}
-          ${course.readOnly ? tag("read only", "source") : ""}
-          ${isClassroom || course.readOnly ? tag("no writeback", "urgent") : ""}
-          ${classroomAssignments.length ? tag(`${classroomAssignments.length} imported assignment(s)`, "medium") : ""}
-          ${revisionCount ? tag(`${revisionCount} revision focus`, "medium") : tag("revision steady", "source")}
+          ${course.readOnly ? tag("Read only", "source") : ""}
+          ${isClassroom || course.readOnly ? tag("No submissions or grade changes", "urgent") : ""}
+          ${revisionCount ? tag("Needs revision", "medium") : tag("On track", "source")}
         </div>
 
         <div class="course-workspace-sections">
@@ -1030,12 +1048,12 @@ function renderCourses() {
             <p>${escapeHtml(assignments.slice(0, 2).map((assignment) => `${assignment.title} (${formatDate(assignment.dueDate)})`).join(" / ") || "No due work listed")}</p>
           </div>
           <div>
-            <span>Source coverage</span>
+            <span>Materials</span>
             <p>${escapeHtml(sources.slice(0, 2).map((source) => source.title).join(" / ") || "Upload course material in Memory")}</p>
           </div>
           <div>
             <span>Next action</span>
-            <p>${escapeHtml(nextAction ? `${nextAction.title} / ${nextActionLabel}` : "Generate or sync work to create a next action")}</p>
+            <p>${escapeHtml(nextAction ? `${studentTaskTitle(nextAction.title)} / ${nextActionLabel}` : "Generate or sync work to create a next action")}</p>
           </div>
         </div>
         ${isClassroom && !classroomAssignments.length ? `<p class="muted-copy">Classroom course imported. Sync again when coursework is published.</p>` : ""}
@@ -1064,37 +1082,36 @@ function renderSources() {
   const search = sourceSearchQuery.trim().toLowerCase();
   const failedCount = health.counts?.failed || 0;
   const stuckCount = health.stuckJobsCount || 0;
+  const reviewCount = failedCount + stuckCount + needsAttentionCount;
   const queueCard = `
     <article class="source-card library-health-card">
       <div class="library-health-head">
         <div>
-          <span class="workspace-label">Library status</span>
-          <strong>${indexedSources.length}/${activeSources.length} sources indexed</strong>
-          <p>StudentOS indexes your materials privately so they are ready for review and citation.</p>
+          <span class="workspace-label">Sources ready</span>
+          <strong>${activeSources.length ? `${indexedSources.length} ready for study` : "No sources yet"}</strong>
+          <p>Your uploads stay private. Sources that need attention are called out without exposing processing details first.</p>
         </div>
-        <button class="mini-action" type="button" data-retry-failed-jobs>Retry issues</button>
-      </div>
-      <div class="source-health-grid">
-        <span><strong>${health.counts?.queued || 0}</strong> queued</span>
-        <span><strong>${health.counts?.processing || 0}</strong> indexing</span>
-        <span><strong>${failedCount}</strong> needs attention</span>
-        <span><strong>${stuckCount}</strong> delayed</span>
-        <span><strong>${health.counts?.completed || 0}</strong> ready</span>
-        <span><strong>${needsAttentionCount}</strong> source issue(s)</span>
+        <button class="mini-action" type="button" data-retry-failed-jobs>Retry source issues</button>
       </div>
       <div class="tag-row">
-        ${tag(health.averageProcessingAgeSeconds ? "Indexing active" : "Ready to index", "source")}
-        ${failedCount || stuckCount ? tag("attention needed", "urgent") : tag("healthy", "source")}
-        ${tag("Private", "source")}
+        ${tag(activeSources.length ? "Saved privately" : "Upload ready", "source")}
+        ${reviewCount ? tag("Needs review", "urgent") : tag("Sources ready", "source")}
+        ${tag("Uses your materials", "source")}
       </div>
-      ${health.processingJobs?.length || health.failedJobs?.length || (health.failedReasons && Object.keys(health.failedReasons).length) ? `
-        <details class="source-technical-details">
-          <summary>Indexing details</summary>
-          ${health.processingJobs?.length ? `<p>${health.processingJobs.map((job) => escapeHtml(humanize(job.jobType))).join(", ")}</p>` : ""}
-          ${health.failedJobs?.length ? `<p>${health.failedJobs.map((job) => escapeHtml(`${humanize(job.jobType)}: ${humanize(job.lastError || "failed")}`)).join(" / ")}</p>` : ""}
-          ${health.failedReasons && Object.keys(health.failedReasons).length ? `<p>${Object.entries(health.failedReasons).map(([reason, count]) => escapeHtml(`${humanize(reason)} (${count})`)).join(" / ")}</p>` : ""}
-        </details>
-      ` : ""}
+      <details class="source-technical-details">
+        <summary>Library details</summary>
+        <div class="source-health-grid">
+          <span><strong>${activeSources.length}</strong> saved sources</span>
+          <span><strong>${health.counts?.queued || 0}</strong> waiting</span>
+          <span><strong>${health.counts?.processing || 0}</strong> preparing</span>
+          <span><strong>${failedCount}</strong> needs review</span>
+          <span><strong>${stuckCount}</strong> delayed</span>
+          <span><strong>${health.counts?.completed || 0}</strong> ready</span>
+        </div>
+        ${health.processingJobs?.length ? `<p>${health.processingJobs.map((job) => escapeHtml(humanize(job.jobType))).join(", ")}</p>` : ""}
+        ${health.failedJobs?.length ? `<p>${health.failedJobs.map((job) => escapeHtml(`${humanize(job.jobType)}: ${humanize(job.lastError || "failed")}`)).join(" / ")}</p>` : ""}
+        ${health.failedReasons && Object.keys(health.failedReasons).length ? `<p>${Object.entries(health.failedReasons).map(([reason, count]) => escapeHtml(`${humanize(reason)} (${count})`)).join(" / ")}</p>` : ""}
+      </details>
     </article>
   `;
   const sourceCards = activeSources.map((source) => {
@@ -1105,6 +1122,8 @@ function renderSources() {
     const matchesSearch = !search || sourceSearchText(source, course, latestJob, embeddedCount).includes(search);
     if (!matchesSearch) return "";
     const prompt = buildSourceAiPrompt(source, course, embeddedCount);
+    const needsReview = /needs|ocr|failed/i.test(`${healthLabel} ${latestJob?.status || ""} ${source.status || ""}`);
+    const readyLabel = needsReview ? "Needs review" : (sourceIsIndexed(source) || embeddedCount ? "Ready" : "Saved privately");
     return `
       <article class="source-card source-library-card">
         <div class="source-card-head">
@@ -1113,44 +1132,43 @@ function renderSources() {
             <strong>${escapeHtml(source.title)}</strong>
             <p>${escapeHtml(course?.title || "Course")} / ${escapeHtml(sourceTypeLabel(source))}</p>
           </div>
-          <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}">Explain source</button>
-        </div>
-        <div class="source-health-grid source-card-metrics">
-          <span><strong>${escapeHtml(sourceStatusLabel(healthLabel))}</strong> status</span>
-          <span><strong>${embeddedCount}</strong> indexed sections</span>
-          <span><strong>${source.citationLabel ? "ready" : "pending"}</strong> citation</span>
-          <span><strong>${escapeHtml(sourceVisibilityLabel(source))}</strong> visibility</span>
+          <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}">${needsReview ? "Review source" : "Explain source"}</button>
         </div>
         <div class="tag-row">
-          ${tag(sourceStatusLabel(source.status || source.extractionStatus || source.storageMode), source.extractionError ? "urgent" : "")}
+          ${tag(readyLabel, needsReview ? "urgent" : "source")}
           ${tag(sourceVisibilityLabel(source), "source")}
-          ${tag("uses your materials", "source")}
-          ${embeddedCount ? tag(indexedSectionsLabel(embeddedCount), "source") : ""}
-          ${source.ocrRequired || source.status === "needs_ocr" ? tag("OCR needed", "urgent") : ""}
-          ${latestJob ? tag(sourceStatusLabel(latestJob.status), latestJob.status === "failed" ? "urgent" : "source") : ""}
-          ${source.webFallbackAllowed ? tag("outside material labeled", "source") : tag("your materials only", "source")}
+          ${tag("Uses your materials", "source")}
         </div>
-        ${source.extractionSummary ? `<p>${escapeHtml(source.extractionSummary)}</p>` : ""}
-        ${source.extractionError || latestJob?.lastError ? `<p class="warning-copy">${escapeHtml(humanize(source.extractionError || latestJob.lastError))}</p>` : ""}
-        ${source.extractedSnippet ? `<blockquote class="source-preview">${escapeHtml(source.extractedSnippet)}</blockquote>` : ""}
-        <div class="source-action-row">
-          <button class="mini-action" type="button" data-reindex-source-id="${source.id}">Retry index</button>
-          <button class="mini-action danger-action" type="button" data-delete-source-id="${source.id}">Delete</button>
-        </div>
+        <details class="source-technical-details">
+          <summary>Source details</summary>
+          <div class="source-health-grid source-card-metrics">
+            <span><strong>${escapeHtml(sourceStatusLabel(healthLabel))}</strong> status</span>
+            <span><strong>${embeddedCount}</strong> source sections</span>
+            <span><strong>${source.citationLabel ? "ready" : "pending"}</strong> citation</span>
+            <span><strong>${escapeHtml(source.webFallbackAllowed ? "outside references labeled" : "your materials only")}</strong> reference use</span>
+          </div>
+          ${source.extractionSummary ? `<p>${escapeHtml(source.extractionSummary)}</p>` : ""}
+          ${source.extractionError || latestJob?.lastError ? `<p class="warning-copy">${escapeHtml(humanize(source.extractionError || latestJob.lastError))}</p>` : ""}
+          ${source.extractedSnippet ? `<blockquote class="source-preview">${escapeHtml(source.extractedSnippet)}</blockquote>` : ""}
+          <div class="source-action-row">
+            <button class="mini-action" type="button" data-reindex-source-id="${source.id}">Retry source</button>
+            <button class="mini-action danger-action" type="button" data-delete-source-id="${source.id}">Delete</button>
+          </div>
+        </details>
       </article>
     `;
   }).join("");
   const noSources = activeSources.length ? "" : `
     <article class="source-card source-empty-card">
       <strong>No source materials yet</strong>
-      <p>Upload a private source to begin building the StudentOS memory layer.</p>
+      <p>Upload a private source to begin building your StudentOS source library.</p>
       <div class="tag-row">${tag("private upload ready", "source")}${tag("Private", "source")}</div>
     </article>
   `;
   const noMatches = activeSources.length && search && !sourceCards.trim() ? `
     <article class="source-card source-empty-card">
       <strong>No matching sources</strong>
-      <p>Search checks titles, courses, source types, snippets, citation labels, and indexing status from the loaded library.</p>
+      <p>Search checks titles, courses, source types, snippets, citation labels, and source status from the loaded library.</p>
       <div class="tag-row">${tag("searching this library", "source")}</div>
     </article>
   ` : "";
@@ -1238,7 +1256,7 @@ function planValueStatement(plan) {
 function planFeatureBullets(plan) {
   const quotas = plan.quotas || {};
   const bullets = [
-    `${usageLimitText(quotas.aiRequestsPerDay, "AI requests per day")}`,
+    `${usageLimitText(quotas.aiRequestsPerDay, "AI help per day")}`,
     `${usageLimitText(quotas.maxSources, "sources in your library")}`,
     `${usageLimitText(quotas.maxCourses, "courses")}`,
     `${formatBytes(quotas.storageBytes || 0)} private storage`,
@@ -1275,7 +1293,12 @@ function policyVersionNote(value, label) {
 }
 
 function requestReference(id) {
-  return id ? `<small class="account-request-meta">Reference ${escapeHtml(id)}</small>` : "";
+  return id ? `
+    <details class="account-request-meta account-reference-detail">
+      <summary>Reference saved</summary>
+      <small>${escapeHtml(id)}</small>
+    </details>
+  ` : "";
 }
 
 function exportStatusCopy(request, job) {
@@ -1284,13 +1307,13 @@ function exportStatusCopy(request, job) {
   const jobStatus = String(job?.status || request.status || "queued").toLowerCase();
   if (jobStatus.includes("failed")) return "Export packaging needs another try.";
   if (jobStatus.includes("complete")) return "Export package is ready.";
-  return "Export request is queued for private packaging.";
+  return "Your export is being prepared.";
 }
 
 function deletionStatusCopy(request) {
   if (!request) return "No deletion requests.";
   const gracePeriod = request.gracePeriodEndsAt ? ` Grace period active until ${formatDate(request.gracePeriodEndsAt)}.` : "";
-  return `Deletion request recorded.${gracePeriod} Nothing is deleted immediately.`;
+  return `Deletion request recorded.${gracePeriod} No data has been deleted yet.`;
 }
 
 function familyAccessStatusCopy(invitations = []) {
@@ -1421,7 +1444,7 @@ function renderAccount() {
       </div>
     </div>
     <div class="account-usage-list">
-      ${quotaBar("AI requests", usage.aiRequestsToday, limits.aiRequestsPerDay || 0)}
+      ${quotaBar("Daily AI help", usage.aiRequestsToday, limits.aiRequestsPerDay || 0)}
       ${quotaBar("Sources", usage.sourceCount, limits.maxSources || 0)}
       ${quotaBar("Courses", usage.courses, limits.maxCourses || 0)}
       ${quotaBar("Study updates", usage.workerJobsToday, limits.workerJobsPerDay || 0)}
@@ -1462,7 +1485,7 @@ function renderLifecycle(lifecycle = {}) {
         <strong>Deletion review</strong>
         <p>${escapeHtml(deletionStatusCopy(latestDeletion))}</p>
         ${latestDeletion ? requestReference(latestDeletion.id) : ""}
-        ${latestDeletion ? `<button class="mini-action danger-action" type="button" data-deletion-dry-run-id="${escapeHtml(latestDeletion.id)}">Preview deletion review</button>` : ""}
+        ${latestDeletion ? `<button class="mini-action danger-action" type="button" data-deletion-dry-run-id="${escapeHtml(latestDeletion.id)}">Preview deletion safety</button>` : ""}
       </article>
       <article class="lifecycle-item">
         <strong>Family access</strong>
@@ -1492,7 +1515,7 @@ function renderPricing(activePlanId = "free") {
         <p>${escapeHtml(planValueStatement(plan))}</p>
       </div>
       <div class="pricing-limit-list" aria-label="${escapeHtml(plan.label)} usage limits">
-        <span><strong>${escapeHtml((plan.quotas.aiRequestsPerDay || 0).toLocaleString())}</strong> AI requests/day</span>
+        <span><strong>${escapeHtml((plan.quotas.aiRequestsPerDay || 0).toLocaleString())}</strong> AI help/day</span>
         <span><strong>${escapeHtml((plan.quotas.maxSources || 0).toLocaleString())}</strong> sources</span>
         <span><strong>${escapeHtml(formatBytes(plan.quotas.storageBytes || 0))}</strong> storage</span>
       </div>
@@ -1652,7 +1675,7 @@ function renderAiPayload(result) {
       ${result.grounding?.insufficientContext ? tag("limited material context", "urgent") : ""}
       ${result.grounding?.confidence?.label ? tag(`${result.grounding.confidence.label} material match`, result.grounding.confidence.lowConfidence ? "urgent" : "source") : ""}
       ${(result.sourceLabels || []).map((source) => tag(source.label, "source")).join("")}
-      ${result.webFallback?.allowed ? tag("outside material", "medium") : ""}
+      ${result.webFallback?.allowed ? tag("outside reference shown", "medium") : ""}
     </div>
     ${result.grounding?.insufficiencyReason ? `<p>${escapeHtml(result.grounding.insufficiencyReason)}</p>` : ""}
     ${extra.join("")}
@@ -1671,7 +1694,7 @@ async function runAi(event) {
   } catch (error) {
     els.aiResponse.innerHTML = `
       <strong>AI response unavailable</strong>
-      <p>${escapeHtml(error.message || "StudentOS could not finish this grounded response. Try again after checking source indexing.")}</p>
+      <p>${escapeHtml(error.message || "StudentOS could not finish this response. Try again after checking your sources.")}</p>
       <div class="tag-row">
         ${tag("try again", "medium")}
         ${tag("citations not invented", "source")}
@@ -1683,7 +1706,7 @@ async function runAi(event) {
 async function createContract() {
   const selectedId = els.flowAssignmentSelect.value || state.assignments[0]?.id;
   const assignment = assignmentById(selectedId) || state.assignments[0];
-  els.contractResult.innerHTML = `<p>Checking contract...</p>`;
+  els.contractResult.innerHTML = `<p>Checking assignment readiness...</p>`;
   const result = await api("/api/assignment-contract", {
     method: "POST",
     body: JSON.stringify({ assignmentId: assignment.id }),
@@ -1862,35 +1885,35 @@ async function deleteSource(sourceId) {
   });
   els.sourceResult.innerHTML = `
     <strong>Source deleted</strong>
-    <p>${escapeHtml(result.sourceId)} was removed from the active library.</p>
-    <div class="tag-row">${tag("private delete", "source")}${tag("Private", "source")}</div>
+    <p>This source was removed from the active library.</p>
+    <div class="tag-row">${tag("Removed privately", "source")}${tag("Private", "source")}</div>
   `;
   await loadBootstrap();
 }
 
 async function retrySourceIndex(sourceId) {
-  els.sourceResult.innerHTML = `<p>Queueing source reindex...</p>`;
+  els.sourceResult.innerHTML = `<p>Preparing source refresh...</p>`;
   const result = await api(`/api/sources/${encodeURIComponent(sourceId)}/reindex`, {
     method: "POST",
     body: JSON.stringify({ force: true }),
   });
   els.sourceResult.innerHTML = `
-    <strong>${escapeHtml(result.deduped ? "Reindex already queued" : "Reindex queued")}</strong>
+    <strong>${escapeHtml(result.deduped ? "Source refresh already planned" : "Source refresh started")}</strong>
     <p>StudentOS will refresh this source privately.</p>
-    <div class="tag-row">${tag(sourceStatusLabel(result.job.status), "source")}${tag("indexing refresh", "source")}</div>
+    <div class="tag-row">${tag(sourceStatusLabel(result.job.status), "source")}${tag("Handled privately", "source")}</div>
   `;
   await loadBootstrap();
 }
 
 async function retryFailedJobs() {
-  els.sourceResult.innerHTML = `<p>Retrying indexing issues...</p>`;
+  els.sourceResult.innerHTML = `<p>Retrying source issues...</p>`;
   const result = await api("/api/jobs/retry-failed", {
     method: "POST",
     body: JSON.stringify({}),
   });
   els.sourceResult.innerHTML = `
-    <strong>${escapeHtml(`${result.retried} issue(s) retried`)}</strong>
-    <div class="tag-row">${tag(`${result.queueHealth?.counts?.queued || 0} queued`, "source")}${tag("handled privately", "source")}</div>
+    <strong>${escapeHtml(`${result.retried} source issue(s) retried`)}</strong>
+    <div class="tag-row">${tag("Refresh planned", "source")}${tag("Handled privately", "source")}</div>
   `;
   await loadBootstrap();
 }
@@ -2003,7 +2026,7 @@ async function requestConsentWithdrawal() {
 }
 
 async function requestDataExport() {
-  els.accountActionResult.innerHTML = `<p>Creating data export request...</p>`;
+  els.accountActionResult.innerHTML = `<p>Preparing your data export request...</p>`;
   try {
     const result = await api("/api/account/export-request", {
       method: "POST",
@@ -2012,8 +2035,8 @@ async function requestDataExport() {
     accountSnapshot = result.account;
     els.accountActionResult.innerHTML = `
       <strong>Export request created</strong>
-      <p>Your private export request was queued. StudentOS will package your account data for authenticated download.</p>
-      <div class="tag-row">${tag("private export queued", "medium")}${tag("handled privately", "source")}</div>
+      <p>Your export is being prepared. StudentOS will package your account data for authenticated download when it is ready.</p>
+      <div class="tag-row">${tag("Export being prepared", "medium")}${tag("Handled privately", "source")}</div>
       ${requestReference(result.request.id)}
     `;
     renderAccount();
@@ -2054,7 +2077,7 @@ async function downloadReadyExport(requestId) {
 }
 
 async function requestAccountDeletion() {
-  els.accountActionResult.innerHTML = `<p>Creating account deletion request...</p>`;
+  els.accountActionResult.innerHTML = `<p>Preparing account deletion request...</p>`;
   const result = await api("/api/account/deletion-request", {
     method: "POST",
     body: JSON.stringify({ reason: "student_request_from_account_settings" }),
@@ -2062,15 +2085,15 @@ async function requestAccountDeletion() {
   accountSnapshot = result.account;
   els.accountActionResult.innerHTML = `
     <strong>Deletion request recorded</strong>
-    <p>Grace period active until ${escapeHtml(formatDate(result.request.gracePeriodEndsAt))}. Nothing is deleted immediately, and the request stays in private review.</p>
-    <div class="tag-row">${tag("no immediate deletion", "urgent")}${tag("private review", "medium")}${tag("handled privately", "source")}</div>
+    <p>Grace period active until ${escapeHtml(formatDate(result.request.gracePeriodEndsAt))}. No data has been deleted yet, and the request stays in private review.</p>
+    <div class="tag-row">${tag("No data deleted yet", "urgent")}${tag("Private review", "medium")}${tag("Handled privately", "source")}</div>
     ${requestReference(result.request.id)}
   `;
   renderAccount();
 }
 
 async function requestDeletionDryRun(requestId) {
-  els.accountActionResult.innerHTML = `<p>Generating a read-only deletion preview...</p>`;
+  els.accountActionResult.innerHTML = `<p>Preparing a deletion safety preview...</p>`;
   const result = await api(`/api/account/deletion-requests/${encodeURIComponent(requestId)}/dry-run`, {
     method: "POST",
     body: JSON.stringify({}),
@@ -2084,14 +2107,14 @@ async function requestDeletionDryRun(requestId) {
       ? "Affected counts changed since the previous preview."
       : "Affected counts match the previous preview.";
   els.accountActionResult.innerHTML = `
-    <strong>Deletion review preview ready</strong>
-    <p>No data was deleted. This preview covers ${escapeHtml(summary.databaseRows || 0)} account record(s) and ${escapeHtml(summary.storageObjects || 0)} private file(s). ${escapeHtml(diffCopy)}</p>
+    <strong>Deletion safety preview ready</strong>
+    <p>No data has been deleted yet. This preview covers ${escapeHtml(summary.databaseRows || 0)} account record(s) and ${escapeHtml(summary.storageObjects || 0)} private file(s). ${escapeHtml(diffCopy)}</p>
     <div class="tag-row">
       ${tag(`${summary.sourceChunks || 0} source sections`, "source")}
       ${tag(`${summary.memoryItems || 0} study records`, "source")}
       ${tag(`${summary.embeddingMetadata || 0} search records`, "source")}
       ${tag(`${summary.backgroundJobs || 0} study update records`, "source")}
-      ${tag("no deletion performed", "urgent")}
+      ${tag("No data deleted yet", "urgent")}
     </div>
     ${requestReference(requestId)}
   `;

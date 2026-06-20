@@ -579,7 +579,7 @@ test.describe("StudentOS live Supabase E2E", () => {
       });
     }
     expect(uploadResultText).toContain("Live E2E quadratics note");
-    await expect(page.locator("#source-result")).toContainText(/indexed section/i);
+    await expect(page.locator("#source-result")).toContainText(/source section/i);
     await expect(page.locator("#source-result")).toContainText("Private");
 
     await clickNav(page, "Studio");

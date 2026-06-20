@@ -20,7 +20,7 @@
         <div class="auth-hero-copy">
           <p class="eyebrow">Private study workspace</p>
           <h2>Plan the day, keep course context, and use your materials when AI helps.</h2>
-          <p>Sign in to continue your StudentOS workspace. Your courses, uploaded materials, study queue, Classroom imports, and account controls stay behind your session.</p>
+          <p>Sign in to continue your StudentOS workspace. Your courses, uploaded materials, study list, Classroom imports, and account controls stay behind your session.</p>
         </div>
         <div class="auth-value-strip" aria-label="StudentOS focus areas">
           <span>Today command center</span>
@@ -154,10 +154,10 @@
               <div class="section-heading">
                 <div>
                   <p class="eyebrow">Now</p>
-                  <h3>Study Queue</h3>
+                  <h3>Study List</h3>
                 </div>
                 <div class="inline-actions">
-                  <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Plan" data-ai-prompt="Plan today from my study queue, classes, and due work. Keep it concise and practical.">Plan today</button>
+                  <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Plan" data-ai-prompt="Plan today from my tasks, classes, and due work. Keep it concise and practical.">Plan today</button>
                   <button class="icon-button" id="refresh-btn" type="button" title="Refresh">
                     <span class="refresh-icon" aria-hidden="true"></span>
                   </button>
@@ -270,9 +270,9 @@
                   <label>
                     Break cycle
                     <select name="studyBreakPattern">
-                      <option value="25/5">25 / 5</option>
-                      <option value="50/10">50 / 10</option>
-                      <option value="40/8">40 / 8</option>
+                      <option value="25/5">25 min focus / 5 min break</option>
+                      <option value="50/10">50 min focus / 10 min break</option>
+                      <option value="40/8">40 min focus / 8 min break</option>
                     </select>
                   </label>
                 </div>
@@ -280,9 +280,9 @@
 
               <fieldset class="setup-section setup-section-wide">
                 <legend>Subjects</legend>
-                <p>One subject per line: course, exam date, then syllabus topics.</p>
+                <p>Add one subject per line with the course name, exam date, and main topics. The saved format stays compatible with StudentOS planning.</p>
                 <label>
-                  Subjects
+                  Subjects and exam topics
                   <textarea name="subjectsText" rows="4">Mathematics|2026-06-05|Quadratic equations, Trigonometry basics, Statistics
 Biology|2026-06-09|Cell cycle and mitosis, Ecology
 English|2026-06-12|Argument writing, Macbeth</textarea>
@@ -310,9 +310,9 @@ Biology: Phase ordering</textarea>
 
               <fieldset class="setup-section setup-section-wide">
                 <legend>Timetable / study blocks</legend>
-                <p>Blocks let Today protect focus time around classes.</p>
+                <p>Add classes or study blocks by day, time, title, and course so Today can protect your focus time.</p>
                 <label>
-                  Class timetable / study blocks
+                  Weekly classes and study blocks
                   <textarea name="timetableText" rows="3">Mon|18:30|Math revision|Mathematics
 Tue|18:00|Biology diagrams|Biology
 Thu|19:00|English writing sprint|English</textarea>
@@ -352,12 +352,12 @@ Thu|19:00|English writing sprint|English</textarea>
             <div>
               <p class="eyebrow">Memory</p>
               <h3>Your academic memory</h3>
-              <p>Upload private materials, browse the source library, and keep library status visible without making background work the main experience.</p>
+              <p>Upload private materials, search your library, and see when sources need attention without exposing processing details first.</p>
             </div>
             <div class="memory-brief-grid" aria-label="Memory actions">
               <span>Upload source material</span>
               <span>Search your academic memory</span>
-              <span>Track indexing health</span>
+              <span>Review sources that need attention</span>
             </div>
           </section>
 
@@ -372,7 +372,7 @@ Thu|19:00|English writing sprint|English</textarea>
               </div>
               <label class="memory-search">
                 <span>Search your academic memory</span>
-                <input id="source-search-input" type="search" placeholder="Search sources, courses, snippets, or status">
+                <input id="source-search-input" type="search" placeholder="Search sources, courses, or notes">
               </label>
               <div id="source-list" class="source-list memory-source-list"></div>
             </section>
@@ -659,7 +659,7 @@ Thu|19:00|English writing sprint|English</textarea>
           <h3>Academic Copilot</h3>
         </div>
         <div class="heading-actions">
-          <span class="brain-badge">SentIQGPT powered</span>
+          <span class="brain-badge">Powered by SentIQ</span>
           <button id="ai-close-btn" class="icon-button ai-close-button" type="button" aria-label="Close AI drawer">X</button>
         </div>
       </div>
@@ -670,15 +670,15 @@ Thu|19:00|English writing sprint|English</textarea>
         <button class="verb-tab" data-verb="Review" type="button">Review</button>
       </div>
       <form id="ai-form" class="ai-form">
-        <textarea id="ai-message" rows="5">Help me with quadratics before the worksheet.</textarea>
+        <textarea id="ai-message" rows="5">Ask about a topic, source, or assignment.</textarea>
         <button class="primary-button wide" type="submit">Run</button>
       </form>
       <div id="ai-response" class="ai-response" aria-live="polite"></div>
       <div class="contract-zone">
         <div class="section-heading tight">
           <div>
-            <p class="eyebrow">Automation</p>
-            <h3>Assignment Contract</h3>
+            <p class="eyebrow">Safety check</p>
+            <h3>Assignment readiness</h3>
           </div>
         </div>
         <button id="contract-btn" class="secondary-button wide" type="button">Check first assignment</button>

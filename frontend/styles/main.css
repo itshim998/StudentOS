@@ -903,6 +903,10 @@ input[type="file"] {
   font-weight: 800;
 }
 
+.source-technical-details > * + * {
+  margin-top: 10px;
+}
+
 .source-action-row {
   display: flex;
   flex-wrap: wrap;
@@ -2433,6 +2437,17 @@ textarea:focus-visible {
   color: var(--muted);
   font-size: var(--font-size-meta);
   overflow-wrap: anywhere;
+}
+
+.account-reference-detail summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.account-reference-detail small {
+  display: block;
+  margin-top: 4px;
 }
 
 .account-security-grid,
