@@ -14,6 +14,8 @@ let classroomStatus = null;
 let aiDrawerReturnFocus = null;
 let sourceSearchQuery = "";
 let authShellMode = "signin";
+const ACTION_LOADING_TIMEOUT_MS = 30000;
+const LONG_ACTION_LOADING_TIMEOUT_MS = 60000;
 
 const els = {
   publicAuthShell: document.getElementById("public-auth-shell"),
@@ -121,6 +123,123 @@ function setText(element, value) {
   if (element) element.textContent = value;
 }
 
+function loadingMarkup(copy) {
+  return `
+    <div class="loading-row" role="status" aria-live="polite">
+      <span class="loading-spinner" aria-hidden="true"></span>
+      <span>${escapeHtml(copy)}</span>
+    </div>
+  `;
+}
+
+function loadingCardMarkup(copy, className = "item-card loading-card") {
+  return `<article class="${escapeHtml(className)}" role="status" aria-live="polite">${loadingMarkup(copy)}</article>`;
+}
+
+function messageCardMarkup(title, copy, className = "item-card") {
+  return `
+    <article class="${escapeHtml(className)}">
+      <strong>${escapeHtml(title)}</strong>
+      <p>${escapeHtml(copy)}</p>
+    </article>
+  `;
+}
+
+function setLoading(target, copy, options = {}) {
+  if (!target) return;
+  target.setAttribute("aria-busy", "true");
+  target.innerHTML = options.card
+    ? loadingCardMarkup(copy, options.cardClass)
+    : loadingMarkup(copy);
+}
+
+function setResult(target, html) {
+  if (!target) return;
+  target.removeAttribute("aria-busy");
+  target.innerHTML = html;
+}
+
+function setAppLoading(isLoading) {
+  if (!els.appShell) return;
+  if (isLoading) {
+    els.appShell.setAttribute("aria-busy", "true");
+  } else {
+    els.appShell.removeAttribute("aria-busy");
+  }
+}
+
+function buttonLoadingMarkup(copy) {
+  return `
+    <span class="button-loading">
+      <span class="button-spinner" aria-hidden="true"></span>
+      <span>${escapeHtml(copy)}</span>
+    </span>
+  `;
+}
+
+function restoreButton(button, previous) {
+  if (!button || !previous) return;
+  button.innerHTML = previous.html;
+  button.disabled = previous.disabled;
+  if (previous.ariaBusy === null) button.removeAttribute("aria-busy");
+  else button.setAttribute("aria-busy", previous.ariaBusy);
+}
+
+async function withButtonLoading(button, label, action, options = {}) {
+  if (!button) return action();
+  const previous = {
+    html: button.innerHTML,
+    disabled: button.disabled,
+    ariaBusy: button.getAttribute("aria-busy"),
+  };
+  let settled = false;
+  const timeoutMs = options.timeoutMs || ACTION_LOADING_TIMEOUT_MS;
+  const timeoutId = window.setTimeout(() => {
+    if (settled) return;
+    restoreButton(button, previous);
+    if (options.timeoutTarget) {
+      setResult(options.timeoutTarget, `<p>${escapeHtml(options.timeoutCopy || "This is taking longer than expected. You can try again.")}</p>`);
+    }
+  }, timeoutMs);
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.innerHTML = buttonLoadingMarkup(label);
+  try {
+    return await action();
+  } finally {
+    settled = true;
+    window.clearTimeout(timeoutId);
+    restoreButton(button, previous);
+  }
+}
+
+function renderWorkspaceLoading(copy = "Loading your workspace...") {
+  setAppLoading(true);
+  setLoading(els.dashboardSummary, copy, { card: true, cardClass: "today-brief-card loading-card" });
+  setLoading(els.roadmapList, "Loading your study list...", { card: true });
+  setLoading(els.timetableList, "Loading your schedule...", { card: true });
+  setLoading(els.classroomPanel, "Checking Classroom status...");
+  setLoading(els.assignmentList, "Loading due work...", { card: true });
+}
+
+function renderWorkspaceLoadError(error) {
+  const fallback = "StudentOS could not load your workspace. Refresh and try again.";
+  setAppLoading(false);
+  setResult(els.dashboardSummary, `
+    <article class="today-brief-card">
+      <div class="today-brief-copy">
+        <p class="eyebrow">Workspace</p>
+        <h3><span>Load issue</span>${escapeHtml(fallback)}</h3>
+      </div>
+    </article>
+  `);
+  setResult(els.roadmapList, messageCardMarkup("Study list unavailable", "Refresh and try again."));
+  setResult(els.timetableList, messageCardMarkup("Schedule unavailable", "Refresh and try again."));
+  setResult(els.assignmentList, messageCardMarkup("Due work unavailable", "Refresh and try again."));
+  setResult(els.classroomPanel, `<p>${escapeHtml(fallback)}</p>`);
+  setResult(els.aiResponse, `<p>${escapeHtml(error?.message || fallback)}</p>`);
+}
+
 function authGateActive() {
   return Boolean(runtimeConfig.auth?.enabled && !authSession?.access_token);
 }
@@ -208,7 +327,7 @@ function classroomErrorCopy(error) {
 
 function renderClassroomError(error) {
   if (!els.classroomPanel) return;
-  els.classroomPanel.innerHTML = `
+  setResult(els.classroomPanel, `
     <strong>Classroom import unavailable</strong>
     <p>${escapeHtml(classroomErrorCopy(error))}</p>
     <div class="tag-row">
@@ -216,7 +335,7 @@ function renderClassroomError(error) {
       ${tag("no writeback", "urgent")}
       ${tag("try again", "medium")}
     </div>
-  `;
+  `);
 }
 
 function isPublicFrontendOrigin() {
@@ -744,7 +863,7 @@ function renderDashboardSummary() {
   ].filter(Boolean).join(" / ") || "Academic focus";
   const riskCopy = weakTopics.map((topic) => topic.title).join(" / ") || "No weak topics yet";
   const planPrompt = buildTodayPlanPrompt(nextAction, dueSoon, nextBlock);
-  els.dashboardSummary.innerHTML = `
+  setResult(els.dashboardSummary, `
     <article class="today-brief-card">
       <div class="today-brief-copy">
         <p class="eyebrow">Today Command Center</p>
@@ -792,13 +911,13 @@ function renderDashboardSummary() {
         <p>${escapeHtml(completedRoadmap.length ? `${completedRoadmap.length} finished` : "Generate or sync work")}</p>
       </article>
     </div>
-  `;
+  `);
 }
 
 function renderRoadmap() {
   const actions = getNextActions();
   if (!actions.length) {
-    els.roadmapList.innerHTML = `
+    setResult(els.roadmapList, `
       <article class="item-card roadmap-empty-card">
         <strong>Queue is clear</strong>
         <p>Generate a roadmap in Setup or sync Classroom to build today's study list.</p>
@@ -807,10 +926,10 @@ function renderRoadmap() {
           ${tag("student controlled", "source")}
         </div>
       </article>
-    `;
+    `);
     return;
   }
-  els.roadmapList.innerHTML = actions.slice(0, 5).map((item) => {
+  setResult(els.roadmapList, actions.slice(0, 5).map((item) => {
     const topic = topicById(item.topicId);
     const course = courseById(item.courseId);
     const isPrimary = item === actions[0];
@@ -831,22 +950,22 @@ function renderRoadmap() {
         ${isPrimary ? `<button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Plan" data-ai-prompt="${escapeHtml(prompt)}">Plan item</button>` : ""}
       </article>
     `;
-  }).join("");
+  }).join(""));
 }
 
 function renderTimetable() {
   const blocks = sortedByDate(state.timetable || [], (item) => item.startsAt);
   if (!blocks.length) {
-    els.timetableList.innerHTML = `
+    setResult(els.timetableList, `
       <article class="item-card timetable-empty-card">
         <strong>No blocks listed</strong>
         <p>Add classes or study blocks in Setup so Today can protect your time.</p>
         <div class="item-meta">${tag("schedule open", "medium")}</div>
       </article>
-    `;
+    `);
     return;
   }
-  els.timetableList.innerHTML = blocks.map((item) => {
+  setResult(els.timetableList, blocks.map((item) => {
     const course = courseById(item.courseId);
     return `
       <article class="item-card timetable-card">
@@ -855,7 +974,7 @@ function renderTimetable() {
         <div class="item-meta">${tag(course?.title || "Study")}</div>
       </article>
     `;
-  }).join("");
+  }).join(""));
 }
 
 function renderClassroomPanel() {
@@ -872,7 +991,7 @@ function renderClassroomPanel() {
   const safeError = connector.lastError || history.find((run) => run.errorSummary)?.errorSummary || "";
   const safeErrorCode = connector.lastErrorCode || history.find((run) => run.payload?.errorCode)?.payload?.errorCode || "";
   const emptyClassroom = summary?.emptyClassroom || history.some((run) => run.payload?.emptyClassroom);
-  els.classroomPanel.innerHTML = `
+  setResult(els.classroomPanel, `
     <div class="classroom-compact-head">
       <div>
         <strong>${escapeHtml(classroomModeLabel(connector.state || connector.mode || "mock"))}</strong>
@@ -905,7 +1024,7 @@ function renderClassroomPanel() {
         ` : ""}
       </details>
     ` : ""}
-  `;
+  `);
 }
 
 function classroomStatusCard() {
@@ -950,7 +1069,7 @@ function classroomStatusCard() {
 
 function renderAssignments() {
   if (!state.assignments.length) {
-    els.assignmentList.innerHTML = `
+    setResult(els.assignmentList, `
       <article class="item-card assignment-card">
         <strong>No assignments yet</strong>
         <p>Connect and sync Google Classroom, or add work from your courses to start the learning loop.</p>
@@ -959,11 +1078,11 @@ function renderAssignments() {
           ${tag("no submission", "urgent")}
         </div>
       </article>
-    `;
+    `);
     return;
   }
   const assignments = getDueAssignments();
-  els.assignmentList.innerHTML = assignments.map((assignment, index) => {
+  setResult(els.assignmentList, assignments.map((assignment, index) => {
     const course = courseById(assignment.courseId);
     const insight = assignmentInsightById(assignment.id);
     const isClassroom = assignment.source === "google_classroom";
@@ -985,7 +1104,7 @@ function renderAssignments() {
         <button class="mini-action" type="button" data-flow-id="${assignment.id}">${isClassroom ? "Analyze assignment" : "Analyze"}</button>
       </article>
     `;
-  }).join("");
+  }).join(""));
 }
 
 function renderCourses() {
@@ -1605,16 +1724,25 @@ async function loadAccountSnapshot() {
   }
 }
 
-async function loadBootstrap() {
-  state = await api("/api/bootstrap");
-  render();
-  if (authSession?.access_token || !runtimeConfig.auth?.enabled) {
-    await loadAccountSnapshot();
+async function loadBootstrap(options = {}) {
+  if (options.showLoading) {
+    renderWorkspaceLoading(options.copy || "Loading your workspace...");
   } else {
-    accountSnapshot = null;
-    renderAccount();
+    setAppLoading(true);
   }
-  await loadClassroomStatus();
+  try {
+    state = await api("/api/bootstrap");
+    render();
+    if (authSession?.access_token || !runtimeConfig.auth?.enabled) {
+      await loadAccountSnapshot();
+    } else {
+      accountSnapshot = null;
+      renderAccount();
+    }
+    await loadClassroomStatus();
+  } finally {
+    setAppLoading(false);
+  }
 }
 
 function renderLesson(lesson) {
@@ -1665,7 +1793,7 @@ function renderAiPayload(result) {
     `);
   }
 
-  els.aiResponse.innerHTML = `
+  setResult(els.aiResponse, `
     <strong>${escapeHtml(result.verb)} result</strong>
     <p>${escapeHtml(result.answer)}</p>
     <div class="tag-row">
@@ -1679,39 +1807,41 @@ function renderAiPayload(result) {
     </div>
     ${result.grounding?.insufficiencyReason ? `<p>${escapeHtml(result.grounding.insufficiencyReason)}</p>` : ""}
     ${extra.join("")}
-  `;
+  `);
 }
 
 async function runAi(event) {
   event.preventDefault();
-  els.aiResponse.innerHTML = `<p>Checking your materials...</p>`;
-  try {
-    const result = await api("/api/ai/verb", {
-      method: "POST",
-      body: JSON.stringify({ verb: activeVerb, message: els.aiMessage.value }),
-    });
-    renderAiPayload(result);
-  } catch (error) {
-    els.aiResponse.innerHTML = `
-      <strong>AI response unavailable</strong>
-      <p>${escapeHtml(error.message || "StudentOS could not finish this response. Try again after checking your sources.")}</p>
-      <div class="tag-row">
-        ${tag("try again", "medium")}
-        ${tag("citations not invented", "source")}
-      </div>
-    `;
-  }
+  await withButtonLoading(event.submitter || els.aiForm.querySelector("button[type='submit']"), "Running...", async () => {
+    setLoading(els.aiResponse, "Checking your materials...");
+    try {
+      const result = await api("/api/ai/verb", {
+        method: "POST",
+        body: JSON.stringify({ verb: activeVerb, message: els.aiMessage.value }),
+      });
+      renderAiPayload(result);
+    } catch (error) {
+      setResult(els.aiResponse, `
+        <strong>AI response unavailable</strong>
+        <p>${escapeHtml(error.message || "StudentOS could not finish this response. Try again after checking your sources.")}</p>
+        <div class="tag-row">
+          ${tag("try again", "medium")}
+          ${tag("citations not invented", "source")}
+        </div>
+      `);
+    }
+  }, { timeoutTarget: els.aiResponse, timeoutCopy: "AI help is taking longer than expected. You can try again.", timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS });
 }
 
 async function createContract() {
   const selectedId = els.flowAssignmentSelect.value || state.assignments[0]?.id;
   const assignment = assignmentById(selectedId) || state.assignments[0];
-  els.contractResult.innerHTML = `<p>Checking assignment readiness...</p>`;
+  setLoading(els.contractResult, "Checking assignment readiness...");
   const result = await api("/api/assignment-contract", {
     method: "POST",
     body: JSON.stringify({ assignmentId: assignment.id }),
   });
-  els.contractResult.innerHTML = `
+  setResult(els.contractResult, `
     <strong>${escapeHtml(humanize(result.contract.status))}</strong>
     <p>${escapeHtml(result.contract.rationale)}</p>
     <div class="tag-row">
@@ -1719,11 +1849,11 @@ async function createContract() {
       ${tag("review required", "medium")}
       ${tag("no submission", "urgent")}
     </div>
-  `;
+  `);
 }
 
 function renderFlow(flow) {
-  els.flowResult.innerHTML = `
+  setResult(els.flowResult, `
     <strong>Study plan ready: ${escapeHtml(humanize(flow.action))}</strong>
     <p>${escapeHtml(flow.nextAction)}</p>
     <div class="studio-result-strip">
@@ -1735,12 +1865,12 @@ function renderFlow(flow) {
     ${list(flow.coverage.topicCoverages.map((coverage) => `${coverage.title}: ${humanize(coverage.status)} (${coverage.reasons.join(", ") || "no signal"})`))}
     <strong>Study queue update</strong>
     <p>${escapeHtml(flow.roadmapItem.title)} / ${escapeHtml(flow.roadmapItem.priority)}</p>
-  `;
+  `);
   renderLesson(flow.lesson);
 }
 
 async function analyzeAssignmentFlow(assignmentId) {
-  els.flowResult.innerHTML = `<p>Checking coverage and next learning step...</p>`;
+  setLoading(els.flowResult, "Checking coverage and next learning step...");
   try {
     const result = await api("/api/assignment-flow", {
       method: "POST",
@@ -1749,20 +1879,24 @@ async function analyzeAssignmentFlow(assignmentId) {
     renderFlow(result.flow);
     await loadBootstrap();
   } catch (error) {
-    els.flowResult.innerHTML = `
+    setResult(els.flowResult, `
       <strong>Assignment flow unavailable</strong>
       <p>${escapeHtml(error.message || "StudentOS could not analyze this assignment. Refresh synced data and try again.")}</p>
       <div class="tag-row">
         ${tag("try again", "medium")}
         ${tag("no submission", "urgent")}
       </div>
-    `;
+    `);
   }
 }
 
 async function submitAssignmentFlow(event) {
   event.preventDefault();
-  await analyzeAssignmentFlow(new FormData(event.currentTarget).get("assignmentId"));
+  await withButtonLoading(event.submitter, "Checking...", () => analyzeAssignmentFlow(new FormData(event.currentTarget).get("assignmentId")), {
+    timeoutTarget: els.flowResult,
+    timeoutCopy: "Assignment readiness is taking longer than expected. You can try again.",
+    timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+  });
 }
 
 function sampleAnswersForScore(topic, scorePercent) {
@@ -1795,126 +1929,134 @@ async function recordScore(event) {
   const topicId = form.get("topicId");
   const topic = topicById(topicId);
   const scorePercent = Number(form.get("scorePercent"));
-  const result = await api("/api/tests/score", {
-    method: "POST",
-    body: JSON.stringify({
-      topicId,
-      courseId: topic?.courseId,
-      scorePercent,
-      type: "mcq",
-      answers: sampleAnswersForScore(topic, scorePercent),
-    }),
-  });
+  await withButtonLoading(event.submitter, "Saving...", async () => {
+    setLoading(els.scoreResult, "Saving practice score...");
+    const result = await api("/api/tests/score", {
+      method: "POST",
+      body: JSON.stringify({
+        topicId,
+        courseId: topic?.courseId,
+        scorePercent,
+        type: "mcq",
+        answers: sampleAnswersForScore(topic, scorePercent),
+      }),
+    });
 
-  els.scoreResult.innerHTML = `
-    <strong>Practice saved: ${result.result.scorePercent}%</strong>
-    <p>${escapeHtml(result.scoreSummary)}</p>
-    <div class="studio-result-strip">
-      <span><strong>${escapeHtml(String(result.result.creditsAwarded))}</strong> study credit${result.result.creditsAwarded === 1 ? "" : "s"} updated</span>
-      <span><strong>${escapeHtml((result.weakTopics || []).length ? "Review needed" : "On track")}</strong> weak-topic signal</span>
-    </div>
-    <strong>What to repair next</strong>
-    ${list(result.correctionSheet.corrections.map((item) => `${item.concept}: ${item.repair}`))}
-    <div class="tag-row">
-      ${(result.weakTopics || []).map((weak) => tag(weak, "medium")).join("")}
-      ${tag(result.nextRecommendedAction, result.result.scorePercent < 70 ? "urgent" : "source")}
-    </div>
-  `;
-  renderLesson(result.tutorLesson);
-  await loadBootstrap();
+    setResult(els.scoreResult, `
+      <strong>Practice saved: ${result.result.scorePercent}%</strong>
+      <p>${escapeHtml(result.scoreSummary)}</p>
+      <div class="studio-result-strip">
+        <span><strong>${escapeHtml(String(result.result.creditsAwarded))}</strong> study credit${result.result.creditsAwarded === 1 ? "" : "s"} updated</span>
+        <span><strong>${escapeHtml((result.weakTopics || []).length ? "Review needed" : "On track")}</strong> weak-topic signal</span>
+      </div>
+      <strong>What to repair next</strong>
+      ${list(result.correctionSheet.corrections.map((item) => `${item.concept}: ${item.repair}`))}
+      <div class="tag-row">
+        ${(result.weakTopics || []).map((weak) => tag(weak, "medium")).join("")}
+        ${tag(result.nextRecommendedAction, result.result.scorePercent < 70 ? "urgent" : "source")}
+      </div>
+    `);
+    renderLesson(result.tutorLesson);
+    await loadBootstrap();
+  }, { timeoutTarget: els.scoreResult, timeoutCopy: "Saving the score is taking longer than expected. You can try again." });
 }
 
 async function draftExtension(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-  const result = await api("/api/extension/draft", {
-    method: "POST",
-    body: JSON.stringify({
-      assignmentId: form.get("assignmentId"),
-      reason: form.get("reason"),
-    }),
-  });
-  els.extensionResult.innerHTML = `
-    <strong>Draft recommendation: ${escapeHtml(humanize(result.draft.recommendation))}</strong>
-    <p>${escapeHtml(result.draft.explanation)}</p>
-    <div class="tag-row">
-      ${tag("draft only", "source")}
-      ${tag("student review required", "medium")}
-      ${result.draft.safeguards.map((item) => tag(humanize(item), "source")).join("")}
-    </div>
-  `;
+  await withButtonLoading(event.submitter, "Preparing...", async () => {
+    setLoading(els.extensionResult, "Preparing extension draft...");
+    const result = await api("/api/extension/draft", {
+      method: "POST",
+      body: JSON.stringify({
+        assignmentId: form.get("assignmentId"),
+        reason: form.get("reason"),
+      }),
+    });
+    setResult(els.extensionResult, `
+      <strong>Draft recommendation: ${escapeHtml(humanize(result.draft.recommendation))}</strong>
+      <p>${escapeHtml(result.draft.explanation)}</p>
+      <div class="tag-row">
+        ${tag("draft only", "source")}
+        ${tag("student review required", "medium")}
+        ${result.draft.safeguards.map((item) => tag(humanize(item), "source")).join("")}
+      </div>
+    `);
+  }, { timeoutTarget: els.extensionResult, timeoutCopy: "Drafting is taking longer than expected. You can try again." });
 }
 
 async function addSource(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   if (!form.get("file") || !form.get("file").name) {
-    els.sourceResult.innerHTML = `<p>Choose a file first.</p>`;
+    setResult(els.sourceResult, `<p>Choose a file first.</p>`);
     return;
   }
-  els.sourceResult.innerHTML = `<p>Uploading to private source library...</p>`;
-  try {
-    const result = await api("/api/sources/upload", {
-      method: "POST",
-      body: form,
-    });
-    els.sourceResult.innerHTML = `
-      <strong>${escapeHtml(result.material.title)}</strong>
-      <p>${escapeHtml(result.material.extractionSummary || result.extractionSummary || "Private source registered.")}</p>
-      ${result.material.extractionError ? `<p>${escapeHtml(humanize(result.material.extractionError))}</p>` : ""}
-      <div class="tag-row">${tag("Private", "source")}${tag(sourceStatusLabel(result.material.status || result.status))}${tag(indexedSectionsLabel(result.material.chunkCount || result.chunkCount || 0), "source")}${tag("Private to your account", "source")}</div>
-    `;
-    await loadBootstrap();
-  } catch (error) {
-    els.sourceResult.innerHTML = `
-      <strong>Source upload unavailable</strong>
-      <p>${escapeHtml(error.message || "StudentOS could not finish this source upload. Check storage and try again.")}</p>
-      <div class="tag-row">
-        ${tag("try again", "medium")}
-        ${tag("Private", "source")}
-        ${tag("Private to your account", "source")}
-      </div>
-    `;
-  }
+  await withButtonLoading(event.submitter, "Uploading...", async () => {
+    setLoading(els.sourceResult, "Uploading to private source library...");
+    try {
+      const result = await api("/api/sources/upload", {
+        method: "POST",
+        body: form,
+      });
+      setResult(els.sourceResult, `
+        <strong>${escapeHtml(result.material.title)}</strong>
+        <p>${escapeHtml(result.material.extractionSummary || result.extractionSummary || "Private source registered.")}</p>
+        ${result.material.extractionError ? `<p>${escapeHtml(humanize(result.material.extractionError))}</p>` : ""}
+        <div class="tag-row">${tag("Private", "source")}${tag(sourceStatusLabel(result.material.status || result.status))}${tag(indexedSectionsLabel(result.material.chunkCount || result.chunkCount || 0), "source")}${tag("Private to your account", "source")}</div>
+      `);
+      await loadBootstrap();
+    } catch (error) {
+      setResult(els.sourceResult, `
+        <strong>Source upload unavailable</strong>
+        <p>${escapeHtml(error.message || "StudentOS could not finish this source upload. Check storage and try again.")}</p>
+        <div class="tag-row">
+          ${tag("try again", "medium")}
+          ${tag("Private", "source")}
+          ${tag("Private to your account", "source")}
+        </div>
+      `);
+    }
+  }, { timeoutTarget: els.sourceResult, timeoutCopy: "Uploading is taking longer than expected. You can try again.", timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS });
 }
 
 async function deleteSource(sourceId) {
-  els.sourceResult.innerHTML = `<p>Deleting private source...</p>`;
+  setLoading(els.sourceResult, "Deleting private source...");
   const result = await api(`/api/sources/${encodeURIComponent(sourceId)}`, {
     method: "DELETE",
   });
-  els.sourceResult.innerHTML = `
+  setResult(els.sourceResult, `
     <strong>Source deleted</strong>
     <p>This source was removed from the active library.</p>
     <div class="tag-row">${tag("Removed privately", "source")}${tag("Private", "source")}</div>
-  `;
+  `);
   await loadBootstrap();
 }
 
 async function retrySourceIndex(sourceId) {
-  els.sourceResult.innerHTML = `<p>Preparing source refresh...</p>`;
+  setLoading(els.sourceResult, "Preparing source refresh...");
   const result = await api(`/api/sources/${encodeURIComponent(sourceId)}/reindex`, {
     method: "POST",
     body: JSON.stringify({ force: true }),
   });
-  els.sourceResult.innerHTML = `
+  setResult(els.sourceResult, `
     <strong>${escapeHtml(result.deduped ? "Source refresh already planned" : "Source refresh started")}</strong>
     <p>StudentOS will refresh this source privately.</p>
     <div class="tag-row">${tag(sourceStatusLabel(result.job.status), "source")}${tag("Handled privately", "source")}</div>
-  `;
+  `);
   await loadBootstrap();
 }
 
 async function retryFailedJobs() {
-  els.sourceResult.innerHTML = `<p>Retrying source issues...</p>`;
+  setLoading(els.sourceResult, "Retrying source issues...");
   const result = await api("/api/jobs/retry-failed", {
     method: "POST",
     body: JSON.stringify({}),
   });
-  els.sourceResult.innerHTML = `
+  setResult(els.sourceResult, `
     <strong>${escapeHtml(`${result.retried} source issue(s) retried`)}</strong>
     <div class="tag-row">${tag("Refresh planned", "source")}${tag("Handled privately", "source")}</div>
-  `;
+  `);
   await loadBootstrap();
 }
 
@@ -1924,7 +2066,7 @@ function formJson(form) {
 
 function renderOnboardingResult(result) {
   const onboarding = result.onboarding;
-  els.onboardingResult.innerHTML = `
+  setResult(els.onboardingResult, `
     <strong>${escapeHtml(onboarding.courses.length)} course roadmap generated</strong>
     <p>${escapeHtml(`Goal: ${humanize(onboarding.academicGoal)} / ${onboarding.studyBreakPattern.label} study cycle`)}</p>
     <div class="tag-row">
@@ -1932,24 +2074,26 @@ function renderOnboardingResult(result) {
       ${tag(`${onboarding.weakTopics.length} weak topics`, onboarding.weakTopics.length ? "medium" : "source")}
       ${tag(`${onboarding.roadmap.filter((item) => item.status === "open").length} roadmap items`, "source")}
     </div>
-  `;
+  `);
 }
 
 async function submitOnboarding(event) {
   event.preventDefault();
-  els.onboardingResult.innerHTML = `<p>Building your academic roadmap...</p>`;
-  const result = await api("/api/onboarding", {
-    method: "POST",
-    body: JSON.stringify(formJson(event.currentTarget)),
-  });
-  state = result.state;
-  renderOnboardingResult(result);
-  render();
-  setView("today");
+  await withButtonLoading(event.submitter, "Preparing...", async () => {
+    setLoading(els.onboardingResult, "Building your academic roadmap...");
+    const result = await api("/api/onboarding", {
+      method: "POST",
+      body: JSON.stringify(formJson(event.currentTarget)),
+    });
+    state = result.state;
+    renderOnboardingResult(result);
+    render();
+    setView("today");
+  }, { timeoutTarget: els.onboardingResult, timeoutCopy: "Roadmap generation is taking longer than expected. You can try again.", timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS });
 }
 
 async function seedDemoProfile() {
-  els.onboardingResult.innerHTML = `<p>Loading demo student profile...</p>`;
+  setLoading(els.onboardingResult, "Loading demo student profile...");
   const result = await api("/api/demo/seed", {
     method: "POST",
     body: JSON.stringify({}),
@@ -1971,86 +2115,88 @@ function consentPayloadFromForm(form) {
 
 async function submitConsent(event) {
   event.preventDefault();
-  els.consentResult.innerHTML = `<p>Saving privacy preferences...</p>`;
-  const result = await api("/api/account/consent", {
-    method: "POST",
-    body: JSON.stringify(consentPayloadFromForm(event.currentTarget)),
-  });
-  accountSnapshot = result.account;
-  els.consentResult.innerHTML = `
-    <strong>Consent preferences saved</strong>
-    <div class="tag-row">
-      ${tag(result.consent.aiPersonalization ? "personalization on" : "personalization off", "source")}
-      ${tag(result.consent.externalProgressSharing ? "external sharing on" : "student-only progress", result.consent.externalProgressSharing ? "medium" : "source")}
-    </div>
-  `;
-  renderAccount();
+  await withButtonLoading(event.submitter, "Saving...", async () => {
+    setLoading(els.consentResult, "Saving privacy preferences...");
+    const result = await api("/api/account/consent", {
+      method: "POST",
+      body: JSON.stringify(consentPayloadFromForm(event.currentTarget)),
+    });
+    accountSnapshot = result.account;
+    setResult(els.consentResult, `
+      <strong>Consent preferences saved</strong>
+      <div class="tag-row">
+        ${tag(result.consent.aiPersonalization ? "personalization on" : "personalization off", "source")}
+        ${tag(result.consent.externalProgressSharing ? "external sharing on" : "student-only progress", result.consent.externalProgressSharing ? "medium" : "source")}
+      </div>
+    `);
+    renderAccount();
+  }, { timeoutTarget: els.consentResult, timeoutCopy: "Saving preferences is taking longer than expected. You can try again." });
 }
 
 async function acceptCurrentLegalTerms() {
   if (!els.legalAcceptCheck.checked) {
-    els.legalResult.innerHTML = `<p>Confirm the checkbox before recording acceptance.</p>`;
+    setResult(els.legalResult, `<p>Confirm the checkbox before recording acceptance.</p>`);
     return;
   }
-  els.legalResult.innerHTML = `<p>Recording your acceptance...</p>`;
+  setLoading(els.legalResult, "Recording your acceptance...");
   const result = await api("/api/account/legal/accept", {
     method: "POST",
     body: JSON.stringify({ accepted: true, acceptanceSource: "account_settings" }),
   });
   accountSnapshot = result.account;
-  els.legalResult.innerHTML = `
+  setResult(els.legalResult, `
     <strong>Acceptance recorded</strong>
     <p>Your current terms and privacy notice acceptance is saved.</p>
     <div class="tag-row">
       ${tag(policyVersionNote(result.acceptance.privacyVersion, "Privacy notice"), "source")}
       ${tag(policyVersionNote(result.acceptance.termsVersion, "Terms"), "source")}
     </div>
-  `;
+  `);
   renderAccount();
 }
 
 async function requestConsentWithdrawal() {
-  els.consentResult.innerHTML = `<p>Creating consent review request...</p>`;
+  setLoading(els.consentResult, "Creating consent review request...");
   const result = await api("/api/account/consent/withdrawal-request", {
     method: "POST",
     body: JSON.stringify({ consentKey: "externalProgressSharing" }),
   });
   accountSnapshot = result.account;
-  els.consentResult.innerHTML = `
+  setResult(els.consentResult, `
     <strong>Consent review request recorded</strong>
     <p>StudentOS recorded a review request for external progress sharing. No sharing changes until the request is reviewed.</p>
     <div class="tag-row">${tag("review request", "medium")}${tag("no sharing change yet", "source")}</div>
     ${requestReference(result.request.id)}
-  `;
+  `);
   renderAccount();
 }
 
 async function requestDataExport() {
-  els.accountActionResult.innerHTML = `<p>Preparing your data export request...</p>`;
+  setLoading(els.accountActionResult, "Preparing your data export request...");
   try {
     const result = await api("/api/account/export-request", {
       method: "POST",
       body: JSON.stringify({ scope: "student_owned_data" }),
     });
     accountSnapshot = result.account;
-    els.accountActionResult.innerHTML = `
+    setResult(els.accountActionResult, `
       <strong>Export request created</strong>
       <p>Your export is being prepared. StudentOS will package your account data for authenticated download when it is ready.</p>
       <div class="tag-row">${tag("Export being prepared", "medium")}${tag("Handled privately", "source")}</div>
       ${requestReference(result.request.id)}
-    `;
+    `);
     renderAccount();
   } catch (error) {
-    els.accountActionResult.innerHTML = `
+    setResult(els.accountActionResult, `
       <strong>Export request unavailable</strong>
       <p>${escapeHtml(error.message || "StudentOS could not create this export request. Try again after checking account persistence.")}</p>
       <div class="tag-row">${tag("try again", "medium")}${tag("handled privately", "source")}</div>
-    `;
+    `);
   }
 }
 
 async function downloadReadyExport(requestId) {
-  els.accountActionResult.innerHTML = `<p>Preparing your private export download...</p>`;
+  setLoading(els.accountActionResult, "Preparing your private export download...");
   const headers = {};
   if (authSession?.access_token) headers.Authorization = `Bearer ${authSession.access_token}`;
   const response = await fetch(apiUrl(`/api/account/exports/${encodeURIComponent(requestId)}/download`), { headers });
@@ -2068,32 +2214,32 @@ async function downloadReadyExport(requestId) {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
-  els.accountActionResult.innerHTML = `
+  setResult(els.accountActionResult, `
     <strong>Private export downloaded</strong>
     <p>The package was streamed through your authenticated StudentOS session.</p>
     <div class="tag-row">${tag("private stream", "source")}${tag("short-lived access", "source")}</div>
-  `;
+  `);
   await loadAccountSnapshot();
 }
 
 async function requestAccountDeletion() {
-  els.accountActionResult.innerHTML = `<p>Preparing account deletion request...</p>`;
+  setLoading(els.accountActionResult, "Preparing account deletion request...");
   const result = await api("/api/account/deletion-request", {
     method: "POST",
     body: JSON.stringify({ reason: "student_request_from_account_settings" }),
   });
   accountSnapshot = result.account;
-  els.accountActionResult.innerHTML = `
+  setResult(els.accountActionResult, `
     <strong>Deletion request recorded</strong>
     <p>Grace period active until ${escapeHtml(formatDate(result.request.gracePeriodEndsAt))}. No data has been deleted yet, and the request stays in private review.</p>
     <div class="tag-row">${tag("No data deleted yet", "urgent")}${tag("Private review", "medium")}${tag("Handled privately", "source")}</div>
     ${requestReference(result.request.id)}
-  `;
+  `);
   renderAccount();
 }
 
 async function requestDeletionDryRun(requestId) {
-  els.accountActionResult.innerHTML = `<p>Preparing a deletion safety preview...</p>`;
+  setLoading(els.accountActionResult, "Preparing a deletion safety preview...");
   const result = await api(`/api/account/deletion-requests/${encodeURIComponent(requestId)}/dry-run`, {
     method: "POST",
     body: JSON.stringify({}),
@@ -2106,7 +2252,7 @@ async function requestDeletionDryRun(requestId) {
     : diff.changed
       ? "Affected counts changed since the previous preview."
       : "Affected counts match the previous preview.";
-  els.accountActionResult.innerHTML = `
+  setResult(els.accountActionResult, `
     <strong>Deletion safety preview ready</strong>
     <p>No data has been deleted yet. This preview covers ${escapeHtml(summary.databaseRows || 0)} account record(s) and ${escapeHtml(summary.storageObjects || 0)} private file(s). ${escapeHtml(diffCopy)}</p>
     <div class="tag-row">
@@ -2117,17 +2263,17 @@ async function requestDeletionDryRun(requestId) {
       ${tag("No data deleted yet", "urgent")}
     </div>
     ${requestReference(requestId)}
-  `;
+  `);
   renderAccount();
 }
 
 async function previewGuardianGroundwork() {
-  els.invitationResult.innerHTML = `<p>Checking family and institution sharing safeguards...</p>`;
+  setLoading(els.invitationResult, "Checking sharing safeguards...");
   const result = await api("/api/account/invitations/guardian-preview", {
     method: "POST",
     body: JSON.stringify({ explicitStudentConsent: false }),
   });
-  els.invitationResult.innerHTML = `
+  setResult(els.invitationResult, `
     <strong>${escapeHtml(familyAccessLabel(result.invitation.status))}</strong>
     <p>No family, guardian, teacher, or institution access was enabled. Student consent is required before sharing is turned on.</p>
     <div class="tag-row">
@@ -2135,43 +2281,43 @@ async function previewGuardianGroundwork() {
       ${tag(result.invitation.enabled ? "enabled" : "inactive", result.invitation.enabled ? "medium" : "source")}
     </div>
     ${requestReference(result.invitation.id)}
-  `;
+  `);
   await loadAccountSnapshot();
 }
 
 async function previewPlanUpgrade(planId = "pro") {
-  els.accountActionResult.innerHTML = `<p>Preparing billing preview...</p>`;
+  setLoading(els.accountActionResult, "Preparing billing preview...");
   const result = await api("/api/billing/checkout-preview", {
     method: "POST",
     body: JSON.stringify({ planId }),
   });
-  els.accountActionResult.innerHTML = `
+  setResult(els.accountActionResult, `
     <strong>${escapeHtml(billingStatusLabel(result.status))}</strong>
     <p>${escapeHtml(billingPreviewCopy(result))}</p>
     <div class="tag-row">
       ${tag(humanize(result.planId), "source")}
       ${tag(result.redirectAllowed ? "checkout preview ready" : "no payment opened", result.redirectAllowed ? "medium" : "source")}
     </div>
-  `;
+  `);
 }
 
 async function previewBillingManagement() {
-  els.accountActionResult.innerHTML = `<p>Preparing billing management preview...</p>`;
+  setLoading(els.accountActionResult, "Preparing billing management preview...");
   const result = await api("/api/billing/manage-preview", {
     method: "POST",
     body: JSON.stringify({}),
   });
-  els.accountActionResult.innerHTML = `
+  setResult(els.accountActionResult, `
     <strong>${escapeHtml(billingStatusLabel(result.status))}</strong>
     <p>${escapeHtml(billingPreviewCopy(result, "manage"))}</p>
     <div class="tag-row">
       ${tag(result.redirectAllowed ? "billing portal preview ready" : "no payment portal opened", result.redirectAllowed ? "medium" : "source")}
     </div>
-  `;
+  `);
 }
 
 async function connectClassroom() {
-  els.classroomPanel.innerHTML = `<p>Preparing read-only Classroom connection...</p>`;
+  setLoading(els.classroomPanel, "Preparing read-only Classroom connection...");
   const result = await api("/api/classroom/oauth/start", {
     method: "POST",
     body: JSON.stringify({}),
@@ -2185,7 +2331,7 @@ async function connectClassroom() {
 }
 
 async function syncClassroom() {
-  els.classroomPanel.innerHTML = `<p>Syncing Classroom in read-only mode...</p>`;
+  setLoading(els.classroomPanel, "Syncing Classroom in read-only mode...");
   const result = await api("/api/classroom/sync", {
     method: "POST",
     body: JSON.stringify({}),
@@ -2196,7 +2342,7 @@ async function syncClassroom() {
 }
 
 async function disconnectClassroom() {
-  els.classroomPanel.innerHTML = `<p>Disconnecting Classroom...</p>`;
+  setLoading(els.classroomPanel, "Disconnecting Classroom...");
   const result = await api("/api/classroom/disconnect", {
     method: "POST",
     body: JSON.stringify({}),
@@ -2227,17 +2373,41 @@ function wireEvents() {
   document.querySelectorAll(".verb-tab").forEach((button) => {
     button.addEventListener("click", () => setVerb(button.dataset.verb));
   });
-  document.getElementById("refresh-btn").addEventListener("click", loadBootstrap);
+  document.getElementById("refresh-btn").addEventListener("click", (event) => {
+    withButtonLoading(event.currentTarget, "Loading...", () => loadBootstrap({ showLoading: true }), {
+      timeoutTarget: els.dashboardSummary,
+      timeoutCopy: "Workspace refresh is taking longer than expected. You can try again.",
+      timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+    }).catch(renderWorkspaceLoadError);
+  });
   els.classroomConnectBtn.addEventListener("click", () => {
-    connectClassroom().catch(renderClassroomError);
+    withButtonLoading(els.classroomConnectBtn, "Preparing...", connectClassroom, {
+      timeoutTarget: els.classroomPanel,
+      timeoutCopy: "Classroom connection is taking longer than expected. You can try again.",
+      timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+    }).catch(renderClassroomError);
   });
   els.classroomSyncBtn.addEventListener("click", () => {
-    syncClassroom().catch(renderClassroomError);
+    withButtonLoading(els.classroomSyncBtn, "Syncing...", syncClassroom, {
+      timeoutTarget: els.classroomPanel,
+      timeoutCopy: "Classroom sync is taking longer than expected. You can try again.",
+      timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+    }).catch(renderClassroomError);
   });
   els.classroomDisconnectBtn.addEventListener("click", () => {
-    disconnectClassroom().catch(renderClassroomError);
+    withButtonLoading(els.classroomDisconnectBtn, "Disconnecting...", disconnectClassroom, {
+      timeoutTarget: els.classroomPanel,
+      timeoutCopy: "Classroom disconnect is taking longer than expected. You can try again.",
+    }).catch(renderClassroomError);
   });
-  document.getElementById("contract-btn").addEventListener("click", createContract);
+  document.getElementById("contract-btn").addEventListener("click", (event) => {
+    withButtonLoading(event.currentTarget, "Checking...", createContract, {
+      timeoutTarget: els.contractResult,
+      timeoutCopy: "Assignment readiness is taking longer than expected. You can try again.",
+    }).catch((error) => {
+      setResult(els.contractResult, `<p>${escapeHtml(error.message)}</p>`);
+    });
+  });
   document.getElementById("assignment-flow-form").addEventListener("submit", submitAssignmentFlow);
   document.getElementById("score-form").addEventListener("submit", recordScore);
   document.getElementById("extension-form").addEventListener("submit", draftExtension);
@@ -2248,27 +2418,43 @@ function wireEvents() {
   });
   els.onboardingForm.addEventListener("submit", submitOnboarding);
   els.demoSeedBtn.addEventListener("click", () => {
-    seedDemoProfile().catch((error) => {
-      els.onboardingResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    withButtonLoading(els.demoSeedBtn, "Loading...", seedDemoProfile, {
+      timeoutTarget: els.onboardingResult,
+      timeoutCopy: "Loading the demo profile is taking longer than expected. You can try again.",
+      timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+    }).catch((error) => {
+      setResult(els.onboardingResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
   els.sourceList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-delete-source-id]");
     if (button) {
-      deleteSource(button.dataset.deleteSourceId).catch((error) => {
-        els.sourceResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+      withButtonLoading(button, "Deleting...", () => deleteSource(button.dataset.deleteSourceId), {
+        timeoutTarget: els.sourceResult,
+        timeoutCopy: "Deleting this source is taking longer than expected. You can try again.",
+        timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+      }).catch((error) => {
+        setResult(els.sourceResult, `<p>${escapeHtml(error.message)}</p>`);
       });
     }
     const reindexButton = event.target.closest("[data-reindex-source-id]");
     if (reindexButton) {
-      retrySourceIndex(reindexButton.dataset.reindexSourceId).catch((error) => {
-        els.sourceResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+      withButtonLoading(reindexButton, "Preparing...", () => retrySourceIndex(reindexButton.dataset.reindexSourceId), {
+        timeoutTarget: els.sourceResult,
+        timeoutCopy: "Refreshing this source is taking longer than expected. You can try again.",
+        timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+      }).catch((error) => {
+        setResult(els.sourceResult, `<p>${escapeHtml(error.message)}</p>`);
       });
     }
     const retryFailedButton = event.target.closest("[data-retry-failed-jobs]");
     if (retryFailedButton) {
-      retryFailedJobs().catch((error) => {
-        els.sourceResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+      withButtonLoading(retryFailedButton, "Retrying...", retryFailedJobs, {
+        timeoutTarget: els.sourceResult,
+        timeoutCopy: "Retrying source issues is taking longer than expected. You can try again.",
+        timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+      }).catch((error) => {
+        setResult(els.sourceResult, `<p>${escapeHtml(error.message)}</p>`);
       });
     }
   });
@@ -2299,74 +2485,108 @@ function wireEvents() {
   els.accountResetForm.addEventListener("submit", (event) => {
     event.preventDefault();
     requestPasswordReset(new FormData(event.currentTarget).get("email"), els.passwordResetResult).catch((error) => {
-      els.passwordResetResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+      setResult(els.passwordResetResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
   els.verificationResendForm.addEventListener("submit", (event) => {
     event.preventDefault();
     requestVerificationResend(new FormData(event.currentTarget).get("email")).catch((error) => {
-      els.verificationResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+      setResult(els.verificationResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
   els.legalAcceptBtn.addEventListener("click", () => {
-    acceptCurrentLegalTerms().catch((error) => {
-      els.legalResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    withButtonLoading(els.legalAcceptBtn, "Saving...", acceptCurrentLegalTerms, {
+      timeoutTarget: els.legalResult,
+      timeoutCopy: "Saving acceptance is taking longer than expected. You can try again.",
+    }).catch((error) => {
+      setResult(els.legalResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
   els.consentForm.addEventListener("submit", (event) => {
     submitConsent(event).catch((error) => {
-      els.consentResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+      setResult(els.consentResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
   els.consentWithdrawBtn.addEventListener("click", () => {
-    requestConsentWithdrawal().catch((error) => {
-      els.consentResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    withButtonLoading(els.consentWithdrawBtn, "Preparing...", requestConsentWithdrawal, {
+      timeoutTarget: els.consentResult,
+      timeoutCopy: "Preparing the review request is taking longer than expected. You can try again.",
+    }).catch((error) => {
+      setResult(els.consentResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
   els.exportRequestBtn.addEventListener("click", () => {
-    requestDataExport().catch((error) => {
-      els.accountActionResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    withButtonLoading(els.exportRequestBtn, "Preparing...", requestDataExport, {
+      timeoutTarget: els.accountActionResult,
+      timeoutCopy: "Preparing the export is taking longer than expected. You can try again.",
+      timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+    }).catch((error) => {
+      setResult(els.accountActionResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
   els.deletionRequestBtn.addEventListener("click", () => {
-    requestAccountDeletion().catch((error) => {
-      els.accountActionResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    withButtonLoading(els.deletionRequestBtn, "Preparing...", requestAccountDeletion, {
+      timeoutTarget: els.accountActionResult,
+      timeoutCopy: "Preparing the deletion request is taking longer than expected. You can try again.",
+      timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+    }).catch((error) => {
+      setResult(els.accountActionResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
   els.accountLifecycleStatus.addEventListener("click", (event) => {
     const downloadButton = event.target.closest("[data-download-export-id]");
     if (downloadButton) {
-      downloadReadyExport(downloadButton.dataset.downloadExportId).catch((error) => {
-        els.accountActionResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+      withButtonLoading(downloadButton, "Preparing...", () => downloadReadyExport(downloadButton.dataset.downloadExportId), {
+        timeoutTarget: els.accountActionResult,
+        timeoutCopy: "Preparing the download is taking longer than expected. You can try again.",
+        timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+      }).catch((error) => {
+        setResult(els.accountActionResult, `<p>${escapeHtml(error.message)}</p>`);
       });
     }
     const dryRunButton = event.target.closest("[data-deletion-dry-run-id]");
     if (dryRunButton) {
-      requestDeletionDryRun(dryRunButton.dataset.deletionDryRunId).catch((error) => {
-        els.accountActionResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+      withButtonLoading(dryRunButton, "Checking...", () => requestDeletionDryRun(dryRunButton.dataset.deletionDryRunId), {
+        timeoutTarget: els.accountActionResult,
+        timeoutCopy: "Preparing the deletion safety preview is taking longer than expected. You can try again.",
+        timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+      }).catch((error) => {
+        setResult(els.accountActionResult, `<p>${escapeHtml(error.message)}</p>`);
       });
     }
   });
   els.guardianPreviewBtn.addEventListener("click", () => {
-    previewGuardianGroundwork().catch((error) => {
-      els.invitationResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    withButtonLoading(els.guardianPreviewBtn, "Checking...", previewGuardianGroundwork, {
+      timeoutTarget: els.invitationResult,
+      timeoutCopy: "Checking sharing safeguards is taking longer than expected. You can try again.",
+    }).catch((error) => {
+      setResult(els.invitationResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
   els.upgradeBtn.addEventListener("click", () => {
-    previewPlanUpgrade("pro").catch((error) => {
-      els.accountActionResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    withButtonLoading(els.upgradeBtn, "Preparing...", () => previewPlanUpgrade("pro"), {
+      timeoutTarget: els.accountActionResult,
+      timeoutCopy: "Preparing the plan preview is taking longer than expected. You can try again.",
+    }).catch((error) => {
+      setResult(els.accountActionResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
   els.manageBillingBtn.addEventListener("click", () => {
-    previewBillingManagement().catch((error) => {
-      els.accountActionResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    withButtonLoading(els.manageBillingBtn, "Preparing...", previewBillingManagement, {
+      timeoutTarget: els.accountActionResult,
+      timeoutCopy: "Preparing billing management is taking longer than expected. You can try again.",
+    }).catch((error) => {
+      setResult(els.accountActionResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
   els.pricingPanel.addEventListener("click", (event) => {
     const button = event.target.closest("[data-plan-preview]");
     if (!button || button.textContent.trim() === "Current plan") return;
-    previewPlanUpgrade(button.dataset.planPreview).catch((error) => {
-      els.accountActionResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    withButtonLoading(button, "Preparing...", () => previewPlanUpgrade(button.dataset.planPreview), {
+      timeoutTarget: els.accountActionResult,
+      timeoutCopy: "Preparing the plan preview is taking longer than expected. You can try again.",
+    }).catch((error) => {
+      setResult(els.accountActionResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
   els.aiForm.addEventListener("submit", runAi);
@@ -2375,8 +2595,12 @@ function wireEvents() {
     if (button) {
       setView("studio");
       els.flowAssignmentSelect.value = button.dataset.flowId;
-      analyzeAssignmentFlow(button.dataset.flowId).catch((error) => {
-        els.flowResult.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+      withButtonLoading(button, "Checking...", () => analyzeAssignmentFlow(button.dataset.flowId), {
+        timeoutTarget: els.flowResult,
+        timeoutCopy: "Assignment readiness is taking longer than expected. You can try again.",
+        timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+      }).catch((error) => {
+        setResult(els.flowResult, `<p>${escapeHtml(error.message)}</p>`);
       });
     }
   });
@@ -2385,9 +2609,12 @@ function wireEvents() {
 wireEvents();
 loadRuntimeConfig()
   .then(() => {
-    if (authGateActive()) return null;
+    if (authGateActive()) {
+      setAppLoading(false);
+      return null;
+    }
     return loadBootstrap();
   })
   .catch((error) => {
-    els.aiResponse.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+    renderWorkspaceLoadError(error);
   });

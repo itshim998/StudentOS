@@ -153,6 +153,32 @@ test.afterAll(async () => {
   ]).catch(() => {});
 });
 
+test("initial workspace loading state appears and clears", async ({ page }) => {
+  let releaseBootstrap;
+  const bootstrapRelease = new Promise((resolve) => {
+    releaseBootstrap = resolve;
+  });
+  await page.setViewportSize({ width: 390, height: 820 });
+  await page.route("**/api/bootstrap", async (route) => {
+    await bootstrapRelease;
+    await route.continue();
+  });
+
+  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("#public-auth-shell")).toBeHidden();
+  await expect(page.locator("#app-shell")).toHaveAttribute("aria-busy", "true");
+  await expect(page.locator("#dashboard-summary")).toContainText(/Preparing StudentOS|Loading your workspace/);
+  await expect(page.locator("#roadmap-list")).toContainText("Loading your study list");
+  await expect(page.locator("#classroom-panel")).toContainText("Checking Classroom status");
+  await expectNoHorizontalOverflow(page, "390px loading state");
+
+  releaseBootstrap();
+  await expect(page.locator("#dashboard-summary")).toContainText("Do now");
+  await expect(page.locator("#dashboard-summary")).not.toContainText(/Preparing StudentOS|Loading your workspace/);
+  await expect(page.locator("#app-shell")).not.toHaveAttribute("aria-busy", "true");
+  await page.unroute("**/api/bootstrap");
+});
+
 test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   const pageErrors = [];
   let expectingAssignmentFlowFailure = false;
@@ -211,12 +237,18 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#view-memory")).toContainText("Your academic memory");
   await expect(page.locator("#view-memory")).toContainText("Search your academic memory");
   await expect(page.locator("#view-memory")).toContainText("Upload private source");
+  await page.route("**/api/sources/upload", async (route) => {
+    await delay(300);
+    await route.continue();
+  });
   await page.locator("#source-form input[name='title']").fill("E2E quadratics note");
   await page.locator("#source-file").setInputFiles(path.join(FIXTURE_DIR, "quadratics-note.txt"));
   await page.getByRole("button", { name: "Upload private source" }).click();
+  await expect(page.locator("#source-result")).toContainText("Uploading to private source library");
   await expect(page.locator("#source-result")).toContainText("E2E quadratics note", { timeout: 15_000 });
   await expect(page.locator("#source-result")).toContainText(/source section/i);
   await expect(page.locator("#source-result")).toContainText("Private");
+  await page.unroute("**/api/sources/upload");
   await expect(page.locator("#source-list")).toContainText("Sources ready");
   await expect(page.locator("#source-list")).toContainText(/Uses your materials/i);
   await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
@@ -230,14 +262,20 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#ai-message")).toHaveValue(/Explain this source/i);
   await closeAiDrawer(page);
 
+  await page.route("**/api/ai/verb", async (route) => {
+    await delay(250);
+    await route.continue();
+  });
   await openAiDrawer(page);
   for (const verb of ["Ask", "Plan", "Make", "Review"]) {
     await page.locator(`.verb-tab[data-verb='${verb}']`).click();
     await page.locator("#ai-message").fill(`${verb}: use the uploaded quadratics source in one concise response.`);
     await page.locator("#ai-form").getByRole("button", { name: "Run" }).click();
+    await expect(page.locator("#ai-response")).toContainText("Checking your materials");
     await waitForNotLoading(page.locator("#ai-response"), "Checking your materials");
     await expect(page.locator("#ai-response")).toContainText(/uploaded material|Cited snippets|source|reference/i, { timeout: 20_000 });
   }
+  await page.unroute("**/api/ai/verb");
   await closeAiDrawer(page);
 
   await clickNav(page, "Studio");
@@ -277,15 +315,33 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await page.evaluate(() => { window.location.hash = "pricing"; });
   await expect(page.locator("#view-title")).toHaveText("Account");
   await expect(page.locator("#pricing")).toBeVisible();
+  await page.route("**/api/account/export-request", async (route) => {
+    await delay(300);
+    await route.continue();
+  });
   await page.getByRole("button", { name: "Request data export" }).click();
+  await expect(page.locator("#account-action-result")).toContainText("Preparing your data export request");
   await expect(page.locator("#account-action-result")).toContainText("Export request created");
   await expect(page.locator("#account-action-result")).toContainText("Reference");
+  await page.unroute("**/api/account/export-request");
+  await page.route("**/api/account/deletion-request", async (route) => {
+    await delay(300);
+    await route.continue();
+  });
   await page.getByRole("button", { name: "Request account deletion" }).click();
+  await expect(page.locator("#account-action-result")).toContainText("Preparing account deletion request");
   await expect(page.locator("#account-action-result")).toContainText("Deletion request recorded");
   await expect(page.locator("#account-action-result")).toContainText("Grace period active");
+  await page.unroute("**/api/account/deletion-request");
+  await page.route("**/api/account/deletion-requests/*/dry-run", async (route) => {
+    await delay(300);
+    await route.continue();
+  });
   await page.locator("#account-lifecycle-status").getByRole("button", { name: "Preview deletion safety" }).click();
+  await expect(page.locator("#account-action-result")).toContainText("Preparing a deletion safety preview");
   await expect(page.locator("#account-action-result")).toContainText("Deletion safety preview ready");
   await expect(page.locator("#account-action-result")).toContainText("No data has been deleted yet");
+  await page.unroute("**/api/account/deletion-requests/*/dry-run");
   await page.getByRole("button", { name: "Preview sharing safeguards" }).click();
   await expect(page.locator("#invitation-result")).toContainText(/Access inactive|Safeguards previewed|Consent required/i);
   await page.getByRole("button", { name: "Upgrade" }).click();

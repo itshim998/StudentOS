@@ -86,6 +86,11 @@ button {
   min-width: 0;
 }
 
+button[disabled] {
+  cursor: wait;
+  opacity: 0.68;
+}
+
 input[type="file"] {
   min-width: 0;
 }
@@ -984,6 +989,51 @@ input[type="file"] {
 .tag.learning_required_first { background: var(--coral-soft); color: #753122; }
 .tag.review_first_contract,
 .tag.practice_test_ready { background: var(--violet-soft); color: #3d3675; }
+
+.loading-row,
+.button-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.loading-row {
+  width: 100%;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.loading-card {
+  min-height: 72px;
+  align-content: center;
+}
+
+.today-brief-card.loading-card {
+  min-height: 168px;
+}
+
+.loading-spinner,
+.button-spinner {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--line);
+  border-top-color: var(--muted);
+  border-radius: 50%;
+  animation: studentos-spin 0.8s linear infinite;
+}
+
+.button-spinner {
+  width: 14px;
+  height: 14px;
+  border-color: rgba(102, 115, 109, 0.32);
+  border-top-color: currentColor;
+}
+
+@keyframes studentos-spin {
+  to { transform: rotate(360deg); }
+}
 
 .icon-button,
 .text-button,
@@ -2782,5 +2832,10 @@ textarea:focus-visible {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+
+  .loading-spinner,
+  .button-spinner {
+    animation: none !important;
   }
 }

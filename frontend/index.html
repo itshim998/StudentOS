@@ -63,7 +63,7 @@
     </div>
   </section>
 
-  <div class="app-shell" id="app-shell">
+  <div class="app-shell" id="app-shell" aria-busy="true">
     <aside class="rail" aria-label="Primary navigation">
       <div class="brand-lockup">
         <div class="brand-mark" aria-hidden="true">SO</div>
@@ -147,7 +147,14 @@
 
       <section class="view active" id="view-today" aria-labelledby="view-title">
         <div class="today-command-center">
-          <div id="dashboard-summary" class="dashboard-summary today-brief"></div>
+          <div id="dashboard-summary" class="dashboard-summary today-brief">
+            <article class="today-brief-card loading-card" role="status" aria-live="polite">
+              <div class="loading-row">
+                <span class="loading-spinner" aria-hidden="true"></span>
+                <span>Preparing StudentOS...</span>
+              </div>
+            </article>
+          </div>
 
           <div class="overview-grid today-grid">
             <section class="focus-board today-board today-study-board">
@@ -163,7 +170,14 @@
                   </button>
                 </div>
               </div>
-              <div id="roadmap-list" class="stack-list today-study-list"></div>
+              <div id="roadmap-list" class="stack-list today-study-list">
+                <article class="item-card loading-card" role="status" aria-live="polite">
+                  <div class="loading-row">
+                    <span class="loading-spinner" aria-hidden="true"></span>
+                    <span>Loading your study list...</span>
+                  </div>
+                </article>
+              </div>
             </section>
 
             <div class="today-side-stack">
@@ -174,7 +188,14 @@
                     <h3>Classes And Blocks</h3>
                   </div>
                 </div>
-                <div id="timetable-list" class="stack-list compact today-agenda-list"></div>
+                <div id="timetable-list" class="stack-list compact today-agenda-list">
+                  <article class="item-card loading-card" role="status" aria-live="polite">
+                    <div class="loading-row">
+                      <span class="loading-spinner" aria-hidden="true"></span>
+                      <span>Loading your schedule...</span>
+                    </div>
+                  </article>
+                </div>
               </section>
 
               <section class="assignment-board today-board today-due-board">
@@ -190,9 +211,19 @@
                   </div>
                 </div>
                 <div id="classroom-panel" class="result-box compact-result today-classroom-panel" aria-live="polite">
-                  <p>Read-only import. StudentOS will not submit or modify Classroom work.</p>
+                  <div class="loading-row" role="status" aria-live="polite">
+                    <span class="loading-spinner" aria-hidden="true"></span>
+                    <span>Checking Classroom status...</span>
+                  </div>
                 </div>
-                <div id="assignment-list" class="stack-list today-assignment-list"></div>
+                <div id="assignment-list" class="stack-list today-assignment-list">
+                  <article class="item-card loading-card" role="status" aria-live="polite">
+                    <div class="loading-row">
+                      <span class="loading-spinner" aria-hidden="true"></span>
+                      <span>Loading due work...</span>
+                    </div>
+                  </article>
+                </div>
               </section>
             </div>
           </div>
