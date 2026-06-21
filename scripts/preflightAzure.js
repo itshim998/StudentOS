@@ -43,6 +43,10 @@ function containsAny(text, patterns) {
   return patterns.filter((pattern) => pattern.test(text));
 }
 
+function includesAll(text, values) {
+  return values.every((value) => text.includes(value));
+}
+
 const dockerfile = exists("Dockerfile") ? read("Dockerfile") : "";
 const dockerignore = exists(".dockerignore") ? read(".dockerignore") : "";
 const pkg = JSON.parse(read("package.json"));
@@ -148,7 +152,41 @@ addCheck("workflow uses GHCR", workflow.includes("ghcr.io") && workflow.includes
 addCheck("workflow selects Azure subscription", workflow.includes("AZURE_SUBSCRIPTION_ID") && workflow.includes("az account set"));
 addCheck("workflow passes existing ACA environment resource group", workflow.includes("AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP") && workflow.includes("useExistingEnvironment=true"));
 addCheck("workflow does not create a second Central India ACA environment", !workflow.includes("cae-studentos-dev") && workflow.includes("Validate existing ACA environment settings"));
-addCheck("workflow does not use secret build args", !/build-args:|--build-arg|STUDENTOS_SUPABASE_SERVICE_ROLE_KEY|GOOGLE_CLIENT_SECRET|GROQ_API_KEY|POLLINATIONS_API_KEY/.test(workflow));
+const buildWorkflowStart = workflow.indexOf("- name: Build and push image");
+const azureLoginStart = workflow.indexOf("- name: Azure login");
+const buildWorkflowBlock = buildWorkflowStart >= 0 && azureLoginStart > buildWorkflowStart
+  ? workflow.slice(buildWorkflowStart, azureLoginStart)
+  : workflow;
+addCheck("workflow does not use secret build args", !/build-args:|--build-arg|STUDENTOS_SUPABASE_SERVICE_ROLE_KEY|GOOGLE_CLIENT_SECRET|GROQ_API_KEY|POLLINATIONS_API_KEY/.test(buildWorkflowBlock));
+const requiredAzureSupabaseSecrets = [
+  "STUDENTOS_SUPABASE_URL_1",
+  "STUDENTOS_SUPABASE_ANON_KEY_1",
+  "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1",
+  "STUDENTOS_SUPABASE_URL_2",
+  "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2",
+  "STUDENTOS_SUPABASE_URL_3",
+  "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3",
+  "STUDENTOS_SUPABASE_URL_4",
+  "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4",
+  "STUDENTOS_SUPABASE_JWT_SECRET",
+];
+const requiredAzureSecretRefs = [
+  "STUDENTOS_SUPABASE_URL_1=secretref:studentos-supabase-url-1",
+  "STUDENTOS_SUPABASE_ANON_KEY_1=secretref:studentos-supabase-anon-key-1",
+  "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1=secretref:studentos-supabase-service-role-key-1",
+  "STUDENTOS_SUPABASE_URL_2=secretref:studentos-supabase-url-2",
+  "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2=secretref:studentos-supabase-service-role-key-2",
+  "STUDENTOS_SUPABASE_URL_3=secretref:studentos-supabase-url-3",
+  "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3=secretref:studentos-supabase-service-role-key-3",
+  "STUDENTOS_SUPABASE_URL_4=secretref:studentos-supabase-url-4",
+  "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4=secretref:studentos-supabase-service-role-key-4",
+  "STUDENTOS_SUPABASE_JWT_SECRET=secretref:studentos-supabase-jwt-secret",
+];
+addCheck("workflow validates Supabase backend secrets", requiredAzureSupabaseSecrets.every((name) => workflow.includes(`${name}: \${{ secrets.${name} }}`)) && workflow.includes("Missing required Azure backend secret"));
+addCheck("workflow maps Supabase backend secrets to ACA secret refs", includesAll(workflow, requiredAzureSecretRefs));
+addCheck("workflow configures production storage buckets", workflow.includes("STUDENTOS_STORAGE_BUCKET=studentos-source-materials") && workflow.includes("STUDENTOS_EXPORT_STORAGE_BUCKET=studentos-data-exports"));
+const runtimeConfigText = `${read("frontend/runtime-config.js")}\n${read("scripts/writeCloudflareFrontendConfig.js")}`;
+addCheck("frontend runtime config remains public-only", !/STUDENTOS_SUPABASE|SUPABASE_SERVICE_ROLE|SERVICE_ROLE_KEY|JWT_SECRET/i.test(runtimeConfigText));
 const bicep = read("infra/azure/containerapp.bicep");
 const requiredCorsOrigins = [
   "https://studentos.sentiqlabs.com",

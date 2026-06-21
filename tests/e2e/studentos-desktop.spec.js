@@ -115,6 +115,38 @@ async function expectAiDrawerWithinViewport(page, label) {
   expect(rect.bottom, `${label} drawer bottom`).toBeLessThanOrEqual(rect.viewportHeight);
 }
 
+async function routePublicHostToLocal(page, hostname = "studentos.sentiqlabs.com", options = {}) {
+  await page.route(`https://${hostname}/**`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname === "/runtime-config.js") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/javascript",
+        body: `window.StudentOSRuntimeConfig = { apiBase: ${JSON.stringify(`https://${hostname}`)} };\n`,
+      });
+      return;
+    }
+    if (options.configBody && url.pathname === "/api/config") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(options.configBody),
+      });
+      return;
+    }
+    const headers = { ...request.headers() };
+    delete headers.host;
+    const data = request.postDataBuffer();
+    const response = await page.request.fetch(`${baseUrl}${url.pathname}${url.search}`, {
+      method: request.method(),
+      headers,
+      data: data || undefined,
+    });
+    await route.fulfill({ response });
+  });
+}
+
 let serverProcess;
 let baseUrl;
 let serverLogs = [];
@@ -439,4 +471,42 @@ test("public auth shell gates the app when auth is enabled", async ({ page }) =>
   await page.goto(baseUrl);
   await expect(page.locator("#public-auth-shell")).toBeHidden();
   await expect(page.locator("#app-shell")).toBeVisible();
+});
+
+test("production host does not fall back to demo when auth config is unavailable", async ({ page }) => {
+  await routePublicHostToLocal(page);
+
+  await page.goto("https://studentos.sentiqlabs.com/#pricing", { waitUntil: "domcontentloaded" });
+  await expect(page.locator("#public-auth-shell")).toBeVisible();
+  await expect(page.locator("#app-shell")).toBeHidden();
+  await expect(page.locator("#auth-shell-title")).toHaveText("StudentOS sign-in is not available yet");
+  await expect(page.locator("#auth-session")).toContainText("Configuration required");
+  await expect(page.locator("#auth-help")).toContainText("Azure deployment");
+  await expect(page.locator("#auth-form")).toBeHidden();
+  await expect(page.locator("[data-auth-mode='signin']")).toBeDisabled();
+  await expect(page.locator("#public-auth-shell")).not.toContainText("Local demo");
+  await expect(page.locator("#public-auth-shell")).not.toContainText("demo@studentos.local");
+  await expect(page.locator("#pricing")).not.toBeVisible();
+});
+
+test("production host stays on public auth shell when auth is enabled and signed out", async ({ page }) => {
+  const config = await fetch(`${baseUrl}/api/config`).then((response) => response.json());
+  await routePublicHostToLocal(page, "studentos.sentiqlabs.com", {
+    configBody: {
+      ...config,
+      auth: {
+        enabled: true,
+        url: "https://example.supabase.co",
+        anonKey: "public-anon-test-key",
+      },
+    },
+  });
+
+  await page.goto("https://studentos.sentiqlabs.com/#signup", { waitUntil: "domcontentloaded" });
+  await expect(page.locator("#public-auth-shell")).toBeVisible();
+  await expect(page.locator("#app-shell")).toBeHidden();
+  await expect(page.locator("#auth-shell-title")).toHaveText("Create your StudentOS account");
+  await expect(page.locator("#auth-form")).toBeVisible();
+  await expect(page.locator("[data-auth-mode='signin']")).not.toBeDisabled();
+  await expect(page.locator("#public-auth-shell")).not.toContainText("Local demo");
 });

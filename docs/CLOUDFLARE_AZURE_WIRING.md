@@ -45,7 +45,9 @@ STUDENTOS_DEPLOYMENT=azure-container-apps
 STUDENTOS_SERVE_FRONTEND=false
 ```
 
-If `/api/config` reports mock mode, configure the required Supabase runtime secrets and env vars in Azure Container Apps:
+On public frontend hosts (`studentos.sentiqlabs.com` and `studentos-39s.pages.dev`), the frontend must not fall back to a local demo account when `/api/config` reports auth unavailable. Before the Azure backend secrets are mapped, signed-out users should see a sign-in/configuration-unavailable shell instead of `demo@studentos.local`.
+
+The GitHub Actions environment `azure-dev` must contain these backend-only secret names so the `Azure Container Apps - StudentOS API` workflow can map them into Azure Container Apps secret refs:
 
 ```text
 STUDENTOS_SUPABASE_URL_1
@@ -58,13 +60,19 @@ STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3
 STUDENTOS_SUPABASE_URL_4
 STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4
 STUDENTOS_SUPABASE_JWT_SECRET
-STUDENTOS_STORAGE_BUCKET
-STUDENTOS_EXPORT_STORAGE_BUCKET
 ```
 
-Keep service-role keys backend-only in Azure Container Apps. They are not Cloudflare Pages variables.
+Keep service-role keys backend-only in GitHub Actions and Azure Container Apps. They are not Cloudflare Pages variables and must never appear in `frontend/runtime-config.js`.
 
-As of Pass 33.1 live verification, Azure has `STUDENTOS_MODE=supabase`, but `/api/config` still reports `mock` until the Supabase URL/key/JWT variables above are mapped into the running Container App.
+The workflow also sets these non-secret runtime values on the Container App:
+
+```text
+STUDENTOS_STORAGE_BUCKET=studentos-source-materials
+STUDENTOS_EXPORT_STORAGE_BUCKET=studentos-data-exports
+STUDENTOS_AUTH_REDIRECT_URL=https://studentos.sentiqlabs.com/auth/complete
+```
+
+As of Pass 36.0 diagnosis, Cloudflare runtime config points to the Azure backend correctly, but live Azure `/api/config` reports `mock` until the Supabase URL/key/JWT variables above are mapped into the running Container App.
 
 ## Post-Deploy Verification
 
@@ -88,6 +96,8 @@ The verifier checks:
 - CORS allows `https://studentos.sentiqlabs.com`.
 - `/api/ai/verb` returns JSON, not Cloudflare HTML.
 - The backend reports `frontendServedByBackend: false`.
+
+After adding or updating GitHub secrets, manually rerun GitHub Actions workflow `Azure Container Apps - StudentOS API` on `main`, then verify `https://studentos.sentiqlabs.com/` shows the public login/signup shell for signed-out users and does not show `Demo session` or `demo@studentos.local`.
 
 Cleanup:
 

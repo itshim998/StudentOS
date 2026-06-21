@@ -132,6 +132,25 @@ Backend-only secret values:
 - billing provider secrets only after a billing launch review
 - operator/internal/deletion secrets only after an internal-ops launch review
 
+The `Azure Container Apps - StudentOS API` GitHub Actions workflow validates and maps the required Supabase values into Azure Container Apps as backend-only secret refs after the Bicep deployment. Missing required secret names cause the workflow to fail before deployment output is shown. Service-role keys stay in GitHub Actions and Azure Container Apps only; do not add them to Cloudflare Pages or any frontend runtime config.
+
+For PASS 36.0 production auth gating, these `azure-dev` GitHub environment secrets must exist before rerunning the workflow:
+
+```text
+STUDENTOS_SUPABASE_URL_1
+STUDENTOS_SUPABASE_ANON_KEY_1
+STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1
+STUDENTOS_SUPABASE_URL_2
+STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2
+STUDENTOS_SUPABASE_URL_3
+STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3
+STUDENTOS_SUPABASE_URL_4
+STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4
+STUDENTOS_SUPABASE_JWT_SECRET
+```
+
+The workflow sets `STUDENTOS_STORAGE_BUCKET`, `STUDENTOS_EXPORT_STORAGE_BUCKET`, and `STUDENTOS_AUTH_REDIRECT_URL` as non-secret Container App env vars.
+
 ## Manual Local Deployment Command
 
 PowerShell example after building/pushing an image:

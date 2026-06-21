@@ -241,7 +241,7 @@ function renderWorkspaceLoadError(error) {
 }
 
 function authGateActive() {
-  return Boolean(runtimeConfig.auth?.enabled && !authSession?.access_token);
+  return Boolean(productionAuthUnavailable() || (runtimeConfig.auth?.enabled && !authSession?.access_token));
 }
 
 function updateShellVisibility() {
@@ -253,6 +253,13 @@ function updateShellVisibility() {
     els.appShell.hidden = showPublicAuth;
   }
   document.body.classList.toggle("auth-shell-active", showPublicAuth);
+}
+
+function setAuthModeTabsDisabled(disabled) {
+  document.querySelectorAll("[data-auth-mode]").forEach((button) => {
+    button.disabled = Boolean(disabled);
+    button.setAttribute("aria-disabled", disabled ? "true" : "false");
+  });
 }
 
 function setAuthShellMode(mode = "signin") {
@@ -340,6 +347,10 @@ function renderClassroomError(error) {
 
 function isPublicFrontendOrigin() {
   return PUBLIC_FRONTEND_HOSTS.has(window.location.hostname);
+}
+
+function productionAuthUnavailable() {
+  return isPublicFrontendOrigin() && runtimeConfig.auth?.enabled !== true;
 }
 
 function apiBaseMisconfiguredError() {
@@ -444,6 +455,22 @@ async function authRequest(path, body, token = "") {
 }
 
 function renderAuth(message = "") {
+  if (productionAuthUnavailable()) {
+    setAuthModeTabsDisabled(true);
+    els.authForm.hidden = true;
+    els.logoutBtn.hidden = true;
+    setText(els.authModeLabel, "Configuration");
+    setText(els.authShellTitle, "StudentOS sign-in is not available yet");
+    setText(els.authShellCopy, "The production backend is missing its Supabase Auth configuration. StudentOS will not open a demo session on this domain.");
+    setText(els.authSession, "Configuration required");
+    setText(els.authHelp, "Ask the operator to rerun the Azure deployment after adding the required Supabase backend secrets.");
+    setText(els.authMessage, message || "");
+    setText(els.railSessionStatus, "Sign in unavailable");
+    setText(els.railSessionHelp, "Production auth configuration is required.");
+    updateShellVisibility();
+    return;
+  }
+  setAuthModeTabsDisabled(false);
   if (!runtimeConfig.auth?.enabled) {
     els.authForm.hidden = true;
     els.logoutBtn.hidden = true;
