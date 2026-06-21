@@ -13,6 +13,12 @@ function fragmentParams() {
   return new URLSearchParams(window.location.hash.replace(/^#/, ""));
 }
 
+function scrubAuthFragment(status = "") {
+  if (!window.location.hash && !status) return;
+  const suffix = status ? `?status=${encodeURIComponent(status)}` : "";
+  history.replaceState(null, "", `/auth/complete${suffix}`);
+}
+
 function apiUrl(path) {
   if (!API_BASE && PUBLIC_FRONTEND_HOSTS.has(window.location.hostname)) {
     throw new Error(API_BASE_MISCONFIGURED_MESSAGE);
@@ -63,6 +69,7 @@ async function init() {
   const fragment = fragmentParams();
   const type = fragment.get("type") || query.get("type") || query.get("auth") || "";
   const accessToken = fragment.get("access_token") || "";
+  if (window.location.hash) scrubAuthFragment();
   if (type === "recovery" && accessToken) {
     copy.textContent = "Choose a new password for your StudentOS account.";
     form.hidden = false;
@@ -75,7 +82,7 @@ async function init() {
         await updatePassword(config, accessToken, password.value);
         form.hidden = true;
         show("Password updated. You can return to StudentOS and sign in.");
-        history.replaceState(null, "", "/auth/complete?status=password_updated");
+        scrubAuthFragment("password_updated");
       } catch (error) {
         show(error.message);
       }
@@ -85,12 +92,12 @@ async function init() {
   if (["signup", "verified", "email_change"].includes(type) || query.get("status") === "verified") {
     copy.textContent = "Your email verification link has been processed.";
     show("Email verification complete. Return to StudentOS and sign in.");
-    history.replaceState(null, "", "/auth/complete?status=verified");
+    scrubAuthFragment("verified");
     return;
   }
   copy.textContent = "This account link is incomplete or has expired.";
   show("Request a fresh verification or password reset link from StudentOS account settings.");
-  if (window.location.hash) history.replaceState(null, "", "/auth/complete");
+  scrubAuthFragment();
 }
 
 init().catch((error) => show(error.message));

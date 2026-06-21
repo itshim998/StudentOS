@@ -25,6 +25,17 @@ npm run cloudflare:config
 
 That command writes `frontend/runtime-config.js` with only the public API origin. It must not contain Supabase service-role keys, provider keys, OAuth secrets, Azure credentials, or tokens.
 
+## Required Cloudflare Pages Routes
+
+The checked-in `frontend/_redirects` file rewrites the Supabase Auth completion URL:
+
+```text
+/auth/complete /auth-complete 200
+/auth/complete/ /auth-complete 200
+```
+
+Keep the Supabase Auth redirect URL as `https://studentos.sentiqlabs.com/auth/complete`. Cloudflare Pages should serve the styled `auth-complete` page from that route after a normal Pages redeploy; no dashboard redirect rule or secret change is required.
+
 ## Required Azure CORS Config
 
 Set this Azure Container App environment variable:

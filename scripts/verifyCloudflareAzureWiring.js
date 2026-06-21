@@ -42,9 +42,11 @@ async function main() {
   const configUrl = new URL("/api/config", backend);
   const aiUrl = new URL("/api/ai/verb", backend);
   const runtimeConfigUrl = new URL("/runtime-config.js", frontend);
+  const authCompletionUrl = new URL("/auth/complete", frontend);
 
   const frontendPage = await fetchText(frontend);
   const runtimeConfig = await fetchText(runtimeConfigUrl);
+  const authCompletion = await fetchText(authCompletionUrl);
   const health = await fetchJson(healthUrl, { headers: { Origin: origin } });
   const config = await fetchJson(configUrl, { headers: { Origin: origin } });
   const ai = await fetchJson(aiUrl, {
@@ -63,8 +65,15 @@ async function main() {
   const aiCorsOrigin = ai.response.headers.get("access-control-allow-origin") || "";
   const runtimeConfigReferenced = frontendPage.text.includes("runtime-config.js");
   const runtimeConfigPointsToBackend = runtimeConfig.text.includes(backend.origin);
+  const authCompletionIsStyledRoute = authCompletion.response.ok &&
+    authCompletion.text.includes("recovery-complete-form") &&
+    authCompletion.text.includes("/styles/main.css") &&
+    authCompletion.text.includes("/scripts/auth-complete.js") &&
+    !authCompletion.text.includes("scripts/app.js") &&
+    !/["']\/auth\/(?:runtime-config\.js|styles\/main\.css|scripts\/)/.test(authCompletion.text);
   const ok = frontendPage.response.ok &&
     runtimeConfig.response.ok &&
+    authCompletionIsStyledRoute &&
     runtimeConfigReferenced &&
     runtimeConfigPointsToBackend &&
     health.response.ok &&
@@ -83,8 +92,10 @@ async function main() {
     backendOrigin: backend.origin,
     frontendStatus: frontendPage.response.status,
     runtimeConfigStatus: runtimeConfig.response.status,
+    authCompletionStatus: authCompletion.response.status,
     runtimeConfigReferenced,
     runtimeConfigPointsToBackend,
+    authCompletionIsStyledRoute,
     healthStatus: health.response.status,
     configStatus: config.response.status,
     aiStatus: ai.response.status,

@@ -122,7 +122,7 @@ export async function requestPasswordReset({ email, authClient, supabaseConfig, 
     emailVerificationReady: true,
     resetEmailRequested: false,
     mode: supabaseConfig?.mode === "supabase" ? "supabase_auth_project" : "local_scaffold",
-    message: "If an account exists for this email, a reset link can be sent by the StudentOS Auth project.",
+    message: "If an account exists for this email, a reset link has been sent. Please check your inbox.",
     secretsPrinted: false,
   };
   if (supabaseConfig?.mode === "supabase" && authClient?.isConfigured?.() && typeof authClient.recoverPassword === "function") {

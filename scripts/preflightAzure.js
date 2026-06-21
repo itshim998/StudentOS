@@ -89,6 +89,10 @@ addCheck("Azure disables backend frontend serving", server.includes("const SERVE
 addCheck("Cloudflare runtime config scaffold exists", exists("frontend/runtime-config.js") && exists("scripts/writeCloudflareFrontendConfig.js"));
 addCheck("frontend API config reads runtime config", read("frontend/scripts/config.js").includes("StudentOSRuntimeConfig") && read("frontend/index.html").includes("runtime-config.js"));
 addCheck("frontend detects Cloudflare API base misconfiguration", read("frontend/scripts/app.js").includes("API base URL misconfigured") && read("frontend/scripts/app.js").includes("text/html"));
+const redirects = exists("frontend/_redirects") ? read("frontend/_redirects") : "";
+const authCompleteHtml = read("frontend/auth-complete.html");
+addCheck("Cloudflare auth completion rewrite exists", redirects.includes("/auth/complete /auth-complete 200") && redirects.includes("/auth/complete/ /auth-complete 200"));
+addCheck("auth completion assets are root absolute", authCompleteHtml.includes('href="/styles/main.css"') && authCompleteHtml.includes('src="/runtime-config.js"') && authCompleteHtml.includes('src="/scripts/config.js"') && authCompleteHtml.includes('src="/scripts/auth-complete.js"'));
 
 const healthBlock = server.slice(server.indexOf('url.pathname === "/api/health"'), server.indexOf('url.pathname === "/api/status"'));
 addCheck("health route avoids state/database/provider calls", !/getStateContext|repository\.|fetch\(|runStudentOsVerb|syncGoogleClassroom|embedSourceChunks/.test(healthBlock));

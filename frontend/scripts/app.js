@@ -561,11 +561,6 @@ async function requestPasswordReset(email, target = els.passwordResetResult) {
   target.innerHTML = `
     <strong>Password reset ready</strong>
     <p>${escapeHtml(result.message)}</p>
-    <div class="tag-row">
-      ${tag(humanize(result.mode), "source")}
-      ${tag(result.resetEmailRequested ? "reset email requested" : "preview ready", result.resetEmailRequested ? "source" : "medium")}
-      ${tag("protected request", "source")}
-    </div>
   `;
 }
 

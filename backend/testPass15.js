@@ -77,6 +77,7 @@ const mockReset = await requestPasswordReset({
 });
 assert.equal(mockReset.email, "student@example.com");
 assert.equal(mockReset.resetEmailRequested, false);
+assert.equal(mockReset.message, "If an account exists for this email, a reset link has been sent. Please check your inbox.");
 assert.equal(mockReset.secretsPrinted, false);
 
 let recoverCalled = false;
@@ -93,6 +94,7 @@ const supabaseReset = await requestPasswordReset({
 });
 assert.equal(recoverCalled, true);
 assert.equal(supabaseReset.resetEmailRequested, true);
+assert.equal(supabaseReset.message, "If an account exists for this email, a reset link has been sent. Please check your inbox.");
 
 const fakeProdEnv = {
   STUDENTOS_ENV: "production",

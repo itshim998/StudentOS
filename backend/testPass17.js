@@ -155,9 +155,17 @@ assert.equal(resend.verificationEmailRequested, true);
 
 const completionHtml = await readFile(new URL("../frontend/auth-complete.html", import.meta.url), "utf8");
 const completionJs = await readFile(new URL("../frontend/scripts/auth-complete.js", import.meta.url), "utf8");
+const cloudflareRedirects = await readFile(new URL("../frontend/_redirects", import.meta.url), "utf8");
 assert(completionHtml.includes("recovery-complete-form"));
+assert(completionHtml.includes('href="/styles/main.css"'));
+assert(completionHtml.includes('src="/runtime-config.js"'));
+assert(completionHtml.includes('src="/scripts/config.js"'));
+assert(completionHtml.includes('src="/scripts/auth-complete.js"'));
 assert(completionJs.includes("history.replaceState"));
+assert(completionJs.includes("scrubAuthFragment"));
 assert.equal(completionJs.includes("service_role"), false);
+assert(cloudflareRedirects.includes("/auth/complete /auth-complete 200"));
+assert(cloudflareRedirects.includes("/auth/complete/ /auth-complete 200"));
 
 const prodEnv = { STUDENTOS_ENV: "production", STUDENTOS_DEMO_SEED_ENABLED: "true" };
 assert.equal(isDemoSeedAllowed({ env: prodEnv, supabaseConfig: mockSupabaseConfig }), false);

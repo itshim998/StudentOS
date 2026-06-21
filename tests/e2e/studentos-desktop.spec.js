@@ -459,6 +459,12 @@ test("public auth shell gates the app when auth is enabled", async ({ page }) =>
 
   await page.getByRole("button", { name: "Existing account" }).click();
   await expect(page.locator("#auth-shell-title")).toHaveText("Sign in to StudentOS");
+  await page.locator("#auth-email").fill("qa@studentos.local");
+  await page.getByRole("button", { name: "Reset password" }).click();
+  await expect(page.locator("#auth-message")).toContainText("If an account exists for this email, a reset link has been sent. Please check your inbox.");
+  await expect(page.locator("#auth-message")).not.toContainText("Supabase Auth Project");
+  await expect(page.locator("#auth-message")).not.toContainText("reset email requested");
+  await expect(page.locator("#auth-message")).not.toContainText("protected request");
   await page.getByRole("button", { name: "New account" }).click();
   await expect(page.locator("#auth-shell-title")).toHaveText("Create your StudentOS account");
 
@@ -509,4 +515,23 @@ test("production host stays on public auth shell when auth is enabled and signed
   await expect(page.locator("#auth-form")).toBeVisible();
   await expect(page.locator("[data-auth-mode='signin']")).not.toBeDisabled();
   await expect(page.locator("#public-auth-shell")).not.toContainText("Local demo");
+});
+
+test("auth completion route loads styled recovery UI and scrubs token fragments", async ({ page }) => {
+  await routePublicHostToLocal(page);
+  const recoveryToken = ["fake", "recovery", "token"].join("-");
+  const fragment = new URLSearchParams({
+    type: "recovery",
+    access_token: recoveryToken,
+  }).toString();
+
+  await page.goto(`https://studentos.sentiqlabs.com/auth/complete#${fragment}`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("body")).toHaveClass(/auth-complete-page/);
+  await expect(page.locator("#recovery-complete-form")).toBeVisible();
+  await expect(page.locator("#completion-copy")).toContainText("Choose a new password");
+  await expect(page.locator("#app-shell")).toHaveCount(0);
+  await expect(page.locator("body")).not.toContainText("Demo session");
+  expect(page.url()).not.toContain("access_token");
+  expect(page.url()).not.toContain(recoveryToken);
+  await expect.poll(async () => page.evaluate(() => [...document.styleSheets].some((sheet) => sheet.href?.includes("/styles/main.css")))).toBe(true);
 });
