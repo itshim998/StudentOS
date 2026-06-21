@@ -1734,6 +1734,9 @@ textarea:focus {
     max-height: 48vh;
     overflow-y: auto;
     overscroll-behavior: contain;
+    background: rgba(6, 10, 9, 0.98);
+    border-bottom: 1px solid var(--border-soft);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
   }
   .auth-panel,
   .rail-session-card {
@@ -1755,7 +1758,11 @@ textarea:focus {
   .workspace {
     padding: 18px 18px 96px;
   }
-  .topbar { align-items: flex-start; flex-direction: column; }
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
   .overview-grid,
   .dashboard-summary,
   .memory-layout,
@@ -1817,6 +1824,7 @@ textarea:focus {
   .ai-launcher {
     right: 14px;
     bottom: 14px;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
   }
   .ai-context-button {
     white-space: normal;
@@ -1977,7 +1985,7 @@ textarea:focus {
   --surface-2: #151d1a;
   --surface-3: #1b2521;
   --rail: #070b0a;
-  --line: rgba(220, 236, 228, 0.1);
+  --line: rgba(220, 236, 228, 0.085);
   --mint: #58c39b;
   --mint-soft: rgba(88, 195, 155, 0.14);
   --amber: #e5b95f;
@@ -1988,20 +1996,23 @@ textarea:focus {
   --violet-soft: rgba(157, 140, 242, 0.14);
   --sky: #70bdd3;
   --sky-soft: rgba(112, 189, 211, 0.14);
-  --shadow: 0 16px 34px rgba(0, 0, 0, 0.26);
-  --shadow-soft: 0 10px 24px rgba(0, 0, 0, 0.2);
-  --shadow-panel: 0 12px 28px rgba(0, 0, 0, 0.22);
-  --panel: rgba(16, 22, 20, 0.94);
-  --panel-muted: rgba(21, 29, 26, 0.72);
-  --field-bg: rgba(9, 14, 13, 0.86);
-  --border-soft: rgba(220, 236, 228, 0.1);
-  --border-strong: rgba(220, 236, 228, 0.18);
-  --button-primary-bg: #2d7b63;
-  --button-primary-border: rgba(111, 214, 172, 0.44);
-  --button-secondary-bg: rgba(220, 236, 228, 0.055);
-  --button-secondary-border: rgba(220, 236, 228, 0.12);
-  --button-hover-bg: rgba(220, 236, 228, 0.08);
-  --focus-ring: rgba(112, 189, 211, 0.28);
+  --shadow: 0 18px 38px rgba(0, 0, 0, 0.24);
+  --shadow-soft: 0 10px 24px rgba(0, 0, 0, 0.16);
+  --shadow-panel: 0 14px 32px rgba(0, 0, 0, 0.18);
+  --panel: rgba(15, 21, 19, 0.94);
+  --panel-muted: rgba(22, 30, 27, 0.66);
+  --field-bg: rgba(9, 14, 13, 0.82);
+  --border-soft: rgba(220, 236, 228, 0.085);
+  --border-strong: rgba(220, 236, 228, 0.16);
+  --button-primary-bg: #2f8369;
+  --button-primary-hover-bg: #389174;
+  --button-primary-border: rgba(111, 214, 172, 0.38);
+  --button-secondary-bg: rgba(220, 236, 228, 0.045);
+  --button-secondary-border: rgba(220, 236, 228, 0.11);
+  --button-hover-bg: rgba(220, 236, 228, 0.075);
+  --button-danger-bg: rgba(239, 129, 114, 0.08);
+  --button-danger-hover-bg: rgba(239, 129, 114, 0.13);
+  --focus-ring: rgba(112, 189, 211, 0.24);
   --status-success: var(--mint);
   --status-success-soft: var(--mint-soft);
   --status-warning: var(--amber);
@@ -2026,7 +2037,7 @@ body {
 
 .rail {
   border-right: 1px solid var(--border-soft);
-  background: var(--rail);
+  background: #060a09;
   box-shadow: none;
 }
 
@@ -2078,6 +2089,7 @@ body {
   color: #c8d4cf;
   border-color: transparent;
   font-weight: 650;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
 }
 
 .nav-item.active,
@@ -2128,6 +2140,24 @@ body {
   background: var(--panel);
   border-color: var(--border-soft);
   box-shadow: var(--shadow-panel);
+}
+
+.focus-board,
+.agenda-board,
+.assignment-board,
+.setup-intro-panel,
+.memory-brief-panel,
+.onboarding-panel,
+.memory-layout > section,
+.studio-layout > section,
+.studio-workflow-card,
+.contract-zone,
+.account-panel,
+.result-box,
+.ai-response,
+.result-section,
+.plan-card {
+  box-shadow: var(--shadow-soft);
 }
 
 .auth-panel,
@@ -2184,15 +2214,16 @@ body {
 .item-card,
 .course-card,
 .source-card {
-  background: var(--panel-muted);
-  box-shadow: none;
+  background: rgba(220, 236, 228, 0.045);
+  border-color: rgba(220, 236, 228, 0.075);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.035) inset;
 }
 
 .today-brief-card,
 .today-status-item {
   background: var(--panel);
   border-color: var(--border-soft);
-  box-shadow: var(--shadow-panel);
+  box-shadow: var(--shadow-soft);
 }
 
 .today-status-item {
@@ -2209,13 +2240,15 @@ body {
 
 .roadmap-primary,
 .assignment-card-primary {
-  background: rgba(88, 195, 155, 0.07);
-  border-color: rgba(88, 195, 155, 0.26);
+  background: rgba(88, 195, 155, 0.06);
+  border-color: rgba(88, 195, 155, 0.24);
+  box-shadow: 0 1px 0 rgba(200, 243, 223, 0.045) inset;
 }
 
 .roadmap-secondary,
 .timetable-card {
-  background: rgba(220, 236, 228, 0.035);
+  background: rgba(220, 236, 228, 0.032);
+  border-color: rgba(220, 236, 228, 0.075);
 }
 
 .setup-intro-panel,
@@ -2226,8 +2259,8 @@ body {
 .source-preview,
 .upload-privacy-copy,
 .course-signal-grid span {
-  background: rgba(220, 236, 228, 0.035);
-  border-color: rgba(220, 236, 228, 0.08);
+  background: rgba(220, 236, 228, 0.032);
+  border-color: rgba(220, 236, 228, 0.075);
   box-shadow: none;
 }
 
@@ -2306,7 +2339,8 @@ body {
   border-color: var(--button-secondary-border);
   background: var(--button-secondary-bg);
   color: var(--ink);
-  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+  transition: background-color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, color 0.16s ease;
 }
 
 .icon-button:hover,
@@ -2321,13 +2355,21 @@ body {
 .primary-button {
   border-color: var(--button-primary-border);
   background: var(--button-primary-bg);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.14) inset, 0 8px 18px rgba(47, 131, 105, 0.16);
   color: #f7fffb;
 }
 
 .primary-button:hover {
-  background: #338b70;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.14) inset;
+  background: var(--button-primary-hover-bg);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.16) inset, 0 10px 22px rgba(47, 131, 105, 0.18);
+}
+
+.primary-button:active,
+.secondary-button:active,
+.mini-action:active,
+.text-button:active,
+.icon-button:active {
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
 }
 
 .subtle-action {
@@ -2338,7 +2380,13 @@ body {
 
 .danger-action {
   border-color: rgba(239, 129, 114, 0.34);
+  background: var(--button-danger-bg);
   color: #ffd2cc;
+}
+
+.danger-action:hover {
+  background: var(--button-danger-hover-bg);
+  border-color: rgba(239, 129, 114, 0.46);
 }
 
 input,
@@ -2348,6 +2396,8 @@ textarea,
   background: var(--field-bg);
   color: var(--ink);
   border-color: var(--button-secondary-border);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.035) inset;
+  transition: background-color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, color 0.16s ease;
 }
 
 input::placeholder,
@@ -2403,9 +2453,9 @@ textarea:focus-visible {
 }
 
 .ai-panel {
-  background: rgba(16, 22, 20, 0.9);
-  border-color: rgba(157, 140, 242, 0.16);
-  box-shadow: var(--shadow-soft);
+  background: rgba(13, 18, 17, 0.96);
+  border-color: rgba(157, 140, 242, 0.14);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.24);
 }
 
 .brain-badge {
@@ -2413,10 +2463,40 @@ textarea:focus-visible {
   color: #c5edf7;
 }
 
+.ai-launcher {
+  background: rgba(157, 140, 242, 0.11);
+  border-color: rgba(157, 140, 242, 0.24);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.2);
+  transition: background-color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, color 0.16s ease;
+}
+
+.ai-launcher:hover {
+  background: rgba(157, 140, 242, 0.15);
+  border-color: rgba(157, 140, 242, 0.34);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.22);
+}
+
+.ai-launcher span {
+  background: rgba(157, 140, 242, 0.2);
+  color: #eeeaff;
+}
+
+.verb-tabs {
+  background: rgba(4, 7, 6, 0.38);
+  border-color: rgba(220, 236, 228, 0.075);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.035) inset;
+}
+
+.verb-tab {
+  background: transparent;
+  box-shadow: none;
+}
+
 .verb-tab.active {
   border-color: rgba(157, 140, 242, 0.4);
   background: var(--status-ai-soft);
   color: #e7e0ff;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.055) inset;
 }
 
 .account-layout,
@@ -2429,8 +2509,8 @@ textarea:focus-visible {
 .account-panel {
   border-radius: var(--radius);
   padding: 20px;
-  background: var(--panel-muted);
-  box-shadow: none;
+  background: rgba(220, 236, 228, 0.038);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.035) inset;
 }
 
 .account-wide,
@@ -2467,7 +2547,7 @@ textarea:focus-visible {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   padding: 10px;
-  background: rgba(220, 236, 228, 0.035);
+  background: rgba(220, 236, 228, 0.032);
   color: var(--muted);
   min-width: 0;
 }
@@ -2512,7 +2592,7 @@ textarea:focus-visible {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   padding: 14px;
-  background: rgba(220, 236, 228, 0.025);
+  background: rgba(220, 236, 228, 0.03);
 }
 
 .account-mini-section h4 {
@@ -2531,7 +2611,7 @@ textarea:focus-visible {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 12px;
-  background: rgba(220, 236, 228, 0.035);
+  background: rgba(220, 236, 228, 0.032);
 }
 
 .account-current-plan-card {
@@ -2567,7 +2647,7 @@ textarea:focus-visible {
 .quota-row {
   display: grid;
   gap: 8px;
-  background: rgba(255,255,255,0.03);
+  background: rgba(220, 236, 228, 0.032);
 }
 
 .quota-row > div:first-child {
@@ -2633,7 +2713,7 @@ textarea:focus-visible {
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: rgba(220, 236, 228, 0.035);
+  background: rgba(220, 236, 228, 0.032);
 }
 
 .lifecycle-item p {
@@ -2708,25 +2788,26 @@ textarea:focus-visible {
 .pricing-panel {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  gap: 16px;
 }
 
 .pricing-card {
   display: grid;
   align-content: start;
   grid-template-rows: auto auto 1fr auto;
-  gap: 16px;
-  min-height: 360px;
+  gap: 15px;
+  min-height: 348px;
   padding: 18px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius);
-  background: rgba(220, 236, 228, 0.025);
+  background: rgba(220, 236, 228, 0.032);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.035) inset;
 }
 
 .pricing-card.active {
-  border-color: rgba(88, 195, 155, 0.34);
-  background: rgba(88, 195, 155, 0.055);
-  box-shadow: inset 0 0 0 1px rgba(88, 195, 155, 0.12);
+  border-color: rgba(88, 195, 155, 0.3);
+  background: rgba(88, 195, 155, 0.052);
+  box-shadow: 0 1px 0 rgba(200, 243, 223, 0.05) inset;
 }
 
 .pricing-card-head span {
@@ -2759,6 +2840,7 @@ textarea:focus-visible {
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
+  min-height: 42px;
 }
 
 .pricing-limit-list strong {
@@ -2769,7 +2851,7 @@ textarea:focus-visible {
   display: grid;
   gap: 8px;
   margin: 0;
-  padding-left: 18px;
+  padding-left: 16px;
   color: #dce9e4;
   font-size: var(--font-size-small);
 }
