@@ -115,6 +115,12 @@ async function expectAiDrawerWithinViewport(page, label) {
   expect(rect.bottom, `${label} drawer bottom`).toBeLessThanOrEqual(rect.viewportHeight);
 }
 
+async function expectNoVisibleExternalBranding(page, label) {
+  const visibleText = await page.locator("body").innerText();
+  const blocked = /\b(Supabase|Groq|Pollinations|Gemini|GPT|gpt-oss|OpenAI|Anthropic|Claude)\b/i;
+  expect(visibleText, `${label} should not expose external provider branding`).not.toMatch(blocked);
+}
+
 async function routePublicHostToLocal(page, hostname = "studentos.sentiqlabs.com", options = {}) {
   await page.route(`https://${hostname}/**`, async (route) => {
     const request = route.request();
@@ -234,6 +240,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#connector-status")).toContainText("Demo mode");
   await expect(page.locator("#dashboard-summary")).toContainText("Do now");
   await expect(page.locator("#dashboard-summary")).toContainText("Goal");
+  await expectNoVisibleExternalBranding(page, "initial local workspace");
   await page.getByRole("button", { name: "Plan today" }).click();
   await expect(page.locator("#ai-panel")).toBeVisible();
   await expect(page.locator("#ai-message")).toHaveValue(/Plan today from my tasks/i);
@@ -284,6 +291,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#source-list")).toContainText("Sources ready");
   await expect(page.locator("#source-list")).toContainText(/Uses your materials/i);
   await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
+  await expectNoVisibleExternalBranding(page, "source library");
   await page.locator("#source-search-input").fill("E2E quadratics");
   await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
   await page.locator("#source-search-input").fill("missing-memory-source");
@@ -344,6 +352,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#quota-panel")).toContainText("Limits are visible here, but relaxed for this preview.");
   await expect(page.locator("#pricing-panel")).toContainText(/Free|Pro|Institution/i);
   await expect(page.locator("#pricing")).toContainText("Payments are not active yet");
+  await expectNoVisibleExternalBranding(page, "account and pricing");
   await page.evaluate(() => { window.location.hash = "pricing"; });
   await expect(page.locator("#view-title")).toHaveText("Account");
   await expect(page.locator("#pricing")).toBeVisible();
@@ -465,6 +474,7 @@ test("public auth shell gates the app when auth is enabled", async ({ page }) =>
   await expect(page.locator("#auth-message")).not.toContainText("Supabase Auth Project");
   await expect(page.locator("#auth-message")).not.toContainText("reset email requested");
   await expect(page.locator("#auth-message")).not.toContainText("protected request");
+  await expectNoVisibleExternalBranding(page, "public auth reset");
   await page.getByRole("button", { name: "New account" }).click();
   await expect(page.locator("#auth-shell-title")).toHaveText("Create your StudentOS account");
 
@@ -487,12 +497,13 @@ test("production host does not fall back to demo when auth config is unavailable
   await expect(page.locator("#app-shell")).toBeHidden();
   await expect(page.locator("#auth-shell-title")).toHaveText("StudentOS sign-in is not available yet");
   await expect(page.locator("#auth-session")).toContainText("Configuration required");
-  await expect(page.locator("#auth-help")).toContainText("Azure deployment");
+  await expect(page.locator("#auth-help")).toContainText("StudentOS deployment");
   await expect(page.locator("#auth-form")).toBeHidden();
   await expect(page.locator("[data-auth-mode='signin']")).toBeDisabled();
   await expect(page.locator("#public-auth-shell")).not.toContainText("Local demo");
   await expect(page.locator("#public-auth-shell")).not.toContainText("demo@studentos.local");
   await expect(page.locator("#pricing")).not.toBeVisible();
+  await expectNoVisibleExternalBranding(page, "production auth unavailable");
 });
 
 test("production host stays on public auth shell when auth is enabled and signed out", async ({ page }) => {
@@ -515,6 +526,7 @@ test("production host stays on public auth shell when auth is enabled and signed
   await expect(page.locator("#auth-form")).toBeVisible();
   await expect(page.locator("[data-auth-mode='signin']")).not.toBeDisabled();
   await expect(page.locator("#public-auth-shell")).not.toContainText("Local demo");
+  await expectNoVisibleExternalBranding(page, "production auth shell");
 });
 
 test("auth completion route loads styled recovery UI and scrubs token fragments", async ({ page }) => {

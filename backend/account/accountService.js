@@ -121,7 +121,7 @@ export async function requestPasswordReset({ email, authClient, supabaseConfig, 
     email: normalizedEmail,
     emailVerificationReady: true,
     resetEmailRequested: false,
-    mode: supabaseConfig?.mode === "supabase" ? "supabase_auth_project" : "local_scaffold",
+    mode: supabaseConfig?.mode === "supabase" ? "studentos_sign_in" : "local_preview",
     message: "If an account exists for this email, a reset link has been sent. Please check your inbox.",
     secretsPrinted: false,
   };
@@ -143,7 +143,7 @@ export async function requestVerificationResend({ email, authClient, supabaseCon
     ok: true,
     email: normalizedEmail,
     verificationEmailRequested: false,
-    mode: supabaseConfig?.mode === "supabase" ? "supabase_auth_project" : "local_scaffold",
+    mode: supabaseConfig?.mode === "supabase" ? "studentos_sign_in" : "local_preview",
     message: "If an unverified account exists for this email, StudentOS will send a fresh verification link.",
     secretsPrinted: false,
   };

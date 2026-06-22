@@ -1156,7 +1156,7 @@ export function createCorrectionSheet({ topic, answers = [], scorePercent }) {
     id: `correction_${topic.id}_${index + 1}`,
     question: answer.question || `Question ${index + 1}`,
     selected: answer.selected || "No answer recorded",
-    correct: answer.correct || "Review the source-grounded solution.",
+    correct: answer.correct || "Review the solution using your materials.",
     concept: answer.concept || topic.weakSignals?.[index] || topic.title,
     repair: `Review ${answer.concept || topic.title}, then solve one near-identical MCQ without notes.`,
   }));
@@ -1520,7 +1520,7 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
       studyBreakPattern: preferences.studyBreakPattern || `${preferences.breakCycleMinutes || 25}/${preferences.breakMinutes || 5}`,
       weakTopicCount: (preferences.weakTopicIds || []).length,
     },
-    webFallback: webFallback ? { allowed: true, label: "web fallback allowed only if material is insufficient" } : { allowed: false },
+    webFallback: webFallback ? { allowed: true, label: "outside references only if your materials are insufficient" } : { allowed: false },
   };
 
   if (normalizedVerb === "Plan") {
@@ -1555,7 +1555,7 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
 
   return {
     ...base,
-    answer: `Ask: from ${sourceLabels[0]?.label || "student materials"}, ${topic.title} should be explained from source context first. ${groundingSummary} If the material is thin, any web fallback must be labeled.`,
+    answer: `Ask: from ${sourceLabels[0]?.label || "student materials"}, ${topic.title} should be explained from your study context first. ${groundingSummary} If the material is thin, any outside reference must be labeled.`,
       explanation: {
       concept: retrieved.confidence?.lowConfidence
         ? "StudentOS found only low-confidence source context for this request, so it should not pretend the uploaded material is enough."
@@ -1565,7 +1565,7 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
       sourceUse: sourceLabels.map((item) => item.label),
       diagram: `${sourceLabels[0]?.label || "Source"} -> concept -> example -> MCQ check -> 24h revision`,
     },
-    nextActions: ["Read the source-backed explanation", "Try a quick check", "Add correction if unsure"],
+    nextActions: ["Read the material-backed explanation", "Try a quick check", "Add correction if unsure"],
   };
 }
 

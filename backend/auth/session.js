@@ -21,7 +21,7 @@ export async function getRequestSession(req, { config, authClient }) {
   }
 
   if (!authAvailable) {
-    const error = new Error("Supabase Auth is not configured for token verification");
+    const error = new Error("StudentOS sign-in is not configured for token verification");
     error.status = 503;
     throw error;
   }
@@ -29,7 +29,7 @@ export async function getRequestSession(req, { config, authClient }) {
   try {
     const user = await authClient.getUser(accessToken);
     if (!user?.id) {
-      const error = new Error("Invalid Supabase access token");
+      const error = new Error("Invalid StudentOS access token");
       error.status = 401;
       throw error;
     }
@@ -41,7 +41,7 @@ export async function getRequestSession(req, { config, authClient }) {
     };
   } catch (error) {
     error.status = error.status === 503 ? 503 : 401;
-    error.message = "Invalid or expired Supabase session";
+    error.message = "Invalid or expired StudentOS session";
     throw error;
   }
 }

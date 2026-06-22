@@ -139,7 +139,7 @@ import {
   getFinalDeletionSafetyConfig,
   getPublicFinalDeletionSafetyStatus,
 } from "./account/deletionExecutionService.js";
-import { getBillingProviderConfig, getSafeBillingProviderStatus } from "./billing/providerConfig.js";
+import { getBillingProviderConfig, getPublicBillingProviderStatus, getSafeBillingProviderStatus } from "./billing/providerConfig.js";
 import { createBillingAdapter } from "./billing/providers.js";
 import {
   evaluateBillingCancellation,
@@ -397,7 +397,9 @@ function publicState(state, persistence) {
       const {
         storageBucket,
         storagePath,
+        storageMode,
         extractedText,
+        extractionProvider,
         ...safeSource
       } = source;
       return {
@@ -407,11 +409,11 @@ function publicState(state, persistence) {
       };
     }),
     sourceChunks: (state.sourceChunks || []).map((chunk) => {
-      const { text, chunkText, embeddingVector, ...safeChunk } = chunk;
+      const { text, chunkText, embeddingVector, embeddingProvider, embeddingModel, ...safeChunk } = chunk;
       return safeChunk;
     }),
     embeddingsMetadata: (state.embeddingsMetadata || []).map((embedding) => {
-      const { embeddingValues, vectorRef, ...safeEmbedding } = embedding;
+      const { embeddingValues, vectorRef, provider, model, ...safeEmbedding } = embedding;
       return safeEmbedding;
     }),
     backgroundJobs: (state.backgroundJobs || []).map((job) => {
@@ -433,11 +435,78 @@ function publicState(state, persistence) {
     assignmentInsights: getAssignmentInsights(state),
     todayNextActions: getTodayNextActions(state),
     queueHealth: buildQueueHealth(state.backgroundJobs || []),
-    persistence,
+    persistence: publicRetrievalStatus(persistence),
     saas: getPublicSaasStatus(saasConfig),
     storagePlan: getSourceStoragePlan(supabaseConfig),
     internalMetricsHidden: true,
   };
+}
+
+function getPublicAiStatus(config) {
+  const realConfigured = Boolean(config?.groq?.configured || config?.pollinations?.configured);
+  return {
+    label: "StudentOS AI",
+    configured: realConfigured,
+    fallbackAvailable: true,
+    secretsExposed: false,
+  };
+}
+
+function getPublicEmbeddingStatus(config) {
+  return {
+    label: "Study context",
+    configured: Boolean(config?.realConfigured),
+    indexedSectionsReady: true,
+    secretsExposed: false,
+  };
+}
+
+function publicAiResult(result = {}) {
+  const {
+    poweredBy,
+    provider,
+    modelUsed,
+    fallback,
+    ...safeResult
+  } = result;
+  return {
+    ...safeResult,
+    engineLabel: "StudentOS AI",
+    fallback: fallback?.used ? { used: true, reason: "limited_context" } : { used: false },
+  };
+}
+
+function publicRetrievalStatus(info = {}) {
+  const mode = String(info?.mode || "").toLowerCase();
+  return {
+    mode: mode === "supabase" ? "private_cloud_sync" : "local_preview",
+    shard: info?.shard ? { label: "StudentOS workspace" } : null,
+  };
+}
+
+function publicBillingPreview(result = {}, action = "checkout") {
+  const { provider, message, ...safeResult } = result;
+  return {
+    ...safeResult,
+    status: result.status === "provider_configuration_ready" ? "payment_setup_ready" : result.status,
+    billingLabel: "StudentOS billing",
+    message: result.redirectAllowed
+      ? "A payment preview is ready. No payment is completed from StudentOS until checkout is active."
+      : action === "manage"
+        ? "Payments are not active yet, so no billing portal was opened."
+        : "Payments are not active yet, so no checkout was opened.",
+  };
+}
+
+function publicErrorMessage(error, fallback = "We couldn’t complete that request. Please try again.") {
+  const message = redactSecrets(error?.message || fallback);
+  if ((error?.status || 0) === 429 || /429|too many|rate limit/i.test(message)) {
+    return "Too many attempts. Please wait a minute and try again.";
+  }
+  if (/supabase|groq|pollinations|gemini|openai|gpt|gpt-oss|anthropic|claude|provider|model|pgvector|rpc|postgrest|postgres/i.test(message)) {
+    return fallback;
+  }
+  return message || fallback;
 }
 
 function findAssignment(state, id) {
@@ -667,11 +736,11 @@ async function handleApi(req, res, url) {
     sendJson(res, 200, {
       ok: true,
       product: "StudentOS",
-      brand: "SentIQGPT",
+      brand: "SentIQ AI Labs",
       deploymentTarget: DEPLOYMENT_TARGET,
       mode: supabaseConfig.mode,
-      sentiqgptReadOnly: true,
-      persistence: getSafeSupabaseStatus(supabaseConfig),
+      sourceSystemsReadOnly: true,
+      persistence: publicRetrievalStatus({ mode: supabaseConfig.mode }),
       productionReadiness: validateProductionReadiness({ supabaseConfig, saasConfig }),
       timestamp: new Date().toISOString(),
     });
@@ -698,13 +767,13 @@ async function handleApi(req, res, url) {
       },
       authProject: {
         configured: supabaseConfig.authConfigured,
-        mode: supabaseConfig.mode === "supabase" ? "supabase_auth_project" : "mock",
+        mode: supabaseConfig.authConfigured ? "studentos_sign_in" : "not_configured",
       },
       dataShards: getSafeSupabaseStatus(supabaseConfig).shards,
       workerQueue: queueHealth,
-      aiProviderMode: getSafeAiProviderStatus(aiProviderConfig),
-      embeddingMode: getSafeEmbeddingStatus(embeddingConfig),
-      billingProviderMode: getSafeBillingProviderStatus(billingProviderConfig),
+      aiProviderMode: getPublicAiStatus(aiProviderConfig),
+      embeddingMode: getPublicEmbeddingStatus(embeddingConfig),
+      billingProviderMode: getPublicBillingProviderStatus(billingProviderConfig),
       billingCancellationSafety: getSafeBillingCancellationStatus(billingCancellationConfig),
       operatorRbac: getSafeOperatorRbacStatus(operatorRbacConfig),
       operatorMfa: getSafeOperatorMfaStatus(operatorMfaConfig),
@@ -732,11 +801,11 @@ async function handleApi(req, res, url) {
       deploymentTarget: DEPLOYMENT_TARGET,
       frontendServedByBackend: SERVE_FRONTEND,
       storageMode: supabaseConfig.mode,
-      aiProviders: getSafeAiProviderStatus(aiProviderConfig),
-      embeddings: getSafeEmbeddingStatus(embeddingConfig),
+      aiProviders: getPublicAiStatus(aiProviderConfig),
+      embeddings: getPublicEmbeddingStatus(embeddingConfig),
       shardingPrepared: true,
       auth: getPublicAuthConfig(supabaseConfig),
-      persistence: getSafeSupabaseStatus(supabaseConfig),
+      persistence: publicRetrievalStatus({ mode: supabaseConfig.mode }),
       saas: getPublicSaasStatus(saasConfig),
       storagePlan: getSourceStoragePlan(supabaseConfig),
       classroom: {
@@ -769,7 +838,7 @@ async function handleApi(req, res, url) {
         secretsExposed: false,
       },
       billing: {
-        ...getSafeBillingProviderStatus(billingProviderConfig),
+        ...getPublicBillingProviderStatus(billingProviderConfig),
         cancellationSafety: getSafeBillingCancellationStatus(billingCancellationConfig),
         plans: saasConfig.billing.plans,
         realChargesActive: false,
@@ -824,7 +893,7 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/billing/plans") {
     sendJson(res, 200, {
       plans: saasConfig.billing.plans,
-      provider: getSafeBillingProviderStatus(billingProviderConfig),
+      provider: getPublicBillingProviderStatus(billingProviderConfig),
       realChargesActive: false,
       secretsPrinted: false,
     });
@@ -837,7 +906,7 @@ async function handleApi(req, res, url) {
     sendJson(res, 200, getBillingSnapshot({
       state,
       saasConfig,
-      providerStatus: getSafeBillingProviderStatus(billingProviderConfig),
+      providerStatus: getPublicBillingProviderStatus(billingProviderConfig),
     }));
     return;
   }
@@ -846,19 +915,19 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session } = await getStateContext(req);
     requireAccountSession(session);
-    sendJson(res, 200, billingAdapter.createCheckoutPreview({
+    sendJson(res, 200, publicBillingPreview(billingAdapter.createCheckoutPreview({
       planId: body.planId || "pro",
       userId: session.user.id,
-    }));
+    }), "checkout"));
     return;
   }
 
   if (req.method === "POST" && url.pathname === "/api/billing/manage-preview") {
     const { session } = await getStateContext(req);
     requireAccountSession(session);
-    sendJson(res, 200, billingAdapter.createManageBillingPreview({
+    sendJson(res, 200, publicBillingPreview(billingAdapter.createManageBillingPreview({
       userId: session.user.id,
-    }));
+    }), "manage"));
     return;
   }
 
@@ -1216,7 +1285,7 @@ async function handleApi(req, res, url) {
       requestId: req.requestId,
       authProject: {
         configured: supabaseConfig.authConfigured,
-        mode: supabaseConfig.mode === "supabase" ? "supabase_auth_project" : "mock",
+        mode: supabaseConfig.authConfigured ? "studentos_sign_in" : "not_configured",
       },
       dataShards: getSafeSupabaseStatus(supabaseConfig).shards,
       storage: {
@@ -1665,7 +1734,7 @@ async function handleApi(req, res, url) {
     });
     const { conversation, messages } = createAiPersistencePayload({ session, body, result });
     await repository.saveAiConversation(session, conversation, messages);
-    sendJson(res, 200, result);
+    sendJson(res, 200, publicAiResult(result));
     return;
   }
 
@@ -1704,7 +1773,7 @@ async function handleApi(req, res, url) {
     await repository.saveSourceIngestion(session, state);
     sendJson(res, 200, {
       summary,
-      retrievalModeStatus: repository.getInfo(session),
+      retrievalModeStatus: publicRetrievalStatus(repository.getInfo(session)),
       secretsPrinted: false,
     });
     return;
@@ -1741,7 +1810,7 @@ async function handleApi(req, res, url) {
     const { session, state } = await getStateContext(req);
     sendJson(res, 200, {
       queueHealth: buildQueueHealth(state.backgroundJobs || []),
-      retrievalModeStatus: repository.getInfo(session),
+      retrievalModeStatus: publicRetrievalStatus(repository.getInfo(session)),
       secretsPrinted: false,
     });
     return;
@@ -1881,12 +1950,17 @@ async function handleApi(req, res, url) {
     };
     state.sourceMaterials.push(material);
     await repository.saveSourceMaterial(session, state);
+    const { storageBucket, storagePath, storageMode, ...safeMaterial } = material;
     sendJson(res, 200, {
-      material,
+      material: {
+        ...safeMaterial,
+        storageMode: "local_preview",
+        isPrivate: true,
+      },
       storagePrepared: true,
       bytesStored: false,
       plan: getSourceStoragePlan(supabaseConfig),
-      note: "Pass 3 persists source metadata when Supabase mode is active. File bytes remain disabled.",
+      note: "StudentOS saved private source details for this preview. File bytes remain disabled.",
     });
     return;
   }
@@ -2069,14 +2143,11 @@ async function handleApi(req, res, url) {
           filename: material.filename,
           mimeType: material.mimeType,
           sizeBytes: material.sizeBytes,
-          storageBucket: material.storageBucket,
-          storagePath: material.storagePath,
           status: material.status,
           chunkCount: material.chunkCount,
           extractionSummary: material.extractionSummary,
           extractionError: material.extractionError,
           extractionPages: material.extractionPages,
-          extractionProvider: material.extractionProvider,
           ocrRequired: material.ocrRequired === true,
           citationLabel: material.citationLabel,
           isPrivate: true,
@@ -2101,12 +2172,9 @@ async function handleApi(req, res, url) {
           tokenEstimate: chunk.tokenEstimate,
           citationLabel: chunk.citationLabel,
           embeddingStatus: chunk.embeddingStatus,
-          embeddingProvider: chunk.embeddingProvider,
         })),
-        retrievalModeStatus: repository.getInfo(session),
+        retrievalModeStatus: publicRetrievalStatus(repository.getInfo(session)),
         privateStorage: {
-          bucket: material.storageBucket,
-          path: material.storagePath,
           public: false,
         },
         secretsPrinted: false,
@@ -2120,7 +2188,7 @@ async function handleApi(req, res, url) {
         error: error.message,
       });
       sendJson(res, error.status || 500, {
-        error: redactSecrets(error.message || "Source upload failed safely."),
+        error: publicErrorMessage(error, "Source upload failed safely."),
         uploadError: true,
         uploadStage: stage,
         requestId: req.requestId,
@@ -2271,17 +2339,17 @@ const server = createServer(async (req, res) => {
       rateLimit: error.rateLimit,
     });
     sendJson(res, error.status || 500, {
-      error: redactSecrets(error.message || "StudentOS server error"),
+      error: publicErrorMessage(error, "StudentOS server error"),
       requestId,
-      policy: error.policy ? redactSecrets(error.policy) : undefined,
-      rateLimit: error.rateLimit ? redactSecrets(error.rateLimit) : undefined,
+      policy: error.policy ? publicErrorMessage({ message: error.policy }, "StudentOS policy check failed") : undefined,
+      rateLimit: error.rateLimit ? publicErrorMessage({ message: error.rateLimit }, "Too many attempts. Please wait a minute and try again.") : undefined,
     });
   }
 });
 
 server.listen(PORT, () => {
   logger.info("server.started", {
-    product: "StudentOS by SentIQGPT",
+    product: "StudentOS by SentIQ AI Labs",
     pass: STUDENTOS_APP_PASS,
     port: PORT,
     mode: supabaseConfig.mode,

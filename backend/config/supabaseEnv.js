@@ -139,20 +139,20 @@ export function getPublicAuthConfig(config) {
   if (config.mode !== "supabase") {
     return {
       enabled: false,
-      mode: "mock",
-      reason: "persistence_mock_mode",
+      mode: "local_preview",
+      reason: "local_preview_mode",
     };
   }
   if (!config.authConfigured) {
     return {
       enabled: false,
-      mode: "mock",
-      reason: "auth_project_env_missing",
+      mode: "local_preview",
+      reason: "sign_in_configuration_missing",
     };
   }
   return {
     enabled: true,
-    mode: "supabase_auth_project",
+    mode: "studentos_sign_in",
     url: config.auth.url,
     anonKey: config.auth.anonKey,
   };

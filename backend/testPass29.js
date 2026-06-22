@@ -49,7 +49,7 @@ assert(app.includes("Uploading to private source library"));
 assert(app.includes("AI response unavailable"));
 assert(restClient.includes("DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS"));
 assert(restClient.includes("fetchWithTimeout"));
-assert(restClient.includes("Supabase request timed out"));
+assert(restClient.includes("StudentOS data request timed out"));
 assert(liveSpec.includes("test.setTimeout(120_000)"));
 assert(liveSpec.includes("GOOGLE_CLIENT_SECRET"));
 assert(liveSpec.includes("SUPABASE_SERVICE_ROLE"));

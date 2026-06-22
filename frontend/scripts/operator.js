@@ -127,8 +127,8 @@ function summaryTags(summary = {}) {
   return [
     `${summary.databaseRows || 0} rows`,
     `${summary.storageObjects || 0} files`,
-    `${summary.sourceChunks || 0} chunks`,
-    `${summary.memoryItems || 0} memory items`,
+    `${summary.sourceChunks || 0} source sections`,
+    `${summary.memoryItems || 0} study records`,
   ].map((label) => `<span class="tag source">${escapeHtml(label)}</span>`).join("");
 }
 
@@ -201,7 +201,7 @@ function render() {
     ? snapshot.billingCancellationEvents.map((event) => `
       <article class="operator-item">
         <strong>${escapeHtml(humanize(event.status))}</strong>
-        <p>${escapeHtml(event.provider || "none")} / ${escapeHtml(event.createdAt || "")}</p>
+        <p>${escapeHtml(event.createdAt || "")}</p>
       </article>`).join("")
     : `<p class="muted-copy">No billing-cancellation evaluations recorded for this user.</p>`;
   els.alerts.innerHTML = (snapshot?.monitoringAlertEvents || []).length
@@ -288,7 +288,7 @@ els.monitoringBtn.addEventListener("click", () => {
   internalApi(`/api/internal/monitoring/status?userId=${userId}`).then((result) => {
     els.monitoring.innerHTML = `
       <strong>${result.ok ? "Services reported safely" : "Status unavailable"}</strong>
-      <p>${escapeHtml(result.authProject?.mode || "unknown")} / ${escapeHtml(result.dataShards?.length || 0)} data shards / ${escapeHtml(result.billingProviderMode?.provider || "none")} billing / MFA ${escapeHtml(result.operatorMfa?.required ? "required" : "not required")}</p>`;
+      <p>${escapeHtml(result.authProject?.mode || "unknown")} / ${escapeHtml(result.dataShards?.length || 0)} data shards / StudentOS billing / MFA ${escapeHtml(result.operatorMfa?.required ? "required" : "not required")}</p>`;
   }).catch((error) => {
     els.monitoring.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
   });

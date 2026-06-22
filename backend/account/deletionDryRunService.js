@@ -36,10 +36,10 @@ export function buildDeletionDryRunReport(state, requestId, now = new Date()) {
     group("assignments", "Assignments", state.assignments),
     group("timetable_events", "Timetable events", state.timetable),
     group("notes", "Notes", state.notes),
-    group("source_materials", "Source materials", state.sourceMaterials),
-    group("source_chunks", "Source chunks", state.sourceChunks),
-    group("memory_items", "Memory items", state.memoryItems),
-    group("embeddings_metadata", "Embedding metadata", state.embeddingsMetadata),
+    group("source_materials", "Private sources", state.sourceMaterials),
+    group("source_chunks", "Source sections", state.sourceChunks),
+    group("memory_items", "Study records", state.memoryItems),
+    group("embeddings_metadata", "Search records", state.embeddingsMetadata),
     group("test_sessions", "Test sessions", state.testSessions),
     group("test_results", "Test results", state.testResults),
     group("credit_ledger", "Credit ledger entries", state.creditLedger),
@@ -96,7 +96,7 @@ export function buildDeletionDryRunReport(state, requestId, now = new Date()) {
     notes: [
       "This is a read-only preview. No rows or files were deleted.",
       "Final deletion remains disabled until an internal launch review.",
-      "Storage paths, provider references, and internal metadata are intentionally hidden.",
+      "Storage paths, external account references, and internal records are intentionally hidden.",
     ],
   };
   recordDeletionDryRunHistory(state, request, report, now);

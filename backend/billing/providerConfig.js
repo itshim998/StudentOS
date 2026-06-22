@@ -70,3 +70,14 @@ export function getSafeBillingProviderStatus(config = getBillingProviderConfig()
     secretsExposed: false,
   };
 }
+
+export function getPublicBillingProviderStatus(config = getBillingProviderConfig()) {
+  return {
+    label: "StudentOS billing",
+    configured: Boolean(config.providers?.[config.provider]?.configured),
+    liveChargesRequested: config.liveChargesRequested,
+    liveChargesEnabled: config.liveChargesEnabled,
+    checkoutRedirectEnabled: config.checkoutRedirectEnabled,
+    secretsExposed: false,
+  };
+}

@@ -8,7 +8,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_SUPABASE_
     return await fetch(url, { ...options, signal });
   } catch (error) {
     if (error?.name === "AbortError") {
-      const timeoutError = new Error(`Supabase request timed out after ${timeoutMs}ms`);
+      const timeoutError = new Error(`StudentOS data request timed out after ${timeoutMs}ms`);
       timeoutError.status = 504;
       throw timeoutError;
     }
@@ -31,11 +31,22 @@ function buildQuery(params = {}) {
   return text ? `?${text}` : "";
 }
 
+function publicDataError(message, status) {
+  const text = String(message || "").trim();
+  if (status === 429 || /429|too many|rate limit/i.test(text)) {
+    return "Too many attempts. Please wait a minute and try again.";
+  }
+  if (/supabase|postgrest|postgres|pgvector|rpc|service role/i.test(text)) {
+    return "We couldn’t complete that request. Please try again.";
+  }
+  return text || `StudentOS data request failed with ${status}`;
+}
+
 async function parseJsonResponse(response) {
   const text = await response.text();
   const body = text ? JSON.parse(text) : null;
   if (!response.ok) {
-    const message = body?.message || body?.error_description || body?.error || `Supabase request failed with ${response.status}`;
+    const message = publicDataError(body?.message || body?.error_description || body?.error, response.status);
     const error = new Error(message);
     error.status = response.status;
     throw error;
@@ -162,7 +173,7 @@ export class SupabaseRestClient {
       },
     });
     if (!response.ok) {
-      const error = new Error(`Supabase storage download failed with ${response.status}`);
+      const error = new Error(`Private storage download failed with ${response.status}`);
       error.status = response.status;
       throw error;
     }
@@ -219,7 +230,7 @@ export class SupabaseAuthClient {
 
   async recoverPassword(email, redirectTo = "") {
     if (!this.isConfigured()) {
-      const error = new Error("Supabase Auth is not configured");
+      const error = new Error("StudentOS sign-in is not configured");
       error.status = 503;
       throw error;
     }
@@ -238,7 +249,7 @@ export class SupabaseAuthClient {
 
   async resendVerification(email) {
     if (!this.isConfigured()) {
-      const error = new Error("Supabase Auth is not configured");
+      const error = new Error("StudentOS sign-in is not configured");
       error.status = 503;
       throw error;
     }
@@ -256,7 +267,7 @@ export class SupabaseAuthClient {
 
   async adminDeleteUser(userId) {
     if (!this.url || !this.serviceRoleKey || !userId) {
-      const error = new Error("Supabase Auth admin deletion is not configured");
+      const error = new Error("StudentOS account deletion is not configured");
       error.status = 503;
       throw error;
     }

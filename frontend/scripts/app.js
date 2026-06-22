@@ -357,6 +357,24 @@ function apiBaseMisconfiguredError() {
   return new Error(API_BASE_MISCONFIGURED_MESSAGE);
 }
 
+function studentFacingRequestError(message = "", status = 0) {
+  const text = String(message || "").trim();
+  const lower = text.toLowerCase();
+  if (status === 429 || lower.includes("429") || lower.includes("too many") || lower.includes("rate limit")) {
+    return "Too many attempts. Please wait a minute and try again.";
+  }
+  if (lower.includes("invalid login") || lower.includes("invalid credentials") || lower.includes("invalid email") || lower.includes("invalid password")) {
+    return "Invalid email or password.";
+  }
+  if (lower.includes("email not confirmed") || lower.includes("not confirmed") || lower.includes("verification")) {
+    return "Please check your email to continue.";
+  }
+  if (/\b(supabase|groq|pollinations|gemini|openai|gpt|gpt-oss|anthropic|claude|provider|model)\b/i.test(text)) {
+    return "We couldn’t complete that request. Please try again.";
+  }
+  return text || "We couldn’t complete that request. Please try again.";
+}
+
 function apiUrl(path) {
   if (!API_BASE && isPublicFrontendOrigin()) {
     throw apiBaseMisconfiguredError();
@@ -398,7 +416,7 @@ async function api(path, options = {}) {
     if (response.status === 401) {
       handleSessionExpiry();
     }
-    throw new Error(body.error || `HTTP ${response.status}`);
+    throw new Error(studentFacingRequestError(body.error || `HTTP ${response.status}`, response.status));
   }
   return body;
 }
@@ -435,7 +453,7 @@ function getAcademicGoalLabel() {
 
 async function authRequest(path, body, token = "") {
   if (!runtimeConfig.auth?.enabled) {
-    throw new Error("Supabase Auth is not configured");
+    throw new Error("StudentOS sign-in is not available yet.");
   }
   const headers = {
     apikey: runtimeConfig.auth.anonKey,
@@ -447,9 +465,9 @@ async function authRequest(path, body, token = "") {
     headers,
     body: JSON.stringify(body || {}),
   });
-  const payload = await readJsonResponse(response, "StudentOS Auth returned an invalid JSON response.").catch(() => ({}));
+  const payload = await readJsonResponse(response, "StudentOS sign-in returned an invalid response.").catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error_description || payload.msg || payload.error || "Auth request failed");
+    throw new Error(studentFacingRequestError(payload.error_description || payload.msg || payload.error || "Sign-in request failed", response.status));
   }
   return payload;
 }
@@ -461,12 +479,12 @@ function renderAuth(message = "") {
     els.logoutBtn.hidden = true;
     setText(els.authModeLabel, "Configuration");
     setText(els.authShellTitle, "StudentOS sign-in is not available yet");
-    setText(els.authShellCopy, "The production backend is missing its Supabase Auth configuration. StudentOS will not open a demo session on this domain.");
+    setText(els.authShellCopy, "StudentOS sign-in is temporarily unavailable. StudentOS will not open a demo session on this domain.");
     setText(els.authSession, "Configuration required");
-    setText(els.authHelp, "Ask the operator to rerun the Azure deployment after adding the required Supabase backend secrets.");
+    setText(els.authHelp, "Please try again after the StudentOS deployment is updated.");
     setText(els.authMessage, message || "");
     setText(els.railSessionStatus, "Sign in unavailable");
-    setText(els.railSessionHelp, "Production auth configuration is required.");
+    setText(els.railSessionHelp, "Production sign-in configuration is required.");
     updateShellVisibility();
     return;
   }
@@ -475,7 +493,7 @@ function renderAuth(message = "") {
     els.authForm.hidden = true;
     els.logoutBtn.hidden = true;
     setText(els.authSession, "Local demo session");
-    setText(els.authHelp, "Local demo keeps account actions available without contacting Supabase Auth.");
+    setText(els.authHelp, "Local demo keeps account actions available without contacting live sign-in.");
     setText(els.railSessionStatus, "Demo session");
     setText(els.railSessionHelp, "Local preview with private-account controls simulated.");
     updateShellVisibility();
@@ -579,8 +597,8 @@ async function requestVerificationResend(email) {
     <strong>Verification link request ready</strong>
     <p>${escapeHtml(result.message)}</p>
     <div class="tag-row">
-      ${tag(humanize(result.mode), "source")}
-      ${tag(result.verificationEmailRequested ? "verification email requested" : "preview ready", result.verificationEmailRequested ? "source" : "medium")}
+      ${tag("StudentOS sign-in", "source")}
+      ${tag(result.verificationEmailRequested ? "email requested" : "preview ready", result.verificationEmailRequested ? "source" : "medium")}
     </div>
   `;
 }
@@ -674,6 +692,8 @@ function sourceHealthLabel(source, latestJob, embeddedCount) {
 }
 
 function backendModeLabel(mode) {
+  if (mode === "private_cloud_sync") return "Cloud sync";
+  if (mode === "local_preview") return "Demo mode";
   if (mode === "supabase") return "Cloud sync";
   if (mode === "mock") return "Demo mode";
   return humanize(mode || "unknown mode");
@@ -1422,6 +1442,7 @@ function billingStatusLabel(status) {
   const value = String(status || "").toLowerCase();
   if (value === "scaffold_only" || value === "not_required") return "Preview only";
   if (value === "provider_configuration_ready") return "Payment setup preview";
+  if (value === "payment_setup_ready") return "Payment setup preview";
   return humanize(status || "Preview ready");
 }
 

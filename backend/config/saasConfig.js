@@ -1,7 +1,7 @@
 import { getSafeAiProviderStatus } from "../ai/providerConfig.js";
 import { getSafeEmbeddingStatus } from "../embeddings/embeddingService.js";
 import { getPlan, getPublicPlanCatalog, USER_ROLES } from "../saas/plans.js";
-import { getSafeBillingProviderStatus } from "../billing/providerConfig.js";
+import { getSafeBillingProviderStatus, getPublicBillingProviderStatus } from "../billing/providerConfig.js";
 
 const DEFAULT_CORS_ORIGINS = [
   "https://studentos.sentiqlabs.com",
@@ -55,8 +55,8 @@ export function getSaasConfig({
   return {
     product: {
       name: "StudentOS",
-      ownerBrand: "SentIQGPT",
-      displayName: "StudentOS by SentIQGPT",
+      ownerBrand: "SentIQ AI Labs",
+      displayName: "StudentOS by SentIQ AI Labs",
     },
     deployment,
     environmentStrategy: {
@@ -200,7 +200,20 @@ export function getPublicSaasStatus(config) {
     environmentStrategy: config.environmentStrategy,
     demoSeedEnabled: config.demoSeedEnabled,
     roles: config.roles,
-    billing: config.billing,
+    billing: {
+      ...config.billing,
+      provider: getPublicBillingProviderStatus({
+        provider: config.billing?.provider?.provider || "none",
+        providers: {
+          [config.billing?.provider?.provider || "none"]: {
+            configured: config.billing?.provider?.configured === true,
+          },
+        },
+        liveChargesRequested: config.billing?.provider?.liveChargesRequested === true,
+        liveChargesEnabled: config.billing?.provider?.liveChargesEnabled === true,
+        checkoutRedirectEnabled: config.billing?.provider?.checkoutRedirectEnabled === true,
+      }),
+    },
     quotas: {
       enforcementEnabled: config.quotas.enforcementEnabled,
       defaultPlan: {

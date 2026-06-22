@@ -74,7 +74,7 @@ export function isOwnedExportStoragePath(userId, path) {
 export function buildDataExportPackage(state, request, now = new Date()) {
   const data = buildSafeExportPreview(state);
   return {
-    product: "StudentOS by SentIQGPT",
+    product: "StudentOS by SentIQ AI Labs",
     format: "studentos-json-v1",
     exportRequestId: request.id,
     exportedAt: nowIso(now),

@@ -78,7 +78,7 @@ for (const forbidden of [
   assert.equal(packageText.includes(forbidden), false);
 }
 const packageObject = JSON.parse(packageText);
-assert.equal(packageObject.product, "StudentOS by SentIQGPT");
+assert.equal(packageObject.product, "StudentOS by SentIQ AI Labs");
 assert.equal(buildDataExportPackage(state, directWorkflow.request, deliveryNow).data.exportPolicy.secretFieldsExcluded, true);
 
 const lifecycleSnapshot = getLifecycleSnapshot(state, lifecycleConfig);

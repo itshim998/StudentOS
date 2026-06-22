@@ -72,7 +72,7 @@ assert.equal(blankNumericConfig.rateLimit.windowMs, 60_000);
 assert.equal(blankNumericConfig.rateLimit.maxRequests, 600);
 
 const publicStatus = getPublicSaasStatus(prodConfig);
-assert.equal(publicStatus.product.displayName, "StudentOS by SentIQGPT");
+assert.equal(publicStatus.product.displayName, "StudentOS by SentIQ AI Labs");
 assert.equal(publicStatus.security.frontendReceivesServiceKeys, false);
 assert.equal(publicStatus.security.shardAccessBackendOnly, true);
 assert.equal(JSON.stringify(publicStatus).includes("service_role"), false);
