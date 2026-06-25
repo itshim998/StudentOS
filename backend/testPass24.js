@@ -199,7 +199,7 @@ await assert.rejects(() => syncGoogleClassroomIntoState({
     return fetchImpl(url);
   },
   now: new Date(now.getTime() + 3000),
-}), /Reconnect required/);
+}), /Reconnect Classroom/);
 const expiredStatus = await getClassroomConnectorStatus({
   state,
   session,
@@ -207,7 +207,7 @@ const expiredStatus = await getClassroomConnectorStatus({
   config,
   now: new Date(now.getTime() + 3000),
 });
-assert.equal(expiredStatus.state, "expired");
+assert.equal(expiredStatus.state, "reconnect_required");
 assert.equal(expiredStatus.writeScopesEnabled, false);
 assert(expiredStatus.syncHistory.length >= 1);
 
@@ -236,7 +236,7 @@ for (const file of [server, frontend, migration]) {
   assert.equal(file.includes("turnIn"), false);
   assert.equal(file.includes("modifyAttachments"), false);
 }
-assert(frontend.includes("StudentOS can read Classroom assignments but cannot submit"));
+assert(frontend.includes("You stay in control of submissions"));
 assert(migration.includes("classroom_tokens"));
 assert(migration.includes("revoke all on public.classroom_tokens from authenticated"));
 

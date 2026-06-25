@@ -78,26 +78,27 @@ const insufficient = classifyClassroomError(403, {
   },
 });
 assert.equal(insufficient.code, "google_classroom_insufficient_scope");
-assert.match(insufficient.message, /Reconnect|scope/i);
-assert.equal(classifyClassroomError(401, { error: { message: "Invalid Credentials" } }).connectorState, "expired");
+assert.match(insufficient.message, /Reconnect Classroom/i);
+assert.equal(classifyClassroomError(401, { error: { message: "Invalid Credentials" } }).connectorState, "reconnect_required");
 assert.equal(classifyClassroomError(429, { error: { message: "Quota exceeded" } }).code, "google_classroom_rate_limited");
 
 const app = await readFile(new URL("../frontend/scripts/app.js", import.meta.url), "utf8");
 assert(app.includes("Google Classroom import"));
 assert(app.includes("Analyze assignment"));
-assert(app.includes("No active Classroom courses or coursework were found"));
+assert(app.includes("No active Classroom coursework was found"));
 assert(app.includes("learning flow ready"));
-assert(app.includes("no writeback"));
 assert(app.includes("Google Classroom"));
-assert(app.includes("Classroom import unavailable"));
-assert(app.includes("Classroom sync needs the approved read-only scopes"));
-assert(app.includes("Classroom access expired or was revoked"));
-assert(app.includes("Google Classroom is rate-limiting this sync"));
+assert(app.includes("Classroom can be connected"));
+assert(app.includes("Reconnect Classroom to refresh imported assignments"));
+assert(app.includes("Classroom syncing is busy right now"));
+assert.equal(app.includes("Classroom import unavailable"), false);
+assert.equal(app.includes("no writeback"), false);
+assert.equal(app.includes("no write scopes"), false);
 assert(app.includes("Assignment flow unavailable"));
-assert(app.includes("safe error"));
-assert(app.includes("connectClassroom().catch(renderClassroomError)"));
-assert(app.includes("syncClassroom().catch(renderClassroomError)"));
-assert(app.includes("disconnectClassroom().catch(renderClassroomError)"));
+assert(app.includes("async function connectClassroom()"));
+assert(app.includes("async function syncClassroom()"));
+assert(app.includes("async function disconnectClassroom()"));
+assert.equal((app.match(/catch\(renderClassroomError\)/g) || []).length, 3);
 
 const qaDoc = await readFile(new URL("../docs/PASS26_CLASSROOM_IMPORT_QA.md", import.meta.url), "utf8");
 assert(qaDoc.includes("Browser QA"));

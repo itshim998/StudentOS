@@ -320,27 +320,47 @@ function handleSessionExpiry() {
 function classroomErrorCopy(error) {
   const message = String(error?.message || "");
   const lower = message.toLowerCase();
-  if (lower.includes("insufficient") || lower.includes("scope")) {
-    return "Classroom sync needs the approved read-only scopes. Reconnect Classroom, then sync again.";
+  if (lower.includes("insufficient") || lower.includes("scope") || lower.includes("expired") || lower.includes("revoked") || lower.includes("invalid credentials") || lower.includes("unauthorized") || lower.includes("reconnect")) {
+    return "Reconnect Classroom to refresh imported assignments.";
   }
-  if (lower.includes("expired") || lower.includes("revoked") || lower.includes("invalid credentials") || lower.includes("unauthorized")) {
-    return "Classroom access expired or was revoked. Reconnect Classroom to continue read-only imports.";
+  if (lower.includes("quota") || lower.includes("rate") || lower.includes("429") || lower.includes("busy")) {
+    return "Classroom syncing is busy right now. You can keep working in StudentOS.";
   }
-  if (lower.includes("quota") || lower.includes("rate") || lower.includes("429")) {
-    return "Google Classroom is rate-limiting this sync. Wait a moment, then try again.";
+  if (lower.includes("disabled") || lower.includes("setup") || lower.includes("not active") || lower.includes("not configured")) {
+    return "Classroom setup is not active for this workspace.";
   }
-  return message || "Classroom import is temporarily unavailable. No Classroom work was modified.";
+  if (lower.includes("disconnected") || lower.includes("connect classroom")) {
+    return "Connect Classroom before syncing assignments.";
+  }
+  return message || "Classroom assignments could not be refreshed. Your StudentOS work was not changed.";
 }
 
 function renderClassroomError(error) {
   if (!els.classroomPanel) return;
+  const copy = classroomErrorCopy(error);
+  const reconnect = /reconnect/i.test(copy);
+  const connector = {
+    state: reconnect ? "reconnect_required" : "status_pending",
+    connected: false,
+    actions: {
+      connect: false,
+      reconnect,
+      sync: false,
+      disconnect: false,
+    },
+    ui: {
+      title: reconnect ? "Reconnect Classroom" : "Classroom status pending",
+      message: copy,
+      badge: reconnect ? "reconnect needed" : "workspace ready",
+    },
+  };
+  classroomStatus = { connector, syncSummary: null };
+  updateClassroomActions(connector);
   setResult(els.classroomPanel, `
-    <strong>Classroom import unavailable</strong>
-    <p>${escapeHtml(classroomErrorCopy(error))}</p>
+    <strong>${escapeHtml(connector.ui.title)}</strong>
+    <p>${escapeHtml(copy)}</p>
     <div class="tag-row">
-      ${tag("read only", "source")}
-      ${tag("no writeback", "urgent")}
-      ${tag("try again", "medium")}
+      ${tag(connector.ui.badge, reconnect ? "medium" : "source")}
     </div>
   `);
 }
@@ -436,10 +456,23 @@ async function loadClassroomStatus() {
   } catch (error) {
     classroomStatus = {
       connector: {
-        state: "error",
+        state: "status_pending",
         mode: runtimeConfig.classroom?.mode || "unknown",
+        connected: false,
+        available: false,
         readOnlyImport: true,
         writeScopesEnabled: false,
+        actions: {
+          connect: false,
+          reconnect: false,
+          sync: false,
+          disconnect: false,
+        },
+        ui: {
+          title: "Classroom status pending",
+          message: "Your workspace is ready. Classroom status will update when setup is available.",
+          badge: "workspace ready",
+        },
       },
       error: error.message,
     };
@@ -701,11 +734,102 @@ function backendModeLabel(mode) {
 
 function classroomModeLabel(value) {
   const mode = String(value || "").toLowerCase();
-  if (mode === "mock") return "Demo Classroom";
-  if (mode === "oauth") return "Connected";
-  if (mode === "disabled") return "Not connected";
-  if (mode === "disconnected") return "Not connected";
-  return humanize(value || "Not connected");
+  if (mode === "mock") return "Demo Classroom ready";
+  if (mode === "oauth") return "Classroom connected";
+  if (mode === "connected") return "Classroom connected";
+  if (mode === "disabled") return "Classroom setup not active";
+  if (mode === "setup_required") return "Classroom setup not active";
+  if (mode === "disconnected") return "Classroom can be connected";
+  if (mode === "reconnect_required" || mode === "expired" || mode === "error") return "Reconnect Classroom";
+  if (mode === "status_pending") return "Classroom status pending";
+  return humanize(value || "Classroom status pending");
+}
+
+function normalizedClassroomState(connector = {}) {
+  const stateName = String(connector.state || connector.status || "").toLowerCase();
+  const mode = String(connector.mode || "").toLowerCase();
+  if (stateName) {
+    if (["expired", "error"].includes(stateName)) return "reconnect_required";
+    return stateName;
+  }
+  if (mode === "disabled") return "disabled";
+  if (mode === "mock") return "connected";
+  if (mode === "oauth") return connector.connected ? "connected" : "disconnected";
+  return "status_pending";
+}
+
+function classroomActions(connector = {}) {
+  if (connector.actions) {
+    return {
+      connect: connector.actions.connect === true,
+      reconnect: connector.actions.reconnect === true,
+      sync: connector.actions.sync === true,
+      disconnect: connector.actions.disconnect === true,
+    };
+  }
+  const stateName = normalizedClassroomState(connector);
+  return {
+    connect: stateName === "disconnected",
+    reconnect: stateName === "reconnect_required",
+    sync: stateName === "connected",
+    disconnect: stateName === "connected",
+  };
+}
+
+function updateClassroomActions(connector = {}) {
+  const actions = classroomActions(connector);
+  if (els.classroomConnectBtn) {
+    els.classroomConnectBtn.hidden = !(actions.connect || actions.reconnect);
+    els.classroomConnectBtn.textContent = actions.reconnect ? "Reconnect Classroom" : "Connect Classroom";
+    els.classroomConnectBtn.disabled = false;
+  }
+  if (els.classroomSyncBtn) {
+    els.classroomSyncBtn.hidden = !actions.sync;
+    els.classroomSyncBtn.disabled = false;
+  }
+  if (els.classroomDisconnectBtn) {
+    els.classroomDisconnectBtn.hidden = !actions.disconnect;
+    els.classroomDisconnectBtn.disabled = false;
+  }
+  return actions;
+}
+
+function classroomUi(connector = {}, summary = null, history = []) {
+  if (connector.ui?.title || connector.ui?.message) return connector.ui;
+  const stateName = normalizedClassroomState(connector);
+  const lastSync = connector.lastSyncAt || history[0]?.completedAt || "";
+  if (stateName === "connected") {
+    return {
+      title: connector.mode === "mock" ? "Demo Classroom ready" : "Classroom connected",
+      message: connector.mode === "mock"
+        ? "Demo assignments can be synced into your study plan."
+        : "StudentOS can refresh coursework for your study plan. You stay in control of submissions.",
+      badge: "planning import active",
+      detail: lastSync ? `Last refreshed ${formatDate(lastSync)}` : summary ? "Classroom coursework has been added to your study plan." : "Ready to refresh assignments.",
+    };
+  }
+  if (stateName === "disconnected") {
+    return {
+      title: "Classroom can be connected",
+      message: "Connect when you want StudentOS to include Classroom coursework in your study plan.",
+      badge: "optional setup",
+      detail: "No Classroom connection is active.",
+    };
+  }
+  if (stateName === "reconnect_required") {
+    return {
+      title: "Reconnect Classroom",
+      message: "Reconnect Classroom to refresh imported assignments.",
+      badge: "reconnect needed",
+      detail: "Existing StudentOS work was not changed.",
+    };
+  }
+  return {
+    title: "Classroom setup is not active",
+    message: "Your workspace is ready. Classroom importing can be turned on later.",
+    badge: "workspace ready",
+    detail: "Classroom actions are hidden until setup is complete.",
+  };
 }
 
 function sourceStatusLabel(value) {
@@ -1024,43 +1148,36 @@ function renderClassroomPanel() {
   const connector = classroomStatus?.connector || runtimeConfig.classroom || {};
   const summary = classroomStatus?.syncSummary || connector.syncSummary || null;
   const history = classroomStatus?.syncHistory || connector.syncHistory || [];
-  const providerEmail = connector.providerAccountEmail || connector.tokenMetadata?.providerAccountEmail || "";
-  const scopes = connector.scopes || [];
+  const providerEmail = connector.providerAccountEmail || "";
   const lastSync = connector.lastSyncAt || history[0]?.completedAt || "";
-  const reconnectCopy = ["expired", "error"].includes(connector.state)
-    ? `<p class="warning-copy">Reconnect required before StudentOS can refresh Classroom assignments.</p>`
-    : "";
-  const safeError = connector.lastError || history.find((run) => run.errorSummary)?.errorSummary || "";
-  const safeErrorCode = connector.lastErrorCode || history.find((run) => run.payload?.errorCode)?.payload?.errorCode || "";
+  const actions = updateClassroomActions(connector);
+  const ui = classroomUi(connector, summary, history);
+  const stateName = normalizedClassroomState(connector);
   const emptyClassroom = summary?.emptyClassroom || history.some((run) => run.payload?.emptyClassroom);
+  const showDetails = summary || history.length;
   setResult(els.classroomPanel, `
     <div class="classroom-compact-head">
       <div>
-        <strong>${escapeHtml(classroomModeLabel(connector.state || connector.mode || "mock"))}</strong>
-        <p>Read-only Classroom import. StudentOS cannot submit, grade, turn in, or modify Classroom work.</p>
+        <strong>${escapeHtml(ui.title || classroomModeLabel(stateName))}</strong>
+        <p>${escapeHtml(ui.message || "StudentOS can include Classroom coursework in your study plan.")}</p>
       </div>
       ${summary ? `<span>${escapeHtml(`${summary.importedAssignments || 0} new / ${summary.updatedAssignments || 0} updated`)}</span>` : ""}
     </div>
-    ${reconnectCopy}
     <div class="tag-row">
-      ${tag(classroomModeLabel(connector.mode || "mock"), "source")}
-      ${tag(connector.readOnlyImport === false ? "not ready" : "read only", "source")}
-      ${tag(connector.writeScopesEnabled ? "write scope risk" : "no write scopes", connector.writeScopesEnabled ? "urgent" : "source")}
+      ${tag(ui.badge || classroomModeLabel(stateName), stateName === "reconnect_required" ? "medium" : "source")}
       ${lastSync ? tag(`synced ${formatDate(lastSync)}`, "source") : ""}
+      ${providerEmail && stateName === "connected" ? tag("connected account", "source") : ""}
     </div>
-    <p>${providerEmail ? `Account: ${escapeHtml(providerEmail)} / ` : ""}${lastSync ? `Last sync ${escapeHtml(formatDate(lastSync))}` : "Manual sync only"}</p>
-    ${safeError ? `<p class="warning-copy">${escapeHtml(safeErrorCode ? `${humanize(safeErrorCode)}: ${safeError}` : safeError)}</p>` : ""}
-    ${emptyClassroom ? `<p class="muted-copy">No active Classroom courses or coursework were found. StudentOS is connected and ready; sync again after new Classroom work appears.</p>` : ""}
-    ${summary || scopes.length || history.length || connector.tokenPersistence || connector.tokenMetadata?.encryptedAtRest ? `
+    ${ui.detail ? `<p>${escapeHtml(ui.detail)}</p>` : actions.sync ? `<p>Use Sync Classroom when you want the latest assignments in StudentOS.</p>` : ""}
+    ${emptyClassroom ? `<p class="muted-copy">No active Classroom coursework was found. StudentOS is ready to refresh when new work appears.</p>` : ""}
+    ${showDetails ? `
       <details class="classroom-details">
         <summary>Sync details</summary>
-        ${summary ? `<p>${escapeHtml(`${summary.importedCourses || 0} course(s), ${summary.importedAssignments || 0} new assignment(s), ${summary.updatedAssignments || 0} updated${summary.emptyClassroom ? " / empty Classroom account" : ""}`)}</p>` : ""}
-        ${scopes.length ? `<p class="muted-copy">Scopes: ${scopes.map((scope) => escapeHtml(scope.replace("https://www.googleapis.com/auth/", ""))).join(", ")}</p>` : ""}
-        ${connector.tokenPersistence ? `<p class="muted-copy">Token storage: ${escapeHtml(humanize(connector.tokenPersistence))}${connector.tokenMetadata?.encryptedAtRest ? " / encrypted at rest" : ""}</p>` : ""}
+        ${summary ? `<p>${escapeHtml(`${summary.importedCourses || 0} course(s), ${summary.importedAssignments || 0} new assignment(s), ${summary.updatedAssignments || 0} updated${summary.emptyClassroom ? " / no active coursework" : ""}`)}</p>` : ""}
         ${history.length ? `
           <div class="mini-history">
             ${history.slice(0, 4).map((run) => `
-              <span>${escapeHtml(humanize(run.status))}: ${escapeHtml(formatDate(run.completedAt || run.startedAt))} / ${run.importedAssignments || 0}+${run.updatedAssignments || 0} assignments${run.errorCount ? ` / ${run.errorCount} issue(s)` : ""}</span>
+              <span>${escapeHtml(humanize(run.status))}: ${escapeHtml(formatDate(run.completedAt || run.startedAt))} / ${run.importedAssignments || 0}+${run.updatedAssignments || 0} assignments${run.errorCount ? " / needs review" : ""}</span>
             `).join("")}
           </div>
         ` : ""}
@@ -1073,51 +1190,56 @@ function classroomStatusCard() {
   const connector = classroomStatus?.connector || runtimeConfig.classroom || {};
   const summary = classroomStatus?.syncSummary || connector.syncSummary || null;
   const history = classroomStatus?.syncHistory || connector.syncHistory || [];
-  const providerEmail = connector.providerAccountEmail || connector.tokenMetadata?.providerAccountEmail || "";
+  const providerEmail = connector.providerAccountEmail || "";
   const lastSync = connector.lastSyncAt || history[0]?.completedAt || "";
   const classroomCourses = state.courses.filter((course) => course.source === "google_classroom").length;
   const classroomAssignments = state.assignments.filter((assignment) => assignment.source === "google_classroom").length;
-  const safeError = connector.lastError || history.find((run) => run.errorSummary)?.errorSummary || "";
-  const safeErrorCode = connector.lastErrorCode || history.find((run) => run.payload?.errorCode)?.payload?.errorCode || "";
+  const stateName = normalizedClassroomState(connector);
+  const ui = classroomUi(connector, summary, history);
   const emptyClassroom = summary?.emptyClassroom || history.some((run) => run.payload?.emptyClassroom);
+  if (["disabled", "setup_required", "status_pending"].includes(stateName) && !classroomCourses && !classroomAssignments) {
+    return "";
+  }
   return `
     <article class="course-card course-workspace-card classroom-import-card" data-color="sky">
       <header class="course-card-head">
         <div>
           <span class="workspace-label">Connector workspace</span>
           <strong>Google Classroom import</strong>
-          <p>${providerEmail ? `Connected as ${escapeHtml(providerEmail)}` : "Read-only Classroom connector"}</p>
+          <p>${providerEmail ? `Connected as ${escapeHtml(providerEmail)}` : "Classroom planning import"}</p>
         </div>
       </header>
       <div class="tag-row">
-        ${tag(classroomModeLabel(connector.state || connector.mode || "disconnected"), ["expired", "error"].includes(connector.state) ? "urgent" : "source")}
+        ${tag(ui.badge || classroomModeLabel(stateName), stateName === "reconnect_required" ? "medium" : "source")}
         ${tag(`${classroomCourses} course(s)`, "source")}
         ${tag(`${classroomAssignments} assignment(s)`, "source")}
-        ${tag(connector.readOnlyImport === false ? "not ready" : "read only", "source")}
-        ${tag(connector.writeScopesEnabled ? "write scope risk" : "no write scopes", connector.writeScopesEnabled ? "urgent" : "source")}
         ${lastSync ? tag(`synced ${formatDate(lastSync)}`, "source") : tag("manual sync", "medium")}
-        ${tag("no writeback", "urgent")}
+        ${tag("student controlled", "source")}
       </div>
       <div class="course-signal-grid">
         <span><strong>${classroomCourses}</strong> imported courses</span>
         <span><strong>${classroomAssignments}</strong> imported assignments</span>
         <span><strong>${lastSync ? formatDate(lastSync) : "Manual"}</strong> sync</span>
       </div>
-      ${emptyClassroom ? `<p class="muted-copy">No active Classroom courses or coursework were found yet.</p>` : ""}
-      ${safeError ? `<p class="warning-copy">${escapeHtml(safeErrorCode ? `${humanize(safeErrorCode)}: ${safeError}` : safeError)}</p>` : ""}
+      ${emptyClassroom ? `<p class="muted-copy">No active Classroom coursework was found yet.</p>` : ""}
+      ${stateName === "reconnect_required" ? `<p class="warning-copy">Reconnect Classroom to refresh imported assignments.</p>` : ""}
     </article>
   `;
 }
 
 function renderAssignments() {
   if (!state.assignments.length) {
+    const connector = classroomStatus?.connector || runtimeConfig.classroom || {};
+    const actions = classroomActions(connector);
+    const emptyCopy = actions.connect || actions.reconnect
+      ? "Connect Classroom, or add work from your courses to start the learning loop."
+      : "Add work from your courses to start the learning loop.";
     setResult(els.assignmentList, `
       <article class="item-card assignment-card">
         <strong>No assignments yet</strong>
-        <p>Connect and sync Google Classroom, or add work from your courses to start the learning loop.</p>
+        <p>${escapeHtml(emptyCopy)}</p>
         <div class="item-meta">
-          ${tag("Classroom ready", "source")}
-          ${tag("no submission", "urgent")}
+          ${tag("Student controlled", "source")}
         </div>
       </article>
     `);
@@ -1137,7 +1259,7 @@ function renderAssignments() {
         <div class="item-meta">
           ${tag(assignment.status === "due_soon" ? "due soon" : assignment.status, assignment.status === "due_soon" ? "medium" : "low")}
           ${isClassroom ? tag("Google Classroom", "source") : tag(humanize(assignment.source))}
-          ${assignment.readOnly ? tag("read only", "source") : ""}
+          ${assignment.readOnly ? tag("planning only", "source") : ""}
           ${isClassroom ? tag("learning flow ready", "medium") : ""}
           ${assignment.submissionStatus ? tag(humanize(assignment.submissionStatus), "source") : ""}
           ${insight ? tag(humanize(insight.status), toneForCoverage(insight.status)) : ""}
@@ -1194,8 +1316,8 @@ function renderCourses() {
 
         <div class="tag-row">
           ${isClassroom ? tag("Google Classroom", "source") : ""}
-          ${course.readOnly ? tag("Read only", "source") : ""}
-          ${isClassroom || course.readOnly ? tag("No submissions or grade changes", "urgent") : ""}
+          ${course.readOnly ? tag("planning only", "source") : ""}
+          ${isClassroom || course.readOnly ? tag("Student controlled", "source") : ""}
           ${revisionCount ? tag("Needs revision", "medium") : tag("On track", "source")}
         </div>
 
@@ -2360,7 +2482,7 @@ async function previewBillingManagement() {
 }
 
 async function connectClassroom() {
-  setLoading(els.classroomPanel, "Preparing read-only Classroom connection...");
+  setLoading(els.classroomPanel, "Preparing Classroom connection...");
   const result = await api("/api/classroom/oauth/start", {
     method: "POST",
     body: JSON.stringify({}),
@@ -2374,7 +2496,7 @@ async function connectClassroom() {
 }
 
 async function syncClassroom() {
-  setLoading(els.classroomPanel, "Syncing Classroom in read-only mode...");
+  setLoading(els.classroomPanel, "Syncing Classroom assignments...");
   const result = await api("/api/classroom/sync", {
     method: "POST",
     body: JSON.stringify({}),
@@ -2426,21 +2548,21 @@ function wireEvents() {
   els.classroomConnectBtn.addEventListener("click", () => {
     withButtonLoading(els.classroomConnectBtn, "Preparing...", connectClassroom, {
       timeoutTarget: els.classroomPanel,
-      timeoutCopy: "Classroom connection is taking longer than expected. You can try again.",
+      timeoutCopy: "Classroom connection is taking longer than expected. You can keep working while it finishes.",
       timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
     }).catch(renderClassroomError);
   });
   els.classroomSyncBtn.addEventListener("click", () => {
     withButtonLoading(els.classroomSyncBtn, "Syncing...", syncClassroom, {
       timeoutTarget: els.classroomPanel,
-      timeoutCopy: "Classroom sync is taking longer than expected. You can try again.",
+      timeoutCopy: "Classroom sync is taking longer than expected. You can keep working while it finishes.",
       timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
     }).catch(renderClassroomError);
   });
   els.classroomDisconnectBtn.addEventListener("click", () => {
     withButtonLoading(els.classroomDisconnectBtn, "Disconnecting...", disconnectClassroom, {
       timeoutTarget: els.classroomPanel,
-      timeoutCopy: "Classroom disconnect is taking longer than expected. You can try again.",
+      timeoutCopy: "Classroom disconnect is taking longer than expected. You can keep working while it finishes.",
     }).catch(renderClassroomError);
   });
   document.getElementById("contract-btn").addEventListener("click", (event) => {

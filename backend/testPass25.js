@@ -236,7 +236,7 @@ await assert.rejects(() => syncGoogleClassroomIntoState({
     throw new Error("unexpected fetch after insufficient scope");
   },
   now,
-}), /insufficient/);
+}), /Reconnect Classroom/);
 const insufficientStatus = await getClassroomConnectorStatus({
   state: insufficientState,
   session: insufficientSession,
@@ -244,7 +244,7 @@ const insufficientStatus = await getClassroomConnectorStatus({
   config,
   now,
 });
-assert.equal(insufficientStatus.state, "error");
+assert.equal(insufficientStatus.state, "reconnect_required");
 assert.equal(insufficientStatus.lastErrorCode, "google_classroom_insufficient_scope");
 history = await insufficientRepository.listClassroomSyncRuns(insufficientSession, { limit: 3 });
 assert.equal(history[0].status, "failed");
@@ -253,7 +253,7 @@ assert.equal(history[0].payload.errorCode, "google_classroom_insufficient_scope"
 const classifiedQuota = classifyClassroomError(429, { error: { message: "Quota exceeded" } });
 assert.equal(classifiedQuota.code, "google_classroom_rate_limited");
 const classifiedRevoked = classifyClassroomError(401, { error: { message: "Invalid Credentials" } });
-assert.equal(classifiedRevoked.connectorState, "expired");
+assert.equal(classifiedRevoked.connectorState, "reconnect_required");
 
 const connectorFiles = [
   await readFile(new URL("./connectors/googleClassroom/apiClient.js", import.meta.url), "utf8"),

@@ -18,8 +18,8 @@ function classifyClassroomError(status, payload = {}) {
     return {
       status: 401,
       code: "google_classroom_token_invalid",
-      connectorState: "expired",
-      message: "Google Classroom token expired or was revoked. Reconnect required.",
+      connectorState: "reconnect_required",
+      message: "Reconnect Classroom to refresh imported assignments.",
     };
   }
   if (
@@ -29,8 +29,8 @@ function classifyClassroomError(status, payload = {}) {
     return {
       status: 403,
       code: "google_classroom_insufficient_scope",
-      connectorState: "error",
-      message: "Google Classroom granted scopes are insufficient for this read-only sync. Reconnect or review Google Cloud scopes.",
+      connectorState: "reconnect_required",
+      message: "Reconnect Classroom to refresh imported assignments.",
     };
   }
   if (
@@ -43,15 +43,15 @@ function classifyClassroomError(status, payload = {}) {
     return {
       status: 429,
       code: "google_classroom_rate_limited",
-      connectorState: "error",
-      message: "Google Classroom rate limit or quota was reached. Try syncing again later.",
+      connectorState: "connected",
+      message: "Classroom syncing is busy right now. Please wait before syncing again.",
     };
   }
   return {
     status: status >= 400 && status < 500 ? status : 502,
     code: "google_classroom_read_failed",
-    connectorState: "error",
-    message: "Google Classroom read failed. Try again later.",
+    connectorState: "connected",
+    message: "Classroom assignments could not be refreshed right now.",
   };
 }
 

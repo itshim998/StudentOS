@@ -132,8 +132,14 @@ const disabledStatus = await getClassroomConnectorStatus({
   config: getGoogleClassroomConfig({ STUDENTOS_GOOGLE_CLASSROOM_MODE: "disabled" }),
   now,
 });
-assert.equal(disabledStatus.state, "disconnected");
+assert.equal(disabledStatus.state, "disabled");
 assert.equal(disabledStatus.writeScopesEnabled, false);
+assert.deepEqual(disabledStatus.actions, {
+  connect: false,
+  reconnect: false,
+  sync: false,
+  disconnect: false,
+});
 
 const metadata = saveClassroomToken("classroom-token-user", {
   access_token: "access-secret",
@@ -161,6 +167,6 @@ for (const file of [server, frontend]) {
   assert.equal(file.includes("turnIn"), false);
   assert.equal(file.includes("modifyAttachments"), false);
 }
-assert(frontend.includes("StudentOS can read Classroom assignments but cannot submit"));
+assert(frontend.includes("You stay in control of submissions"));
 
 console.log("PASS | StudentOS Pass 23 Google Classroom read-only connector tests passed");

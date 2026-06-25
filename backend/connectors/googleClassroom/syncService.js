@@ -82,10 +82,89 @@ async function listRecentSyncRuns({ repository, session, limit = 5 } = {}) {
   return repository.listClassroomSyncRuns(session, { limit }).catch(() => []);
 }
 
+function classroomActionsForState(stateName) {
+  return {
+    connect: stateName === "disconnected",
+    reconnect: stateName === "reconnect_required",
+    sync: stateName === "connected",
+    disconnect: stateName === "connected",
+  };
+}
+
+function classroomUiForState(stateName, { mode = "", lastSyncAt = "", summary = null } = {}) {
+  if (stateName === "connected") {
+    return {
+      title: mode === "mock" ? "Demo Classroom ready" : "Classroom connected",
+      message: mode === "mock"
+        ? "Demo assignments can be synced into your study plan."
+        : "StudentOS can refresh coursework for your study plan. You stay in control of submissions.",
+      badge: "planning import active",
+      detail: lastSyncAt
+        ? "Classroom assignments have been refreshed."
+        : summary
+          ? "Classroom coursework has been added to your study plan."
+          : "Ready to refresh assignments.",
+    };
+  }
+  if (stateName === "disconnected") {
+    return {
+      title: "Classroom can be connected",
+      message: "Connect when you want StudentOS to include Classroom coursework in your study plan.",
+      badge: "optional setup",
+      detail: "No Classroom connection is active.",
+    };
+  }
+  if (stateName === "reconnect_required") {
+    return {
+      title: "Reconnect Classroom",
+      message: "Reconnect Classroom to refresh imported assignments.",
+      badge: "reconnect needed",
+      detail: "Existing StudentOS work was not changed.",
+    };
+  }
+  if (stateName === "setup_required") {
+    return {
+      title: "Classroom setup is not active",
+      message: "Your workspace is ready. Classroom importing can be turned on later.",
+      badge: "workspace ready",
+      detail: "Classroom actions are hidden until setup is complete.",
+    };
+  }
+  if (stateName === "disabled") {
+    return {
+      title: "Classroom setup is not active",
+      message: "Your workspace is ready. Classroom importing can be turned on later.",
+      badge: "workspace ready",
+      detail: "Classroom actions are hidden for this workspace.",
+    };
+  }
+  return {
+    title: "Classroom status pending",
+    message: "Your workspace is ready. Classroom status will update when setup is available.",
+    badge: "workspace ready",
+    detail: "Classroom actions are hidden until status is ready.",
+  };
+}
+
+function normalizeClassroomState({ config, safeStatus, token, prefs = {} } = {}) {
+  if (config.mode === "disabled") return "disabled";
+  if (config.mode === "mock") return "connected";
+  if (config.mode === "oauth" && !safeStatus.oauthConfigured) return "setup_required";
+  if (token?.expired || ["expired", "error", "reconnect_required"].includes(token?.status)) {
+    return "reconnect_required";
+  }
+  if (token) return "connected";
+  if (["connected", "expired", "error", "reconnect_required"].includes(prefs.state)) {
+    return "reconnect_required";
+  }
+  return "disconnected";
+}
+
 export async function getClassroomConnectorStatus({ state, session, userId, repository, config = getGoogleClassroomConfig(), now = new Date() } = {}) {
   assertNoGoogleClassroomWriteScopes(config.scopes);
   const prefs = state ? profileConnectorPrefs(state) : {};
   const resolvedUserId = userId || session?.user?.id;
+  const safeStatus = getSafeGoogleClassroomStatus(config);
   const token = config.mode === "oauth"
     ? await getPersistentClassroomToken({
       session: session || { user: { id: resolvedUserId } },
@@ -96,58 +175,43 @@ export async function getClassroomConnectorStatus({ state, session, userId, repo
     : null;
   const syncHistory = session ? await listRecentSyncRuns({ repository, session, limit: 5 }) : [];
   const lastRun = syncHistory[0] || null;
-  if (config.mode === "disabled") {
-    return {
-      ...getSafeGoogleClassroomStatus(config),
-      state: "disconnected",
-      connected: false,
-      syncHistory,
-      message: "Google Classroom import is disabled.",
-    };
-  }
-  if (config.mode === "mock") {
-    return {
-      ...getSafeGoogleClassroomStatus(config),
-      state: "connected",
-      connected: true,
-      lastSyncAt: prefs.lastSyncAt || null,
-      syncSummary: prefs.lastSyncSummary || null,
-      syncHistory,
-      message: "Mock read-only Classroom import is available.",
-    };
-  }
-  const stateName = token?.status === "error"
-    ? "error"
-    : token?.expired
-      ? "expired"
-      : token
-        ? "connected"
-        : prefs.state || "disconnected";
+  const stateName = normalizeClassroomState({ config, safeStatus, token, prefs });
+  const actions = classroomActionsForState(stateName);
+  const lastSyncAt = prefs.lastSyncAt || lastRun?.completedAt || null;
+  const syncSummary = prefs.lastSyncSummary || null;
+  const ui = classroomUiForState(stateName, {
+    mode: config.mode,
+    lastSyncAt,
+    summary: syncSummary,
+  });
+  const safeLastErrorCode = prefs.lastErrorCode || lastRun?.payload?.errorCode || null;
   return {
-    ...getSafeGoogleClassroomStatus(config),
+    ...safeStatus,
     state: stateName,
+    status: stateName,
+    enabled: !["disabled", "setup_required", "status_pending"].includes(stateName),
+    available: !["disabled", "setup_required", "status_pending"].includes(stateName),
+    setupRequired: stateName === "setup_required",
+    reconnectRequired: stateName === "reconnect_required",
     connected: stateName === "connected",
+    actions,
+    ui,
     tokenMetadata: token ? safeClassroomTokenMetadata(token) : prefs.tokenMetadata || null,
     providerAccountEmail: token?.providerAccountEmail || prefs.providerAccountEmail || null,
-    lastSyncAt: prefs.lastSyncAt || lastRun?.completedAt || null,
-    syncSummary: prefs.lastSyncSummary || null,
+    lastSyncAt,
+    syncSummary,
     syncHistory,
-    lastError: prefs.lastError || lastRun?.errorSummary || null,
-    lastErrorCode: prefs.lastErrorCode || lastRun?.payload?.errorCode || null,
-    message: token
-      ? stateName === "expired"
-        ? "Google Classroom needs reconnect or token refresh."
-        : stateName === "error"
-          ? "Google Classroom sync needs attention. Review the latest safe error and reconnect if needed."
-        : "Google Classroom OAuth is connected with encrypted backend token storage when configured."
-      : "Connect Google Classroom to import read-only coursework.",
+    lastError: stateName === "reconnect_required" ? ui.message : null,
+    lastErrorCode: stateName === "reconnect_required" ? safeLastErrorCode : null,
+    message: ui.message,
+    syncBlockedReason: actions.sync ? null : ui.message,
   };
 }
 
 async function resolveOAuthToken({ session, repository, config, fetchImpl = fetch, now = new Date() }) {
   let token = await getPersistentClassroomToken({ session, repository, config, now });
   if (!token) {
-    const error = new Error("Google Classroom is disconnected");
+    const error = new Error("Connect Classroom before syncing assignments.");
     error.status = 409;
     error.connectorState = "disconnected";
     throw error;
@@ -183,9 +247,9 @@ async function resolveOAuthToken({ session, repository, config, fetchImpl = fetc
         lastError: "token_refresh_failed",
         now,
       });
-      const wrapped = new Error("Google Classroom token expired. Reconnect required.");
+      const wrapped = new Error("Reconnect Classroom to refresh imported assignments.");
       wrapped.status = 401;
-      wrapped.connectorState = "expired";
+      wrapped.connectorState = "reconnect_required";
       throw wrapped;
     }
   }
@@ -225,8 +289,18 @@ export async function syncGoogleClassroomIntoState({
   assertNoGoogleClassroomWriteScopes(config.scopes);
   const prefs = profileConnectorPrefs(state);
   if (config.mode === "disabled") {
-    const error = new Error("Google Classroom import is disabled");
-    error.status = 404;
+    const error = new Error("Classroom setup is not active for this workspace.");
+    error.status = 409;
+    error.code = "google_classroom_disabled";
+    error.connectorState = "disabled";
+    throw error;
+  }
+  const safeStatus = getSafeGoogleClassroomStatus(config);
+  if (config.mode === "oauth" && !safeStatus.oauthConfigured) {
+    const error = new Error("Classroom setup is not active for this workspace.");
+    error.status = 409;
+    error.code = "google_classroom_setup_required";
+    error.connectorState = "setup_required";
     throw error;
   }
   let snapshot;
@@ -238,11 +312,11 @@ export async function syncGoogleClassroomIntoState({
     try {
       snapshot = await fetchOAuthSnapshot({ session, repository, config, fetchImpl, now });
     } catch (error) {
-      prefs.state = error.connectorState || "error";
+      prefs.state = error.connectorState || "connected";
       prefs.lastError = safeErrorSummary(error);
       prefs.lastErrorCode = safeErrorCode(error);
       prefs.updatedAt = nowIso(now);
-      if (["expired", "error"].includes(prefs.state) && repository?.markClassroomTokenStatus) {
+      if (["expired", "error", "reconnect_required"].includes(prefs.state) && repository?.markClassroomTokenStatus) {
         await markPersistentClassroomTokenStatus({
           session,
           repository,

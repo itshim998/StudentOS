@@ -203,6 +203,6 @@ assert(serverSource.includes("assignmentFlowError"));
 
 const frontendSource = await readFile(new URL("../frontend/scripts/app.js", import.meta.url), "utf8");
 assert(frontendSource.includes("Assignment flow unavailable"));
-assert(frontendSource.includes("safe error"));
+assert(frontendSource.includes("handled privately"));
 
 console.log("PASS | StudentOS Pass 25.1 assignment-flow Supabase shape regression tests passed");

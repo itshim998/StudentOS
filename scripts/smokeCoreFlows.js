@@ -28,6 +28,13 @@ function assertNoSensitiveOutput(label, value) {
   }
 }
 
+function assertNoClassroomInternals(label, connector = {}) {
+  assert.equal(Object.hasOwn(connector, "scopes"), false, `${label} exposed Classroom scopes`);
+  assert.equal(Object.hasOwn(connector, "tokenMetadata"), false, `${label} exposed Classroom token metadata`);
+  assert.equal(Object.hasOwn(connector, "tokenPersistence"), false, `${label} exposed Classroom token storage mode`);
+  assert.equal(Object.hasOwn(connector, "tokenEncryptionConfigured"), false, `${label} exposed Classroom token encryption config`);
+}
+
 async function getFreePort() {
   const server = net.createServer();
   server.listen(0, "127.0.0.1");
@@ -96,12 +103,13 @@ async function main() {
 
     const health = await request(baseUrl, "/api/health");
     assert.equal(health.ok, true);
-    assert.equal(health.sentiqgptReadOnly, true);
+    assert.equal(health.sourceSystemsReadOnly, true);
 
     const config = await request(baseUrl, "/api/config");
     assert.equal(config.pass, "30");
     assert.equal(config.auth.enabled, false);
     assert.equal(config.classroom.writeScopesEnabled, false);
+    assertNoClassroomInternals("/api/config classroom", config.classroom);
     assert.equal(config.realSubmissionEnabled, false);
 
     const account = await request(baseUrl, "/api/account");
@@ -113,7 +121,7 @@ async function main() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: "smoke@studentos.local" }),
     });
-    assert.equal(reset.mode, "local_scaffold");
+    assert.equal(reset.mode, "local_preview");
 
     const onboarding = await request(baseUrl, "/api/onboarding", {
       method: "POST",
@@ -181,6 +189,7 @@ async function main() {
     const classroomStatus = await request(baseUrl, "/api/classroom/status");
     assert.equal(classroomStatus.readOnly, true);
     assert.equal(classroomStatus.writebackEnabled, false);
+    assertNoClassroomInternals("/api/classroom/status connector", classroomStatus.connector);
 
     const classroomSync = await request(baseUrl, "/api/classroom/sync", {
       method: "POST",
@@ -189,6 +198,8 @@ async function main() {
     });
     assert.equal(classroomSync.connector.writeScopesEnabled, false);
     assert.equal(classroomSync.writebackEnabled ?? false, false);
+    assertNoClassroomInternals("/api/classroom/sync connector", classroomSync.connector);
+    assert.equal(Object.hasOwn(classroomSync.syncRun || {}, "payload"), false);
 
     bootstrap = await request(baseUrl, "/api/bootstrap");
     const classroomAssignment = bootstrap.assignments.find((assignment) => assignment.source === "google_classroom") || bootstrap.assignments[0];

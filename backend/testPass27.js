@@ -34,13 +34,16 @@ assert(smoke.includes("STUDENTOS_MODE: \"mock\""));
 assert(smoke.includes("STUDENTOS_GOOGLE_CLASSROOM_MODE: \"mock\""));
 
 assert(app.includes("Assignment flow unavailable"));
-assert(app.includes("Classroom import unavailable"));
-assert(app.includes("Classroom sync needs the approved read-only scopes"));
-assert(app.includes("Classroom access expired or was revoked"));
-assert(app.includes("Google Classroom is rate-limiting this sync"));
-assert(app.includes("connectClassroom().catch(renderClassroomError)"));
-assert(app.includes("syncClassroom().catch(renderClassroomError)"));
-assert(app.includes("disconnectClassroom().catch(renderClassroomError)"));
+assert(app.includes("Classroom setup is not active"));
+assert(app.includes("Classroom can be connected"));
+assert(app.includes("Reconnect Classroom to refresh imported assignments"));
+assert.equal(app.includes("Classroom import unavailable"), false);
+assert.equal(app.includes("no writeback"), false);
+assert.equal(app.includes("no write scopes"), false);
+assert(app.includes("async function connectClassroom()"));
+assert(app.includes("async function syncClassroom()"));
+assert(app.includes("async function disconnectClassroom()"));
+assert.equal((app.match(/catch\(renderClassroomError\)/g) || []).length, 3);
 
 for (const forbidden of [
   "GOOGLE_CLIENT_SECRET",
@@ -79,9 +82,8 @@ assert(qa.includes("npm.cmd run test:e2e"));
 assert(playwrightConfig.includes("trace: \"off\""));
 assert(playwrightConfig.includes("screenshot: \"off\""));
 assert(e2eSpec.includes("STUDENTOS_GOOGLE_CLASSROOM_MODE: \"mock\""));
-assert(e2eSpec.includes("Connect Classroom") === false);
 assert(e2eSpec.includes("Google password") === false);
-assert(e2eSpec.includes("no write scopes"));
+assert(e2eSpec.includes("Classroom status UI normalizes controls"));
 assert(e2eSpec.includes("Assignment flow unavailable"));
 assert(e2eFixture.includes("Quadratics study note"));
 assert(liveClassroomDoc.includes("Do not automate Google credentials"));

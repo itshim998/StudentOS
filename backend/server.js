@@ -33,10 +33,7 @@ import {
   validateProductionReadiness,
 } from "./config/saasConfig.js";
 import { MockGoogleClassroomConnector } from "./connectors/googleClassroomMock.js";
-import {
-  getGoogleClassroomConfig,
-  getSafeGoogleClassroomStatus,
-} from "./connectors/googleClassroom/config.js";
+import { getGoogleClassroomConfig } from "./connectors/googleClassroom/config.js";
 import {
   buildClassroomOAuthUrl,
   createClassroomOAuthState,
@@ -498,6 +495,91 @@ function publicBillingPreview(result = {}, action = "checkout") {
   };
 }
 
+function publicClassroomSummary(summary = null) {
+  if (!summary) return null;
+  return {
+    importedCourses: summary.importedCourses || 0,
+    updatedCourses: summary.updatedCourses || 0,
+    importedAssignments: summary.importedAssignments || 0,
+    updatedAssignments: summary.updatedAssignments || 0,
+    importedMaterials: summary.importedMaterials || 0,
+    updatedMaterials: summary.updatedMaterials || 0,
+    importedTopics: summary.importedTopics || 0,
+    updatedTopics: summary.updatedTopics || 0,
+    skippedItems: summary.skippedItems || 0,
+    emptyClassroom: summary.emptyClassroom === true,
+  };
+}
+
+function publicClassroomSyncRun(run = {}) {
+  return {
+    status: run.status || "unknown",
+    startedAt: run.startedAt || null,
+    completedAt: run.completedAt || null,
+    importedCourses: run.importedCourses || 0,
+    updatedCourses: run.updatedCourses || 0,
+    importedAssignments: run.importedAssignments || 0,
+    updatedAssignments: run.updatedAssignments || 0,
+    importedMaterials: run.importedMaterials || 0,
+    updatedMaterials: run.updatedMaterials || 0,
+    skippedItems: run.skippedItems || 0,
+    errorCount: run.errorCount || 0,
+    emptyClassroom: run.payload?.emptyClassroom === true,
+  };
+}
+
+function publicClassroomActions(actions = {}) {
+  return {
+    connect: actions.connect === true,
+    reconnect: actions.reconnect === true,
+    sync: actions.sync === true,
+    disconnect: actions.disconnect === true,
+  };
+}
+
+function publicClassroomUi(ui = {}) {
+  return {
+    title: ui.title || "Classroom status pending",
+    message: ui.message || "Your workspace is ready. Classroom status will update when setup is available.",
+    badge: ui.badge || "workspace ready",
+    detail: ui.detail || "",
+  };
+}
+
+function publicClassroomConnector(connector = {}) {
+  const syncHistory = Array.isArray(connector.syncHistory)
+    ? connector.syncHistory.map(publicClassroomSyncRun)
+    : [];
+  const publicMode = connector.mode === "mock"
+    ? "demo"
+    : ["disabled", "setup_required"].includes(connector.state || connector.status)
+      ? "inactive"
+      : "classroom_import";
+  return {
+    mode: publicMode,
+    state: connector.state || connector.status || "status_pending",
+    status: connector.status || connector.state || "status_pending",
+    connected: connector.connected === true,
+    enabled: connector.enabled === true,
+    available: connector.available === true,
+    setupRequired: connector.setupRequired === true,
+    reconnectRequired: connector.reconnectRequired === true,
+    readOnlyImport: connector.readOnlyImport !== false,
+    writeScopesEnabled: connector.writeScopesEnabled === true,
+    postingEnabled: false,
+    submissionEnabled: false,
+    actions: publicClassroomActions(connector.actions),
+    ui: publicClassroomUi(connector.ui),
+    providerAccountEmail: connector.connected ? connector.providerAccountEmail || "" : "",
+    lastSyncAt: connector.lastSyncAt || syncHistory[0]?.completedAt || null,
+    syncSummary: publicClassroomSummary(connector.syncSummary),
+    syncHistory,
+    message: connector.message || connector.ui?.message || "",
+    syncBlockedReason: connector.syncBlockedReason || connector.message || connector.ui?.message || null,
+    secretsExposed: false,
+  };
+}
+
 function publicErrorMessage(error, fallback = "We couldn’t complete that request. Please try again.") {
   const message = redactSecrets(error?.message || fallback);
   if ((error?.status || 0) === 429 || /429|too many|rate limit/i.test(message)) {
@@ -793,6 +875,9 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/config") {
+    const classroomConfigStatus = await getClassroomConnectorStatus({
+      config: googleClassroomConfig,
+    });
     sendJson(res, 200, {
       product: "StudentOS",
       pass: STUDENTOS_APP_PASS,
@@ -808,10 +893,7 @@ async function handleApi(req, res, url) {
       persistence: publicRetrievalStatus({ mode: supabaseConfig.mode }),
       saas: getPublicSaasStatus(saasConfig),
       storagePlan: getSourceStoragePlan(supabaseConfig),
-      classroom: {
-        ...getSafeGoogleClassroomStatus(googleClassroomConfig),
-        disconnectAvailable: true,
-      },
+      classroom: publicClassroomConnector(classroomConfigStatus),
       essentialLearningUngated: true,
       convenienceCreditsEnabled: true,
       realSubmissionEnabled: false,
@@ -1573,7 +1655,7 @@ async function handleApi(req, res, url) {
       config: googleClassroomConfig,
     });
     sendJson(res, 200, {
-      connector,
+      connector: publicClassroomConnector(connector),
       readOnly: true,
       writebackEnabled: false,
       secretsPrinted: false,
@@ -1582,14 +1664,19 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/classroom/oauth/start") {
-    const { session } = await getStateContext(req);
-    if (googleClassroomConfig.mode !== "oauth") {
-      sendJson(res, 200, {
-        connector: getSafeGoogleClassroomStatus(googleClassroomConfig),
+    const { session, state } = await getStateContext(req);
+    const connector = await getClassroomConnectorStatus({
+      state,
+      session,
+      repository,
+      userId: session.user.id,
+      config: googleClassroomConfig,
+    });
+    if (!connector.actions.connect && !connector.actions.reconnect) {
+      sendJson(res, connector.connected ? 200 : 409, {
+        connector: publicClassroomConnector(connector),
         authorizationUrl: null,
-        message: googleClassroomConfig.mode === "mock"
-          ? "Mock Classroom import is active; OAuth consent is not required."
-          : "Google Classroom import is disabled.",
+        message: connector.message,
         secretsPrinted: false,
       });
       return;
@@ -1605,7 +1692,7 @@ async function handleApi(req, res, url) {
     });
     sendJson(res, 200, {
       authorizationUrl,
-      connector: getSafeGoogleClassroomStatus(googleClassroomConfig),
+      connector: publicClassroomConnector(connector),
       readOnly: true,
       writebackEnabled: false,
       secretsPrinted: false,
@@ -1645,28 +1732,45 @@ async function handleApi(req, res, url) {
         <title>StudentOS Classroom Connected</title>
         <body>
           <h1>Google Classroom connected</h1>
-          <p>Read-only import is ready. StudentOS will not submit, grade, or modify Classroom work.</p>
+          <p>Classroom connection is ready. StudentOS will add coursework to your study plan only.</p>
           <script>setTimeout(() => { location.href = "/"; }, 1200);</script>
         </body>`);
     } catch {
-      sendHtml(res, 400, "<!doctype html><title>StudentOS Classroom</title><p>Google Classroom connection failed. Return to StudentOS and try again.</p>");
+      sendHtml(res, 400, "<!doctype html><title>StudentOS Classroom</title><p>Classroom connection could not finish. Return to StudentOS and reconnect when ready.</p>");
     }
     return;
   }
 
   if (req.method === "POST" && url.pathname === "/api/classroom/disconnect") {
     const { session, state } = await getStateContext(req);
+    const connector = await getClassroomConnectorStatus({
+      state,
+      session,
+      repository,
+      userId: session.user.id,
+      config: googleClassroomConfig,
+    });
+    if (!connector.actions.disconnect) {
+      sendJson(res, 200, {
+        connector: publicClassroomConnector(connector),
+        disconnected: connector.state !== "connected",
+        message: connector.message,
+        secretsPrinted: false,
+      });
+      return;
+    }
     if (googleClassroomConfig.mode === "oauth") requireAccountSession(session);
     await disconnectGoogleClassroom(state, session.user.id, { session, repository });
     await repository.saveState(session, state);
+    const updatedConnector = await getClassroomConnectorStatus({
+      state,
+      session,
+      repository,
+      userId: session.user.id,
+      config: googleClassroomConfig,
+    });
     sendJson(res, 200, {
-      connector: await getClassroomConnectorStatus({
-        state,
-        session,
-        repository,
-        userId: session.user.id,
-        config: googleClassroomConfig,
-      }),
+      connector: publicClassroomConnector(updatedConnector),
       disconnected: true,
       secretsPrinted: false,
     });
@@ -1675,6 +1779,24 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/classroom/sync") {
     const { session, state, persistence } = await getStateContext(req);
+    const connector = await getClassroomConnectorStatus({
+      state,
+      session,
+      repository,
+      userId: session.user.id,
+      config: googleClassroomConfig,
+    });
+    if (!connector.actions.sync) {
+      sendJson(res, 409, {
+        error: connector.syncBlockedReason || connector.message || "Classroom is not ready to sync.",
+        connector: publicClassroomConnector(connector),
+        syncBlocked: true,
+        readOnly: true,
+        writebackEnabled: false,
+        secretsPrinted: false,
+      });
+      return;
+    }
     if (googleClassroomConfig.mode === "oauth") requireAccountSession(session);
     const result = await syncGoogleClassroomIntoState({
       state,
@@ -1685,6 +1807,9 @@ async function handleApi(req, res, url) {
     await repository.saveState(session, state);
     sendJson(res, 200, {
       ...result,
+      connector: publicClassroomConnector(result.connector),
+      summary: publicClassroomSummary(result.summary),
+      syncRun: publicClassroomSyncRun(result.syncRun),
       state: publicState(state, persistence),
       assignmentInsights: getAssignmentInsights(state),
       todayNextActions: getTodayNextActions(state),
@@ -1704,8 +1829,8 @@ async function handleApi(req, res, url) {
     });
     const history = await repository.listClassroomSyncRuns(session, { limit: 12 });
     sendJson(res, 200, {
-      connector,
-      syncHistory: history,
+      connector: publicClassroomConnector(connector),
+      syncHistory: history.map(publicClassroomSyncRun),
       readOnly: true,
       writebackEnabled: false,
       secretsPrinted: false,

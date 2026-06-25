@@ -35,6 +35,7 @@
     "test:pass26": "node backend/testPass26.js",
     "test:pass27": "node backend/testPass27.js",
     "test:pass29": "node backend/testPass29.js",
+    "test:pass348": "node backend/testPass348.js",
     "smoke:core": "node scripts/smokeCoreFlows.js",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",

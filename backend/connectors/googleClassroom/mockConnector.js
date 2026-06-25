@@ -46,7 +46,7 @@ export class MockGoogleClassroomReadOnlyConnector {
           providerCourseId: course.providerCourseId || course.id?.replace(/^course_/, "mock_course_") || "mock_course",
           providerCourseWorkId: assignment.providerCourseWorkId || assignment.id.replace(/^assign_/, "mock_work_"),
           title: assignment.title,
-          description: "Mock read-only Classroom coursework for StudentOS sync.",
+          description: "Mock Classroom coursework for StudentOS planning.",
           alternateLink: assignment.alternateLink || "https://classroom.google.com/mock/coursework",
           creationTime: new Date(Date.now() - 86400000).toISOString(),
           updateTime: new Date().toISOString(),

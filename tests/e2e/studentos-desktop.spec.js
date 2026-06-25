@@ -121,6 +121,37 @@ async function expectNoVisibleExternalBranding(page, label) {
   expect(visibleText, `${label} should not expose external provider branding`).not.toMatch(blocked);
 }
 
+const CLASSROOM_DEVELOPER_COPY = /Classroom import unavailable|Google Classroom import is disabled|no write scopes|no writeback|try again|Read-only Classroom import|Token storage|Scopes:/i;
+
+async function expectNoClassroomDeveloperCopy(page, label) {
+  const text = await page.evaluate(() => [
+    document.querySelector("#classroom-panel")?.innerText || "",
+    document.querySelector("#assignment-list")?.innerText || "",
+    document.querySelector("#view-courses")?.innerText || "",
+  ].join("\n"));
+  expect(text, `${label} should not expose Classroom developer copy`).not.toMatch(CLASSROOM_DEVELOPER_COPY);
+}
+
+async function expectClassroomControls(page, { connectLabel = "", sync = false, disconnect = false } = {}) {
+  const connectButton = page.locator("#classroom-connect-btn");
+  if (connectLabel) {
+    await expect(connectButton).toBeVisible();
+    await expect(connectButton).toHaveText(connectLabel);
+  } else {
+    await expect(connectButton).toBeHidden();
+  }
+  if (sync) {
+    await expect(page.locator("#classroom-sync-btn")).toBeVisible();
+  } else {
+    await expect(page.locator("#classroom-sync-btn")).toBeHidden();
+  }
+  if (disconnect) {
+    await expect(page.locator("#classroom-disconnect-btn")).toBeVisible();
+  } else {
+    await expect(page.locator("#classroom-disconnect-btn")).toBeHidden();
+  }
+}
+
 async function routePublicHostToLocal(page, hostname = "studentos.sentiqlabs.com", options = {}) {
   await page.route(`https://${hostname}/**`, async (route) => {
     const request = route.request();
@@ -215,6 +246,112 @@ test("initial workspace loading state appears and clears", async ({ page }) => {
   await expect(page.locator("#dashboard-summary")).not.toContainText(/Preparing StudentOS|Loading your workspace/);
   await expect(page.locator("#app-shell")).not.toHaveAttribute("aria-busy", "true");
   await page.unroute("**/api/bootstrap");
+});
+
+test("Classroom status UI normalizes controls and copy", async ({ page }) => {
+  function connectorFor(state, overrides = {}) {
+    const connected = state === "connected";
+    const actions = {
+      connect: state === "disconnected",
+      reconnect: state === "reconnect_required",
+      sync: connected,
+      disconnect: connected,
+    };
+    const copy = {
+      disabled: {
+        title: "Classroom setup is not active",
+        message: "Your workspace is ready. Classroom importing can be turned on later.",
+        badge: "workspace ready",
+      },
+      setup_required: {
+        title: "Classroom setup is not active",
+        message: "Your workspace is ready. Classroom importing can be turned on later.",
+        badge: "workspace ready",
+      },
+      disconnected: {
+        title: "Classroom can be connected",
+        message: "Connect when you want StudentOS to include Classroom coursework in your study plan.",
+        badge: "optional setup",
+      },
+      connected: {
+        title: "Classroom connected",
+        message: "StudentOS can refresh coursework for your study plan. You stay in control of submissions.",
+        badge: "planning import active",
+      },
+      reconnect_required: {
+        title: "Reconnect Classroom",
+        message: "Reconnect Classroom to refresh imported assignments.",
+        badge: "reconnect needed",
+      },
+    }[state];
+    return {
+      provider: "google_classroom",
+      mode: state === "disabled" ? "disabled" : "oauth",
+      state,
+      status: state,
+      connected,
+      available: !["disabled", "setup_required"].includes(state),
+      enabled: !["disabled", "setup_required"].includes(state),
+      setupRequired: state === "setup_required",
+      reconnectRequired: state === "reconnect_required",
+      readOnlyImport: true,
+      writeScopesEnabled: false,
+      postingEnabled: false,
+      submissionEnabled: false,
+      actions,
+      ui: copy,
+      syncHistory: [],
+      ...overrides,
+    };
+  }
+
+  let connector = connectorFor("disabled");
+  await page.route("**/api/classroom/status", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      connector,
+      readOnly: true,
+      writebackEnabled: false,
+      secretsPrinted: false,
+    }),
+  }));
+
+  await page.goto(baseUrl);
+  await expect(page.locator("#classroom-panel")).toContainText("Classroom setup is not active");
+  await expectClassroomControls(page, {});
+  await expectNoClassroomDeveloperCopy(page, "disabled Classroom state");
+
+  connector = connectorFor("setup_required");
+  await page.goto(baseUrl);
+  await expect(page.locator("#classroom-panel")).toContainText("Classroom setup is not active");
+  await expectClassroomControls(page, {});
+  await expectNoClassroomDeveloperCopy(page, "setup-required Classroom state");
+
+  connector = connectorFor("disconnected");
+  await page.goto(baseUrl);
+  await expect(page.locator("#classroom-panel")).toContainText("Classroom can be connected");
+  await expectClassroomControls(page, { connectLabel: "Connect Classroom" });
+  await expectNoClassroomDeveloperCopy(page, "disconnected Classroom state");
+
+  connector = connectorFor("connected", {
+    lastSyncAt: "2026-06-25T06:00:00.000Z",
+    syncSummary: {
+      importedCourses: 1,
+      importedAssignments: 2,
+      updatedAssignments: 1,
+      emptyClassroom: false,
+    },
+  });
+  await page.goto(baseUrl);
+  await expect(page.locator("#classroom-panel")).toContainText("Classroom connected");
+  await expectClassroomControls(page, { sync: true, disconnect: true });
+  await expectNoClassroomDeveloperCopy(page, "connected Classroom state");
+
+  connector = connectorFor("reconnect_required");
+  await page.goto(baseUrl);
+  await expect(page.locator("#classroom-panel")).toContainText("Reconnect Classroom");
+  await expectClassroomControls(page, { connectLabel: "Reconnect Classroom" });
+  await expectNoClassroomDeveloperCopy(page, "reconnect-required Classroom state");
 });
 
 test("desktop core flows stay usable in local mock mode", async ({ page }) => {
@@ -331,10 +468,12 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#flow-result")).toContainText("No submission");
 
   await clickNav(page, "Today");
-  await expect(page.locator("#classroom-panel")).toContainText(/read only|connected|demo/i);
+  await expect(page.locator("#classroom-panel")).toContainText(/planning import active|connected|demo/i);
+  await expectClassroomControls(page, { sync: true, disconnect: true });
   await page.getByRole("button", { name: "Sync Classroom" }).click();
-  await waitForNotLoading(page.locator("#classroom-panel"), "Syncing Classroom in read-only mode");
-  await expect(page.locator("#classroom-panel")).toContainText("no write scopes");
+  await waitForNotLoading(page.locator("#classroom-panel"), "Syncing Classroom assignments");
+  await expect(page.locator("#classroom-panel")).toContainText("planning import active");
+  await expectNoClassroomDeveloperCopy(page, "mock Classroom sync");
   await expect(page.locator("#assignment-list")).toContainText("Google Classroom");
   await expect(page.locator("#assignment-list")).toContainText("Analyze assignment");
   await page.getByRole("button", { name: "Analyze assignment" }).first().click();
