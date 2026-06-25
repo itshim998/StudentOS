@@ -469,7 +469,7 @@ function publicAiResult(result = {}) {
   return {
     ...safeResult,
     engineLabel: "StudentOS AI",
-    fallback: fallback?.used ? { used: true, reason: "limited_context" } : { used: false },
+    fallback: { used: fallback?.used === true },
   };
 }
 
@@ -507,6 +507,10 @@ function publicClassroomSummary(summary = null) {
     importedTopics: summary.importedTopics || 0,
     updatedTopics: summary.updatedTopics || 0,
     skippedItems: summary.skippedItems || 0,
+    evictedAssignments: summary.evictedAssignments || 0,
+    evictedMaterials: summary.evictedMaterials || 0,
+    retentionApplied: summary.retentionApplied === true,
+    googleClassroomDeleted: false,
     emptyClassroom: summary.emptyClassroom === true,
   };
 }

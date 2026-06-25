@@ -339,7 +339,7 @@ export async function syncGoogleClassroomIntoState({
       throw error;
     }
   }
-  const summary = importClassroomSnapshotIntoState(state, snapshot, { now });
+  const summary = importClassroomSnapshotIntoState(state, snapshot, { now, retention: config.retention });
   summary.errors.push(...(snapshot.errors || []));
   const completedAt = nowIso(now);
   const syncRun = syncRunFromSummary({

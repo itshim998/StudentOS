@@ -16,6 +16,46 @@ function dateOnly(value) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
 }
 
+function timestampFor(value) {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+}
+
+function newestClassroomTimestamp(item = {}) {
+  return Math.max(
+    timestampFor(item.updateTime),
+    timestampFor(item.creationTime),
+    timestampFor(item.dueAt),
+    timestampFor(item.importedAt),
+    timestampFor(item.createdAt),
+  );
+}
+
+function oldestLocalImportTimestamp(item = {}) {
+  const values = [
+    timestampFor(item.importedAt),
+    timestampFor(item.createdAt),
+    timestampFor(item.creationTime),
+    timestampFor(item.classroomUpdatedAt),
+    timestampFor(item.updateTime),
+    timestampFor(item.updatedAt),
+  ].filter((value) => value !== Number.NEGATIVE_INFINITY);
+  return values.length ? Math.min(...values) : Number.POSITIVE_INFINITY;
+}
+
+function newestFirst(left, right) {
+  const freshness = newestClassroomTimestamp(right) - newestClassroomTimestamp(left);
+  if (freshness) return freshness;
+  return String(left.providerCourseWorkId || left.providerCourseId || left.id || "").localeCompare(String(right.providerCourseWorkId || right.providerCourseId || right.id || ""));
+}
+
+function oldestFirst(left, right) {
+  const age = oldestLocalImportTimestamp(left) - oldestLocalImportTimestamp(right);
+  if (age) return age;
+  return String(left.id || "").localeCompare(String(right.id || ""));
+}
+
 function submissionStatusFor(courseWork, submission) {
   const state = String(submission?.state || "").toUpperCase();
   if (["TURNED_IN", "RETURNED"].includes(state)) return "done";
@@ -46,11 +86,72 @@ function topicId(providerCourseId, courseWorkTitle) {
 function upsertById(items, item) {
   const index = items.findIndex((candidate) => candidate.id === item.id);
   if (index >= 0) {
-    items[index] = { ...items[index], ...item };
+    const existing = items[index];
+    items[index] = {
+      ...existing,
+      ...item,
+      createdAt: existing.createdAt || item.createdAt,
+      importedAt: existing.importedAt || item.importedAt,
+    };
     return "updated";
   }
   items.push(item);
   return "imported";
+}
+
+function classroomItem(item = {}) {
+  return item.source === "google_classroom" || item.provider === "google_classroom";
+}
+
+function removeSourceArtifacts(state, sourceIds = new Set()) {
+  if (!sourceIds.size) return;
+  state.sourceChunks = (state.sourceChunks || []).filter((chunk) => !sourceIds.has(chunk.sourceMaterialId));
+  state.memoryItems = (state.memoryItems || []).filter((item) => !sourceIds.has(item.sourceMaterialId));
+  state.embeddingsMetadata = (state.embeddingsMetadata || []).filter((item) => !sourceIds.has(item.sourceMaterialId));
+  state.backgroundJobs = (state.backgroundJobs || []).filter((job) => !sourceIds.has(job.sourceId));
+  state.jobEvents = (state.jobEvents || []).filter((event) => !sourceIds.has(event.sourceId));
+}
+
+function applyClassroomRetention(state, summary, retention = {}) {
+  const maxAssignments = Number(retention.maxImportedAssignments || 200);
+  const maxMaterials = Number(retention.maxImportedMaterials || 400);
+  const classroomAssignments = (state.assignments || []).filter(classroomItem);
+  const evictedWorkIds = new Set();
+  const evictedSourceIds = new Set();
+
+  if (Number.isFinite(maxAssignments) && maxAssignments > 0 && classroomAssignments.length > maxAssignments) {
+    const overflow = classroomAssignments
+      .sort(oldestFirst)
+      .slice(0, classroomAssignments.length - maxAssignments);
+    const evictedIds = new Set(overflow.map((item) => item.id));
+    for (const item of overflow) {
+      if (item.providerCourseWorkId) evictedWorkIds.add(item.providerCourseWorkId);
+    }
+    state.assignments = (state.assignments || []).filter((item) => !evictedIds.has(item.id));
+    summary.evictedAssignments += overflow.length;
+  }
+
+  const assignmentEvictedMaterials = (state.sourceMaterials || [])
+    .filter((source) => classroomItem(source) && evictedWorkIds.has(source.providerCourseWorkId));
+  assignmentEvictedMaterials.forEach((source) => evictedSourceIds.add(source.id));
+
+  const remainingClassroomMaterials = (state.sourceMaterials || [])
+    .filter((source) => classroomItem(source) && !evictedSourceIds.has(source.id));
+  if (Number.isFinite(maxMaterials) && maxMaterials > 0 && remainingClassroomMaterials.length > maxMaterials) {
+    const overflow = remainingClassroomMaterials
+      .sort(oldestFirst)
+      .slice(0, remainingClassroomMaterials.length - maxMaterials);
+    overflow.forEach((source) => evictedSourceIds.add(source.id));
+  }
+
+  if (evictedSourceIds.size) {
+    state.sourceMaterials = (state.sourceMaterials || []).filter((source) => !evictedSourceIds.has(source.id));
+    removeSourceArtifacts(state, evictedSourceIds);
+    summary.evictedMaterials += evictedSourceIds.size;
+  }
+
+  summary.retentionApplied = summary.evictedAssignments > 0 || summary.evictedMaterials > 0;
+  summary.googleClassroomDeleted = false;
 }
 
 function tokenize(value = "") {
@@ -111,7 +212,7 @@ function findSubmission(submissions, courseWork) {
     submission.providerCourseWorkId === courseWork.providerCourseWorkId) || null;
 }
 
-export function importClassroomSnapshotIntoState(state, snapshot, { now = new Date() } = {}) {
+export function importClassroomSnapshotIntoState(state, snapshot, { now = new Date(), retention = {} } = {}) {
   state.courses = state.courses || [];
   state.topics = state.topics || [];
   state.assignments = state.assignments || [];
@@ -127,11 +228,15 @@ export function importClassroomSnapshotIntoState(state, snapshot, { now = new Da
     importedTopics: 0,
     updatedTopics: 0,
     skippedItems: 0,
+    evictedAssignments: 0,
+    evictedMaterials: 0,
+    retentionApplied: false,
+    googleClassroomDeleted: false,
     errors: [],
     emptyClassroom: !(snapshot.courses || []).length && !(snapshot.courseWork || []).length,
   };
   const providerCourseIdToCourseId = new Map();
-  for (const classroomCourse of snapshot.courses || []) {
+  for (const classroomCourse of [...(snapshot.courses || [])].sort(newestFirst)) {
     if (!classroomCourse.providerCourseId) {
       summary.skippedItems += 1;
       continue;
@@ -150,12 +255,15 @@ export function importClassroomSnapshotIntoState(state, snapshot, { now = new Da
       alternateLink: classroomCourse.alternateLink || null,
       classroomState: classroomCourse.courseState || null,
       updatedAt: classroomCourse.updateTime || nowIso(now),
+      updateTime: classroomCourse.updateTime || null,
+      creationTime: classroomCourse.creationTime || null,
+      importedAt: nowIso(now),
       readOnly: true,
     });
     if (action === "imported") summary.importedCourses += 1;
     else summary.updatedCourses += 1;
   }
-  for (const courseWork of snapshot.courseWork || []) {
+  for (const courseWork of [...(snapshot.courseWork || [])].sort(newestFirst)) {
     if (!courseWork.providerCourseId || !courseWork.providerCourseWorkId) {
       summary.skippedItems += 1;
       continue;
@@ -183,13 +291,18 @@ export function importClassroomSnapshotIntoState(state, snapshot, { now = new Da
       workType: courseWork.workType || null,
       alternateLink: courseWork.alternateLink || submission?.alternateLink || null,
       classroomUpdatedAt: courseWork.updateTime || submission?.updateTime || null,
+      updateTime: courseWork.updateTime || null,
+      creationTime: courseWork.creationTime || null,
+      importedAt: nowIso(now),
+      updatedAt: courseWork.updateTime || submission?.updateTime || nowIso(now),
+      createdAt: courseWork.creationTime || nowIso(now),
       automationEligibility: "requires_contract",
       readOnly: true,
       learningFlowReady: true,
     });
     if (action === "imported") summary.importedAssignments += 1;
     else summary.updatedAssignments += 1;
-    (courseWork.materials || []).forEach((material, index) => {
+    [...(courseWork.materials || [])].sort(newestFirst).forEach((material, index) => {
       const sourceId = materialId(courseWork.providerCourseId, courseWork.providerCourseWorkId, material.providerMaterialId, index);
       const materialAction = upsertById(state.sourceMaterials, {
         id: sourceId,
@@ -211,13 +324,25 @@ export function importClassroomSnapshotIntoState(state, snapshot, { now = new Da
         providerMaterialId: material.providerMaterialId || null,
         linkUrl: material.linkUrl || null,
         readOnly: true,
-        createdAt: nowIso(now),
-        updatedAt: nowIso(now),
+        updateTime: material.updateTime || courseWork.updateTime || null,
+        creationTime: material.creationTime || courseWork.creationTime || null,
+        importedAt: nowIso(now),
+        createdAt: material.creationTime || courseWork.creationTime || nowIso(now),
+        updatedAt: material.updateTime || courseWork.updateTime || nowIso(now),
       });
       if (materialAction === "imported") summary.importedMaterials += 1;
       else summary.updatedMaterials += 1;
     });
   }
+  state.assignments = [
+    ...(state.assignments || []).filter(classroomItem).sort(newestFirst),
+    ...(state.assignments || []).filter((assignment) => !classroomItem(assignment)),
+  ];
+  state.sourceMaterials = [
+    ...(state.sourceMaterials || []).filter(classroomItem).sort(newestFirst),
+    ...(state.sourceMaterials || []).filter((source) => !classroomItem(source)),
+  ];
+  applyClassroomRetention(state, summary, retention);
   state.auditLog.push({
     id: `audit_classroom_sync_${Date.now()}`,
     actorId: state.studentProfile.id,
@@ -236,6 +361,10 @@ export function importClassroomSnapshotIntoState(state, snapshot, { now = new Da
       importedTopics: summary.importedTopics,
       updatedTopics: summary.updatedTopics,
       emptyClassroom: summary.emptyClassroom,
+      evictedAssignments: summary.evictedAssignments,
+      evictedMaterials: summary.evictedMaterials,
+      retentionApplied: summary.retentionApplied,
+      googleClassroomDeleted: false,
       writebackEnabled: false,
     },
     createdAt: nowIso(now),

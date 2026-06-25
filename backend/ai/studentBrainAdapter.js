@@ -83,6 +83,7 @@ export async function runStudentOsVerb({ verb, message, state, retrievalOverride
     const result = await provider.run({ verb, message, state, retrievalOverride });
     return {
       ...result,
+      answer: insufficientContext || result.answer,
       grounding: {
         ...result.grounding,
         insufficientContext: Boolean(insufficientContext),
@@ -97,9 +98,9 @@ export async function runStudentOsVerb({ verb, message, state, retrievalOverride
   const citationValidation = validateGeneratedCitations(providerResult.text || "", baseAnswer.grounding?.snippets || []);
   const answer = usedRealProvider
     ? insufficientContext
-      ? `I do not have enough indexed uploaded material for a fully grounded answer. ${citationValidation.text}`
+      ? insufficientContext
       : citationValidation.text
-    : baseAnswer.answer;
+    : insufficientContext || baseAnswer.answer;
   return {
     ...baseAnswer,
     mode: usedRealProvider ? "real_grounded_ai" : "mock_studentos_brain",

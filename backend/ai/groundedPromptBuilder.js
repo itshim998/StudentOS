@@ -62,7 +62,7 @@ export function buildGroundedMessages({ verb, message, state, baseAnswer }) {
   const contextBlock = formatSnippets(snippets);
   const fallbackInstruction = hasUploadedSnippets
     ? "Use the uploaded source snippets as the primary evidence. Do not add citations beyond the supplied source labels."
-    : "The retrieved uploaded material is insufficient. Say that clearly and give only a safe next action or demo fallback label.";
+    : "The retrieved uploaded material is insufficient. Say 'Not enough material yet' clearly and give one safe next action.";
 
   const verbInstructions = {
     Ask: "Teach the concept clearly from the supplied source snippets. Keep it concrete and student-safe.",
@@ -104,12 +104,12 @@ export function buildGroundedMessages({ verb, message, state, baseAnswer }) {
 export function buildInsufficientContextNote(baseAnswer) {
   const labels = baseAnswer.sourceLabels || [];
   if (baseAnswer.grounding?.confidence?.lowConfidence) {
-    return "Retrieved source context is low confidence, so StudentOS should not present it as enough for a fully grounded answer.";
+    return "Not enough material yet. Add or index a more relevant source, then ask again.";
   }
   if (baseAnswer.grounding?.uploadedMaterialUsed && baseAnswer.grounding?.snippets?.length) {
     return null;
   }
   return labels.length
-    ? "Retrieved materials did not provide enough indexed text for a fully grounded answer."
-    : "No indexed uploaded source text matched this request yet.";
+    ? "Not enough material yet. The saved material did not provide enough indexed text for this request."
+    : "Not enough material yet. Add a source for this topic, then ask again.";
 }

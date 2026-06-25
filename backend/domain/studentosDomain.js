@@ -300,7 +300,7 @@ export function retrieveGroundedSources({ state, message = "", topic, course, li
         topic?.sourceMaterialIds?.includes(source.id) ? topic?.title : "",
       ].join(" ");
       const score = scoreText(text) + (source.courseId === course?.id ? 2 : 0) + (topic?.sourceMaterialIds?.includes(source.id) ? 3 : 0) + (source.sourceType === "uploaded_file" ? 4 : 0);
-      return { ...source, score, groundingType: source.sourceType === "uploaded_file" ? "uploaded_material" : "mock_material" };
+      return { ...source, score, groundingType: source.sourceType === "uploaded_file" ? "uploaded_material" : "student_material" };
     })
     .filter((source) => source.score > 0);
 
@@ -1479,14 +1479,17 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
   const retrieved = retrievalOverride || retrieveGroundedSources({ state, message, topic, course });
   const sourceLabels = retrieved.labels.length
     ? retrieved.labels
-    : sources.map((source) => ({ label: source.citationLabel, type: "mock_material" }));
+    : sources.map((source) => ({ label: source.citationLabel, type: "student_material" }));
   const preferences = state.studentProfile?.preferences || {};
   const webFallback = sources.some((source) => source.webFallbackAllowed);
+  const requestText = String(message || "").trim();
+  const insufficientMaterial = retrieved.confidence?.lowConfidence ||
+    (!retrieved.hasUploadedMaterial && !retrieved.chunks.length && !retrieved.memories.length);
   const groundingSummary = retrieved.confidence?.lowConfidence
-    ? "Retrieved source context is low confidence; treat this as insufficient until more relevant material is indexed."
+    ? "Not enough material yet. Add or index a more relevant source, then ask again."
     : retrieved.hasUploadedMaterial
-      ? "Grounding includes uploaded private material."
-      : "Grounding is from mock/demo course material unless labeled otherwise.";
+      ? "Grounding uses your saved study materials."
+      : "Use this as a study-plan draft until more source material is indexed.";
   const retrievedSnippet = retrieved.chunks[0]?.snippet || retrieved.memories[0]?.body || retrieved.sources[0]?.extractedText || "";
   const coverage = determineTopicCoverage(state, topic);
   const normalizedVerb = AI_VERBS.includes(verb) ? verb : "Ask";
@@ -1527,7 +1530,9 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
     const plan = buildStudyPlan(state, topic);
     return {
       ...base,
-      answer: `Plan: ${plan.daysUntilExam} day(s) until the ${course.title} exam. Goal: ${plan.academicGoal.replaceAll("_", " ")}. Use ${topic.title} first, fit it around timetable blocks, then repair weak topics and due work. ${groundingSummary}`,
+      answer: insufficientMaterial
+        ? `${groundingSummary} I can still help you plan around ${course.title}: start with ${topic.title}, protect due work, and add a relevant source before asking for a detailed explanation.`
+        : `Plan for ${requestText || topic.title}: ${plan.daysUntilExam} day(s) until the ${course.title} exam. Goal: ${plan.academicGoal.replaceAll("_", " ")}. Use ${topic.title} first, fit it around timetable blocks, then repair weak topics and due work. ${groundingSummary}`,
       studyPlan: plan,
       nextActions: plan.blocks,
     };
@@ -1537,7 +1542,9 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
     const artifacts = buildMakeArtifacts(state, topic);
     return {
       ...base,
-      answer: `Make: generated notes, flashcards, a short quiz, and a summary scaffold for ${topic.title}. ${groundingSummary}`,
+      answer: insufficientMaterial
+        ? `${groundingSummary} I can make a safe outline for ${topic.title}, but add a relevant source before using it as final study material.`
+        : `Created study materials for ${requestText || topic.title}: notes, flashcards, a short quiz, and a summary scaffold for ${topic.title}. ${groundingSummary}`,
       artifacts,
       nextActions: ["Save structured notes", "Try the quiz", "Review missed items before any convenience drafting"],
     };
@@ -1547,7 +1554,9 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
     const review = buildReviewCheck(state, topic);
     return {
       ...base,
-      answer: `Review: ${topic.title} is ${coverage.status.replace("_", " ")}. Weak points: ${review.weakPoints.join(", ") || "none recorded"}. ${groundingSummary}`,
+      answer: insufficientMaterial
+        ? `${groundingSummary} For now, review ${topic.title} by checking coverage, weak points, and one timed question.`
+        : `Review for ${requestText || topic.title}: ${topic.title} is ${coverage.status.replace("_", " ")}. Weak points: ${review.weakPoints.join(", ") || "none recorded"}. ${groundingSummary}`,
       review,
       nextActions: [review.nextAction],
     };
@@ -1555,15 +1564,17 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
 
   return {
     ...base,
-    answer: `Ask: from ${sourceLabels[0]?.label || "student materials"}, ${topic.title} should be explained from your study context first. ${groundingSummary} If the material is thin, any outside reference must be labeled.`,
+    answer: insufficientMaterial
+      ? `${groundingSummary} I do not have enough indexed material to answer "${requestText || topic.title}" from your sources yet.`
+      : `For "${requestText || topic.title}", start with ${topic.title} from your study context. ${groundingSummary} If a reference goes beyond your material, it must be labeled.`,
       explanation: {
       concept: retrieved.confidence?.lowConfidence
-        ? "StudentOS found only low-confidence source context for this request, so it should not pretend the uploaded material is enough."
+        ? "Not enough material yet to answer this from your sources."
         : retrievedSnippet
-        ? `Uploaded/source note: ${retrievedSnippet.slice(0, 420)}`
+        ? `Source note: ${retrievedSnippet.slice(0, 420)}`
         : `Core idea: understand ${topic.title} from the available course material before doing automation.`,
       sourceUse: sourceLabels.map((item) => item.label),
-      diagram: `${sourceLabels[0]?.label || "Source"} -> concept -> example -> MCQ check -> 24h revision`,
+      diagram: `${sourceLabels[0]?.label || "Source"}: concept, example, MCQ check, 24h revision`,
     },
     nextActions: ["Read the material-backed explanation", "Try a quick check", "Add correction if unsure"],
   };

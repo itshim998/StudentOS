@@ -68,11 +68,13 @@ Do not reuse SentIQGPT keys or Supabase projects.
 - `STUDENTOS_BILLING_CANCELLATION_POLICY=immediate`
 - `STUDENTOS_MONITORING_ALERTS_ENABLED=true`
 - `STUDENTOS_MONITORING_ALERT_PROVIDER=log`
-- `STUDENTOS_GOOGLE_CLASSROOM_MODE=mock`
+- `STUDENTOS_GOOGLE_CLASSROOM_MODE=disabled`
 - `STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET=`
 - `STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET=`
 - `STUDENTOS_GOOGLE_CLASSROOM_TOKEN_KEY_ID=studentos-google-classroom-token-v1`
 - `STUDENTOS_GOOGLE_CLASSROOM_DRIVE_METADATA_ENABLED=false`
+- `STUDENTOS_GOOGLE_CLASSROOM_MAX_IMPORTED_ASSIGNMENTS=200`
+- `STUDENTOS_GOOGLE_CLASSROOM_MAX_IMPORTED_MATERIALS=400`
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_REDIRECT_URI=https://<studentos-host>/api/classroom/oauth/callback`
@@ -127,3 +129,4 @@ Apply all shard migrations through `202605250019_studentos_pass22_mfa_billing_al
 - Use short retention for operational logs that may contain student metadata.
 - Keep demo seed disabled in production.
 - Keep source citations strict; no model-generated citations are trusted.
+- Keep Classroom production mode `disabled` until live read-only OAuth has a dedicated backend secret set and a non-localhost redirect URI.

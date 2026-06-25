@@ -11,6 +11,7 @@ let runtimeConfig = { auth: { enabled: false } };
 let authSession = readStoredSession();
 let accountSnapshot = null;
 let classroomStatus = null;
+let classroomStatusLoaded = false;
 let aiDrawerReturnFocus = null;
 let sourceSearchQuery = "";
 let authShellMode = "signin";
@@ -219,6 +220,7 @@ function renderWorkspaceLoading(copy = "Loading your workspace...") {
   setLoading(els.roadmapList, "Loading your study list...", { card: true });
   setLoading(els.timetableList, "Loading your schedule...", { card: true });
   setLoading(els.classroomPanel, "Checking Classroom status...");
+  updateClassroomActions(statusPendingClassroomConnector());
   setLoading(els.assignmentList, "Loading due work...", { card: true });
 }
 
@@ -355,6 +357,7 @@ function renderClassroomError(error) {
     },
   };
   classroomStatus = { connector, syncSummary: null };
+  classroomStatusLoaded = true;
   updateClassroomActions(connector);
   setResult(els.classroomPanel, `
     <strong>${escapeHtml(connector.ui.title)}</strong>
@@ -453,6 +456,7 @@ async function loadRuntimeConfig() {
 async function loadClassroomStatus() {
   try {
     classroomStatus = await api("/api/classroom/status");
+    classroomStatusLoaded = true;
   } catch (error) {
     classroomStatus = {
       connector: {
@@ -476,6 +480,7 @@ async function loadClassroomStatus() {
       },
       error: error.message,
     };
+    classroomStatusLoaded = true;
   }
   renderClassroomPanel();
 }
@@ -658,8 +663,39 @@ function timestampFor(value) {
   return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
 }
 
+function timestampForNewest(value) {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+}
+
 function sortedByDate(items, getValue) {
   return [...(items || [])].sort((left, right) => timestampFor(getValue(left)) - timestampFor(getValue(right)));
+}
+
+function classroomFreshnessTimestamp(item = {}) {
+  return Math.max(
+    timestampForNewest(item.classroomUpdatedAt),
+    timestampForNewest(item.updateTime),
+    timestampForNewest(item.creationTime),
+    timestampForNewest(item.dueAt),
+    timestampForNewest(item.dueDate),
+    timestampForNewest(item.importedAt),
+    timestampForNewest(item.createdAt),
+    timestampForNewest(item.updatedAt),
+  );
+}
+
+function sortStudentWork(left, right) {
+  const leftClassroom = left.source === "google_classroom";
+  const rightClassroom = right.source === "google_classroom";
+  if (leftClassroom && rightClassroom) {
+    const freshness = classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left);
+    if (freshness) return freshness;
+    return String(left.id || left.title || "").localeCompare(String(right.id || right.title || ""));
+  }
+  if (leftClassroom !== rightClassroom) return leftClassroom ? -1 : 1;
+  return timestampFor(left.dueDate || left.dueAt) - timestampFor(right.dueDate || right.dueAt);
 }
 
 function getNextActions() {
@@ -668,7 +704,7 @@ function getNextActions() {
 }
 
 function getDueAssignments() {
-  return sortedByDate(state.assignments || [], (assignment) => assignment.dueDate);
+  return [...(state.assignments || [])].sort(sortStudentWork);
 }
 
 function getNextTimetableBlock() {
@@ -680,11 +716,17 @@ function getCourseTopics(courseId) {
 }
 
 function getCourseAssignments(courseId) {
-  return sortedByDate((state.assignments || []).filter((assignment) => assignment.courseId === courseId), (assignment) => assignment.dueDate);
+  return (state.assignments || []).filter((assignment) => assignment.courseId === courseId).sort(sortStudentWork);
 }
 
 function getCourseSources(courseId) {
-  return (state.sourceMaterials || []).filter((source) => source.courseId === courseId && !source.deletedAt);
+  return (state.sourceMaterials || [])
+    .filter((source) => source.courseId === courseId && !source.deletedAt)
+    .sort((left, right) => {
+      const freshness = classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left);
+      if (freshness) return freshness;
+      return String(left.id || left.title || "").localeCompare(String(right.id || right.title || ""));
+    });
 }
 
 function getCourseRoadmap(courseId) {
@@ -756,6 +798,35 @@ function normalizedClassroomState(connector = {}) {
   if (mode === "mock") return "connected";
   if (mode === "oauth") return connector.connected ? "connected" : "disconnected";
   return "status_pending";
+}
+
+function statusPendingClassroomConnector() {
+  return {
+    state: "status_pending",
+    status: "status_pending",
+    connected: false,
+    available: false,
+    readOnlyImport: true,
+    writeScopesEnabled: false,
+    actions: {
+      connect: false,
+      reconnect: false,
+      sync: false,
+      disconnect: false,
+    },
+    ui: {
+      title: "Classroom status pending",
+      message: "Your workspace is ready. Classroom status will update when setup is available.",
+      badge: "workspace ready",
+      detail: "Classroom actions are hidden until status is ready.",
+    },
+  };
+}
+
+function activeClassroomConnector() {
+  return classroomStatusLoaded && classroomStatus?.connector
+    ? classroomStatus.connector
+    : statusPendingClassroomConnector();
 }
 
 function classroomActions(connector = {}) {
@@ -870,13 +941,13 @@ function retrievalModeLabel(mode) {
   const value = String(mode || "").toLowerCase();
   if (!value) return "";
   if (value.includes("uploaded") || value.includes("source") || value.includes("rag")) return "uses your materials";
-  if (value.includes("web")) return "outside reference shown";
-  return "material check";
+  if (value.includes("web")) return "reference check";
+  return "";
 }
 
-function providerLabel(provider) {
-  if (!provider) return "";
-  return provider === "mock" ? "Demo response" : "AI response";
+function retrievalModeTag(grounding = {}) {
+  const label = retrievalModeLabel(grounding.retrievalMode);
+  return label ? tag(label, "source") : "";
 }
 
 function buildSourceAiPrompt(source, course, embeddedCount) {
@@ -1145,7 +1216,7 @@ function renderTimetable() {
 
 function renderClassroomPanel() {
   if (!els.classroomPanel) return;
-  const connector = classroomStatus?.connector || runtimeConfig.classroom || {};
+  const connector = activeClassroomConnector();
   const summary = classroomStatus?.syncSummary || connector.syncSummary || null;
   const history = classroomStatus?.syncHistory || connector.syncHistory || [];
   const providerEmail = connector.providerAccountEmail || "";
@@ -1187,7 +1258,7 @@ function renderClassroomPanel() {
 }
 
 function classroomStatusCard() {
-  const connector = classroomStatus?.connector || runtimeConfig.classroom || {};
+  const connector = activeClassroomConnector();
   const summary = classroomStatus?.syncSummary || connector.syncSummary || null;
   const history = classroomStatus?.syncHistory || connector.syncHistory || [];
   const providerEmail = connector.providerAccountEmail || "";
@@ -1229,7 +1300,7 @@ function classroomStatusCard() {
 
 function renderAssignments() {
   if (!state.assignments.length) {
-    const connector = classroomStatus?.connector || runtimeConfig.classroom || {};
+    const connector = activeClassroomConnector();
     const actions = classroomActions(connector);
     const emptyCopy = actions.connect || actions.reconnect
       ? "Connect Classroom, or add work from your courses to start the learning loop."
@@ -1251,9 +1322,10 @@ function renderAssignments() {
     const insight = assignmentInsightById(assignment.id);
     const isClassroom = assignment.source === "google_classroom";
     const isPrimary = index === 0;
+    const primaryLabel = isClassroom ? "Latest Classroom" : "Nearest due";
     return `
       <article class="item-card assignment-card ${isPrimary ? "assignment-card-primary" : ""}">
-        ${isPrimary ? `<span class="queue-label">Nearest due</span>` : ""}
+        ${isPrimary ? `<span class="queue-label">${escapeHtml(primaryLabel)}</span>` : ""}
         <strong>${escapeHtml(assignment.title)}</strong>
         <p>${escapeHtml(course?.title || "Course")} / due ${formatDate(assignment.dueDate)}</p>
         <div class="item-meta">
@@ -1359,7 +1431,13 @@ function renderCourses() {
 
 function renderSources() {
   const health = state.queueHealth || { counts: {}, failedJobs: [], processingJobs: [], retryableFailed: 0 };
-  const activeSources = (state.sourceMaterials || []).filter((source) => !source.deletedAt);
+  const activeSources = (state.sourceMaterials || [])
+    .filter((source) => !source.deletedAt)
+    .sort((left, right) => {
+      const freshness = classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left);
+      if (freshness) return freshness;
+      return String(left.id || left.title || "").localeCompare(String(right.id || right.title || ""));
+    });
   const indexedSources = activeSources.filter(sourceIsIndexed);
   const needsAttentionCount = activeSources.filter((source) => source.extractionError || source.ocrRequired || source.status === "needs_ocr").length;
   const search = sourceSearchQuery.trim().toLowerCase();
@@ -1961,14 +2039,12 @@ function renderAiPayload(result) {
   setResult(els.aiResponse, `
     <strong>${escapeHtml(result.verb)} result</strong>
     <p>${escapeHtml(result.answer)}</p>
-    <div class="tag-row">
-      ${result.coverage?.status ? tag(humanize(result.coverage.status), toneForCoverage(result.coverage.status)) : ""}
-      ${result.provider ? tag(providerLabel(result.provider), result.provider === "mock" ? "medium" : "source") : ""}
-      ${result.grounding?.retrievalMode ? tag(retrievalModeLabel(result.grounding.retrievalMode), "source") : ""}
-      ${result.grounding?.insufficientContext ? tag("limited material context", "urgent") : ""}
-      ${result.grounding?.confidence?.label ? tag(`${result.grounding.confidence.label} material match`, result.grounding.confidence.lowConfidence ? "urgent" : "source") : ""}
+      <div class="tag-row">
+        ${result.coverage?.status ? tag(humanize(result.coverage.status), toneForCoverage(result.coverage.status)) : ""}
+      ${retrievalModeTag(result.grounding)}
+      ${result.grounding?.insufficientContext ? tag("not enough material yet", "urgent") : ""}
       ${(result.sourceLabels || []).map((source) => tag(source.label, "source")).join("")}
-      ${result.webFallback?.allowed ? tag("outside reference shown", "medium") : ""}
+      ${result.webFallback?.allowed ? tag("references labeled", "medium") : ""}
     </div>
     ${result.grounding?.insufficiencyReason ? `<p>${escapeHtml(result.grounding.insufficiencyReason)}</p>` : ""}
     ${extra.join("")}
@@ -2492,6 +2568,7 @@ async function connectClassroom() {
     return;
   }
   classroomStatus = { connector: result.connector, syncSummary: null };
+  classroomStatusLoaded = true;
   renderClassroomPanel();
 }
 
@@ -2503,6 +2580,7 @@ async function syncClassroom() {
   });
   state = result.state || state;
   classroomStatus = { connector: result.connector, syncSummary: result.summary, syncHistory: result.connector?.syncHistory || [] };
+  classroomStatusLoaded = true;
   render();
 }
 
@@ -2513,6 +2591,7 @@ async function disconnectClassroom() {
     body: JSON.stringify({}),
   });
   classroomStatus = { connector: result.connector, syncSummary: null };
+  classroomStatusLoaded = true;
   renderClassroomPanel();
 }
 

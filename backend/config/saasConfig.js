@@ -113,6 +113,10 @@ function duplicateValues(values = []) {
   return [...duplicates];
 }
 
+function containsLocalhost(value = "") {
+  return /(?:localhost|127\.0\.0\.1|0\.0\.0\.0)/i.test(String(value || ""));
+}
+
 export function validateProductionReadiness({ env = process.env, supabaseConfig, saasConfig } = {}) {
   const config = saasConfig || getSaasConfig({ env, supabaseConfig });
   const errors = [];
@@ -125,9 +129,15 @@ export function validateProductionReadiness({ env = process.env, supabaseConfig,
     if (!readValue(env, "STUDENTOS_STORAGE_BUCKET")) errors.push("production_storage_bucket_missing");
     if (!readValue(env, "STUDENTOS_EXPORT_STORAGE_BUCKET")) warnings.push("production_export_bucket_falls_back_to_source_bucket");
     if (!readValue(env, "CORS_ORIGINS")) errors.push("production_cors_origins_missing");
-    if (!config.rateLimit.enabled) warnings.push("production_rate_limit_disabled");
+    if (!config.rateLimit.enabled) errors.push("production_rate_limit_disabled");
+    if (Number(config.rateLimit.maxRequests || 0) > 240) warnings.push("production_rate_limit_threshold_high");
     if (!config.quotas.enforcementEnabled) warnings.push("production_quota_enforcement_disabled");
-    if (config.demoSeedEnabled) errors.push("production_demo_seed_must_be_disabled");
+    if (config.demoSeedEnabled || readBool(env, "STUDENTOS_DEMO_SEED_ENABLED", false)) {
+      errors.push("production_demo_seed_must_be_disabled");
+    }
+    if (containsLocalhost(readValue(env, "CORS_ORIGINS"))) errors.push("production_cors_origins_include_localhost");
+    if (containsLocalhost(readValue(env, "STUDENTOS_API_BASE"))) errors.push("production_api_base_points_to_localhost");
+    if (containsLocalhost(readValue(env, "STUDENTOS_PUBLIC_API_BASE_URL"))) errors.push("production_public_api_base_points_to_localhost");
     if (config.billing.provider?.liveChargesRequested && !config.billing.provider?.configured) {
       errors.push("production_billing_provider_misconfigured");
     }

@@ -15,6 +15,24 @@ import { getGoogleClassroomConfig, getSafeGoogleClassroomStatus } from "../backe
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
+const PAYMENT_SECRET_KEYS = Object.freeze([
+  "RAZORPAY_KEY_ID",
+  "RAZORPAY_KEY_SECRET",
+  "RAZORPAY_WEBHOOK_SECRET",
+  "STRIPE_SECRET_KEY",
+  "STRIPE_WEBHOOK_SECRET",
+  "PADDLE_API_KEY",
+  "PADDLE_WEBHOOK_SECRET",
+]);
+
+function hasAny(env, keys = []) {
+  return keys.some((key) => String(env[key] || "").trim());
+}
+
+function containsLocalhost(value = "") {
+  return /(?:localhost|127\.0\.0\.1|0\.0\.0\.0)/i.test(String(value || ""));
+}
+
 export function runProductionPreflight(env = process.env) {
   const supabaseConfig = getSupabaseEnvironment(env);
   const aiConfig = getAiProviderConfig(env);
@@ -40,6 +58,21 @@ export function runProductionPreflight(env = process.env) {
       classroomConfig.mode === "oauth" &&
       !classroomConfig.tokenEncryptionSecret) {
     readiness.warnings.push("production_google_classroom_token_encryption_secret_missing");
+  }
+  if (saasConfig.deployment === "production") {
+    if (classroomConfig.mode === "mock") {
+      readiness.warnings.push("production_google_classroom_mock_mode_should_be_disabled_or_oauth");
+    }
+    if (classroomConfig.mode === "oauth" && containsLocalhost(classroomConfig.redirectUri)) {
+      readiness.errors.push("production_google_classroom_redirect_points_to_localhost");
+      readiness.ok = false;
+    }
+    if (billingConfig.provider === "none" && hasAny(env, PAYMENT_SECRET_KEYS)) {
+      readiness.warnings.push("payment_provider_keys_present_while_billing_provider_none");
+    }
+    if (embeddingConfig.mode !== "real") {
+      readiness.warnings.push("production_mock_embeddings_early_beta");
+    }
   }
   return redactSecrets({
     ok: readiness.ok,
