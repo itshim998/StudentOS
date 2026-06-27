@@ -248,6 +248,216 @@ test("initial workspace loading state appears and clears", async ({ page }) => {
   await page.unroute("**/api/bootstrap");
 });
 
+test("new signed-in student follows lifecycle gates before Today", async ({ page }) => {
+  const [config, bootstrap, account, classroom] = await Promise.all([
+    fetch(`${baseUrl}/api/config`).then((response) => response.json()),
+    fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json()),
+    fetch(`${baseUrl}/api/account`).then((response) => response.json()),
+    fetch(`${baseUrl}/api/classroom/status`).then((response) => response.json()),
+  ]);
+  const lifecycle = {
+    version: 1,
+    state: "signed_up",
+    selectedPlanId: null,
+    accessMode: null,
+    paymentMethodVerifiedAt: null,
+    legalConsentCompleteAt: null,
+    onboarding: { currentStep: "about_you", completedSteps: [], answers: {}, stepCount: 5, completedStepCount: 0, progressPercent: 0 },
+    classroomChoice: null,
+    classroomConnectedAt: null,
+    manualSetupSelectedAt: null,
+    selectedMaterialIds: [],
+    selectedMaterialLabels: [],
+    materialsSelectedAt: null,
+    setupSummaryReadyAt: null,
+    workspacePreparationStartedAt: null,
+    workspaceReadyAt: null,
+    tutorialOfferedAt: null,
+    tutorialChoice: null,
+    dashboardActivatedAt: null,
+    nextStep: "pricing",
+    paymentMethodVerified: false,
+    legalConsentComplete: false,
+    workspaceReady: false,
+    dashboardActive: false,
+    realPaymentCompleted: false,
+  };
+  const newUserState = {
+    ...bootstrap,
+    studentProfile: { ...bootstrap.studentProfile, displayName: "New Student" },
+    courses: [],
+    assignments: [],
+    sourceMaterials: [],
+    roadmap: [],
+    timetable: [],
+    productLifecycle: lifecycle,
+  };
+  const onboardingSteps = ["about_you", "education_system", "daily_schedule", "exam_pattern", "academic_context"];
+
+  await page.addInitScript(() => {
+    sessionStorage.setItem("studentos.auth.session", JSON.stringify({
+      access_token: "pass35-browser-session",
+      user: { email: "new@student.example" },
+    }));
+  });
+  await page.route("**/api/config", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      ...config,
+      auth: { enabled: true, url: "https://example.supabase.co", anonKey: "public-test-key" },
+      productFlow: {
+        ...config.productFlow,
+        paymentPlaceholderEnabled: true,
+        workspacePreparationSimulationEnabled: true,
+        realPaymentEnabled: false,
+      },
+    }),
+  }));
+  await page.route("**/api/bootstrap", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(newUserState) }));
+  await page.route("**/api/account", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(account) }));
+  await page.route("**/api/classroom/status", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(classroom) }));
+  await page.route("**/api/product-flow", async (route) => {
+    const request = route.request().postDataJSON();
+    const payload = request.payload || {};
+    const timestamp = "2026-06-27T10:00:00.000Z";
+    if (request.action === "select_plan") {
+      lifecycle.selectedPlanId = payload.planId;
+      lifecycle.state = "plan_selected";
+      lifecycle.nextStep = "trial_choice";
+    } else if (request.action === "reset_plan") {
+      lifecycle.selectedPlanId = null;
+      lifecycle.state = "signed_up";
+      lifecycle.nextStep = "pricing";
+    } else if (request.action === "choose_access") {
+      lifecycle.accessMode = payload.accessMode;
+      lifecycle.state = payload.accessMode === "trial" ? "trial_selected" : "paid_plan_selected";
+      lifecycle.nextStep = "payment_method";
+    } else if (request.action === "verify_payment_method_placeholder") {
+      lifecycle.paymentMethodVerifiedAt = timestamp;
+      lifecycle.paymentMethodVerified = true;
+      lifecycle.state = "payment_method_verified";
+      lifecycle.nextStep = "legal_consent";
+    } else if (request.action === "complete_legal") {
+      lifecycle.legalConsentCompleteAt = timestamp;
+      lifecycle.legalConsentComplete = true;
+      lifecycle.state = "legal_consent_complete";
+      lifecycle.nextStep = "about_you";
+    } else if (request.action === "save_onboarding_step") {
+      lifecycle.onboarding.answers[payload.step] = payload.answers || {};
+      if (!lifecycle.onboarding.completedSteps.includes(payload.step)) lifecycle.onboarding.completedSteps.push(payload.step);
+      if (payload.step === "about_you") newUserState.studentProfile.displayName = payload.answers.displayName;
+      const next = onboardingSteps.find((step) => !lifecycle.onboarding.completedSteps.includes(step));
+      lifecycle.onboarding.currentStep = next || "complete";
+      lifecycle.onboarding.completedStepCount = lifecycle.onboarding.completedSteps.length;
+      lifecycle.onboarding.progressPercent = Math.round((lifecycle.onboarding.completedSteps.length / onboardingSteps.length) * 100);
+      lifecycle.state = next ? "onboarding_progress_saved" : "classroom_choice_pending";
+      lifecycle.nextStep = next || "classroom_setup";
+    } else if (request.action === "choose_classroom_path") {
+      lifecycle.classroomChoice = payload.choice;
+      lifecycle.state = payload.choice === "manual" ? "manual_setup_selected" : "classroom_choice_pending";
+      if (payload.choice === "manual") lifecycle.manualSetupSelectedAt = timestamp;
+      lifecycle.nextStep = payload.choice === "manual" ? "materials" : "classroom_setup";
+    } else if (request.action === "save_materials") {
+      lifecycle.selectedMaterialIds = payload.materialIds || [];
+      lifecycle.selectedMaterialLabels = payload.materialLabels || [];
+      lifecycle.materialsSelectedAt = timestamp;
+      lifecycle.state = "materials_selected";
+      lifecycle.nextStep = "setup_summary";
+    } else if (request.action === "confirm_setup_summary") {
+      lifecycle.setupSummaryReadyAt = timestamp;
+      lifecycle.state = "setup_summary_ready";
+      lifecycle.nextStep = "workspace_preparation";
+    } else if (request.action === "start_workspace_preparation") {
+      lifecycle.workspacePreparationStartedAt = timestamp;
+      lifecycle.state = "workspace_preparing";
+      lifecycle.nextStep = "workspace_preparation";
+    } else if (request.action === "complete_workspace_preparation") {
+      lifecycle.workspaceReadyAt = timestamp;
+      lifecycle.workspaceReady = true;
+      lifecycle.tutorialOfferedAt = timestamp;
+      lifecycle.state = "tutorial_offered";
+      lifecycle.nextStep = "tutorial";
+    } else if (request.action === "choose_tutorial") {
+      lifecycle.tutorialChoice = payload.choice;
+      if (payload.choice === "skip") {
+        lifecycle.dashboardActivatedAt = timestamp;
+        lifecycle.dashboardActive = true;
+        lifecycle.state = "dashboard_active";
+        lifecycle.nextStep = "dashboard";
+      }
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        lifecycle,
+        state: newUserState,
+        payment: { realPaymentCompleted: false, chargeCreated: false, mandateCreated: false },
+        secretsPrinted: false,
+      }),
+    });
+  });
+
+  await page.setViewportSize({ width: 390, height: 820 });
+  await page.goto(baseUrl);
+  await expect(page.locator("#product-flow-shell")).toBeVisible();
+  await expect(page.locator("#app-shell")).toBeHidden();
+  for (const price of ["₹99", "₹159", "₹259", "₹549"]) await expect(page.locator("#product-flow-content")).toContainText(price);
+  await expectNoHorizontalOverflow(page, "390px lifecycle pricing");
+  await expect(page.locator("#product-flow-content")).not.toContainText(/storage|tokens|model|provider|Supabase|Groq|Gemini/i);
+  await expect(page.getByRole("button", { name: "Ask StudentOS" })).toHaveCount(1);
+  await page.getByRole("button", { name: "Ask StudentOS" }).click();
+  await expect(page.locator("#product-flow-ask-response")).toContainText("Finish the current setup step");
+
+  await page.getByRole("button", { name: "Choose Plus" }).click();
+  await expect(page.locator("#product-flow-content")).toContainText("Trial features are not the same as Plus");
+  await page.getByRole("button", { name: "Start with Trial Mode" }).click();
+  await expect(page.locator("#product-flow-content")).toContainText("does not claim that a payment has been completed");
+  await expect(page.locator("#product-flow-content")).toContainText("No charge is created here");
+  await page.getByRole("button", { name: "Continue in development mode" }).click();
+
+  await expect(page.getByRole("heading", { name: "Review before we build your workspace" })).toBeVisible();
+  await page.getByRole("button", { name: "Agree and continue" }).click();
+  await expect(page.getByRole("heading", { name: "Review before we build your workspace" })).toBeVisible();
+  for (const checkbox of await page.locator("#product-legal-form .legal-check-list input[type='checkbox']").all()) await checkbox.check();
+  await page.locator("#product-legal-form input[name='ageGate'][value='adult']").check();
+  await page.getByRole("button", { name: "Agree and continue" }).click();
+
+  await expect(page.getByRole("heading", { name: "About You" })).toBeVisible();
+  await page.locator("#product-onboarding-form input[name='displayName']").fill("Lifecycle Student");
+  await page.getByRole("button", { name: "Save and continue" }).click();
+  for (const heading of ["Education System", "Daily Schedule", "Exam and Assessment Pattern", "Syllabus and Academic Context"]) {
+    await expect(page.getByRole("heading", { name: heading })).toBeVisible();
+    await page.getByRole("button", { name: "Skip for now" }).click();
+  }
+
+  await expect(page.getByRole("heading", { name: "How should StudentOS find your coursework?" })).toBeVisible();
+  await page.getByRole("button", { name: "Connect Google Classroom" }).click();
+  await expect(page.getByRole("heading", { name: "Connect Google Classroom" })).toBeVisible();
+  await page.getByRole("button", { name: "My institution does not use Classroom" }).click();
+  await expect(page.getByRole("heading", { name: "Choose what belongs in your first workspace" })).toBeVisible();
+  await expect(page.locator("#product-flow-content")).toContainText("You can add or remove materials later from Academic Context");
+  await page.locator("#product-materials-form textarea[name='materialLabels']").fill("Calculus syllabus");
+  await page.getByRole("button", { name: "Continue to setup summary" }).click();
+
+  await expect(page.getByRole("heading", { name: "Does this look right?" })).toBeVisible();
+  await expect(page.locator("#product-flow-content")).toContainText("Lifecycle Student");
+  await expect(page.getByRole("button", { name: "Yes, prepare my workspace" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit summary" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add more details" })).toBeVisible();
+  await page.getByRole("button", { name: "Continue with what I have" }).click();
+  await page.getByRole("button", { name: "Prepare workspace" }).click();
+  await expect(page.locator("#product-flow-content")).toContainText(/building your Today view/i);
+  await page.getByRole("button", { name: "Continue when ready" }).click();
+
+  await expect(page.getByRole("heading", { name: "Would you like a quick tour before entering Today?" })).toBeVisible();
+  await page.getByRole("button", { name: "Skip for now" }).click();
+  await expect(page.locator("#product-flow-shell")).toBeHidden();
+  await expect(page.locator("#app-shell")).toBeVisible();
+  await expect(page.locator("#view-title")).toHaveText("Today");
+  await expect(page.locator(".verb-tab")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Ask StudentOS" })).toHaveCount(1);
+});
+
 test("Classroom status UI normalizes controls and copy", async ({ page }) => {
   function connectorFor(state, overrides = {}) {
     const connected = state === "connected";
@@ -444,14 +654,12 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
     await route.continue();
   });
   await openAiDrawer(page);
-  for (const verb of ["Ask", "Plan", "Make", "Review"]) {
-    await page.locator(`.verb-tab[data-verb='${verb}']`).click();
-    await page.locator("#ai-message").fill(`${verb}: use the uploaded quadratics source in one concise response.`);
-    await page.locator("#ai-form").getByRole("button", { name: "Run" }).click();
-    await expect(page.locator("#ai-response")).toContainText("Checking your materials");
-    await waitForNotLoading(page.locator("#ai-response"), "Checking your materials");
-    await expect(page.locator("#ai-response")).toContainText(/uploaded material|Cited snippets|source|reference/i, { timeout: 20_000 });
-  }
+  await expect(page.locator(".verb-tab")).toHaveCount(0);
+  await page.locator("#ai-message").fill("Use the uploaded quadratics material in one concise response.");
+  await page.locator("#ai-form").getByRole("button", { name: "Ask" }).click();
+  await expect(page.locator("#ai-response")).toContainText("Checking your materials");
+  await waitForNotLoading(page.locator("#ai-response"), "Checking your materials");
+  await expect(page.locator("#ai-response")).toContainText(/uploaded material|Cited snippets|source|reference/i, { timeout: 20_000 });
   await page.unroute("**/api/ai/verb");
   await closeAiDrawer(page);
 
@@ -482,15 +690,16 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#flow-result")).toContainText(/Mastery|Practice|Revision|Roadmap|Topic coverage/i);
 
   await clickNav(page, "Account");
-  await expect(page.locator("#account-summary")).toContainText(/Student|local demo/i);
+  await expect(page.locator("#account-summary")).toContainText(/Student|local preview/i);
   await expect(page.locator("#view-account")).toContainText("Profile / Identity");
   await expect(page.locator("#view-account")).toContainText("Privacy and consent");
   await expect(page.locator("#view-account")).toContainText("Your data rights");
   await expect(page.locator("#view-account")).toContainText("Access sharing");
-  await expect(page.locator("#quota-panel")).toContainText(/sources|AI|storage/i);
-  await expect(page.locator("#quota-panel")).toContainText("Limits are visible here, but relaxed for this preview.");
-  await expect(page.locator("#pricing-panel")).toContainText(/Free|Pro|Institution/i);
-  await expect(page.locator("#pricing")).toContainText("Payments are not active yet");
+  await expect(page.locator("#quota-panel")).toContainText(/academic context|semester/i);
+  await expect(page.locator("#quota-panel")).not.toContainText(/MB|GB|storage|tokens/i);
+  await expect(page.locator("#pricing-panel")).toContainText(/Starter|Essential|Plus|Pro/i);
+  await expect(page.locator("#pricing-panel")).toContainText(/₹99|₹159|₹259|₹549/);
+  await expect(page.locator("#pricing-panel")).not.toContainText(/storage|tokens|model|provider/i);
   await expectNoVisibleExternalBranding(page, "account and pricing");
   await page.evaluate(() => { window.location.hash = "pricing"; });
   await expect(page.locator("#view-title")).toHaveText("Account");

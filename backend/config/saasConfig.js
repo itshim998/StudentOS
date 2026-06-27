@@ -51,7 +51,7 @@ export function getSaasConfig({
   billingConfig,
 } = {}) {
   const deployment = getDeploymentEnvironment(env);
-  const defaultPlan = readValue(env, "STUDENTOS_DEFAULT_PLAN", "free").toLowerCase();
+  const defaultPlan = readValue(env, "STUDENTOS_DEFAULT_PLAN", "starter").toLowerCase();
   return {
     product: {
       name: "StudentOS",

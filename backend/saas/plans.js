@@ -8,6 +8,84 @@ export const USER_ROLES = Object.freeze({
 export const ACTIVE_ROLES = Object.freeze([USER_ROLES.STUDENT]);
 
 export const BILLING_PLANS = Object.freeze({
+  starter: {
+    id: "starter",
+    label: "Starter",
+    priceMonthlyInr: 99,
+    publicHighlights: [
+      "Build your academic workspace",
+      "Prepare from your syllabus",
+      "Know what to do today",
+    ],
+    quotas: {
+      aiRequestsPerDay: 25,
+      uploadsPerDay: 5,
+      maxFileBytes: 12 * 1024 * 1024,
+      maxSources: 30,
+      maxCourses: 6,
+      workerJobsPerDay: 20,
+      reindexJobsPerDay: 8,
+      storageBytes: 250 * 1024 * 1024,
+    },
+    features: {
+      essentialLearning: true,
+      advancedAutomation: false,
+      groupSpaces: false,
+      parentTeacherViews: false,
+    },
+  },
+  essential: {
+    id: "essential",
+    label: "Essential",
+    priceMonthlyInr: 159,
+    publicHighlights: [
+      "Import Google Classroom coursework",
+      "Turn materials into a study plan",
+      "Track weak topics",
+    ],
+    quotas: {
+      aiRequestsPerDay: 70,
+      uploadsPerDay: 12,
+      maxFileBytes: 16 * 1024 * 1024,
+      maxSources: 90,
+      maxCourses: 10,
+      workerJobsPerDay: 45,
+      reindexJobsPerDay: 16,
+      storageBytes: 1024 * 1024 * 1024,
+    },
+    features: {
+      essentialLearning: true,
+      advancedAutomation: false,
+      groupSpaces: false,
+      parentTeacherViews: false,
+    },
+  },
+  plus: {
+    id: "plus",
+    label: "Plus",
+    priceMonthlyInr: 259,
+    publicHighlights: [
+      "Generate revision and tests",
+      "More capacity for heavier semesters",
+      "Keep your study plan moving",
+    ],
+    quotas: {
+      aiRequestsPerDay: 120,
+      uploadsPerDay: 24,
+      maxFileBytes: 20 * 1024 * 1024,
+      maxSources: 180,
+      maxCourses: 14,
+      workerJobsPerDay: 80,
+      reindexJobsPerDay: 28,
+      storageBytes: 3 * 1024 * 1024 * 1024,
+    },
+    features: {
+      essentialLearning: true,
+      advancedAutomation: true,
+      groupSpaces: false,
+      parentTeacherViews: false,
+    },
+  },
   free: {
     id: "free",
     label: "Free",
@@ -31,6 +109,12 @@ export const BILLING_PLANS = Object.freeze({
   pro: {
     id: "pro",
     label: "Pro",
+    priceMonthlyInr: 549,
+    publicHighlights: [
+      "Priority workspace preparation",
+      "Deeper planning for demanding semesters",
+      "More room for your academic context",
+    ],
     quotas: {
       aiRequestsPerDay: 200,
       uploadsPerDay: 40,
@@ -99,10 +183,10 @@ export function getRole(role = USER_ROLES.STUDENT) {
 }
 
 export function getPublicPlanCatalog() {
-  return Object.values(BILLING_PLANS).map((plan) => ({
+  return ["starter", "essential", "plus", "pro"].map((planId) => BILLING_PLANS[planId]).map((plan) => ({
     id: plan.id,
     label: plan.label,
-    quotas: plan.quotas,
-    features: plan.features,
+    priceMonthlyInr: plan.priceMonthlyInr,
+    highlights: plan.publicHighlights,
   }));
 }

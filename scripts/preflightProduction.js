@@ -12,6 +12,7 @@ import { getOperatorMfaConfig, getSafeOperatorMfaStatus } from "../backend/secur
 import { getBillingCancellationConfig, getSafeBillingCancellationStatus } from "../backend/billing/cancellationService.js";
 import { getMonitoringAlertConfig, getSafeMonitoringAlertStatus } from "../backend/monitoring/alertService.js";
 import { getGoogleClassroomConfig, getSafeGoogleClassroomStatus } from "../backend/connectors/googleClassroom/config.js";
+import { getProductFlowConfig } from "../backend/domain/productLifecycleService.js";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
@@ -53,6 +54,7 @@ export function runProductionPreflight(env = process.env) {
     embeddingConfig,
     billingConfig,
   });
+  const productFlowConfig = getProductFlowConfig(env, saasConfig.deployment);
   const readiness = validateProductionReadiness({ env, supabaseConfig, saasConfig });
   if (saasConfig.deployment === "production" &&
       classroomConfig.mode === "oauth" &&
@@ -96,6 +98,7 @@ export function runProductionPreflight(env = process.env) {
     billingCancellationSafety: getSafeBillingCancellationStatus(billingCancellationConfig),
     monitoringAlerts: getSafeMonitoringAlertStatus(monitoringAlertConfig),
     googleClassroom: getSafeGoogleClassroomStatus(classroomConfig),
+    productFlow: productFlowConfig,
     secretsPrinted: false,
   });
 }

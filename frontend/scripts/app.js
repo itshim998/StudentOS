@@ -20,6 +20,12 @@ const LONG_ACTION_LOADING_TIMEOUT_MS = 60000;
 
 const els = {
   publicAuthShell: document.getElementById("public-auth-shell"),
+  productFlowShell: document.getElementById("product-flow-shell"),
+  productFlowContent: document.getElementById("product-flow-content"),
+  productFlowProgress: document.getElementById("product-flow-progress"),
+  productFlowLogoutBtn: document.getElementById("product-flow-logout-btn"),
+  productFlowAskBtn: document.getElementById("product-flow-ask-btn"),
+  productFlowAskResponse: document.getElementById("product-flow-ask-response"),
   appShell: document.getElementById("app-shell"),
   viewTitle: document.getElementById("view-title"),
   creditBalance: document.getElementById("credit-balance"),
@@ -246,15 +252,24 @@ function authGateActive() {
   return Boolean(productionAuthUnavailable() || (runtimeConfig.auth?.enabled && !authSession?.access_token));
 }
 
+function productSetupActive() {
+  return Boolean(state?.productLifecycle && state.productLifecycle.dashboardActive !== true);
+}
+
 function updateShellVisibility() {
   const showPublicAuth = authGateActive();
+  const showProductFlow = !showPublicAuth && productSetupActive();
   if (els.publicAuthShell) {
     els.publicAuthShell.hidden = !showPublicAuth;
   }
+  if (els.productFlowShell) {
+    els.productFlowShell.hidden = !showProductFlow;
+  }
   if (els.appShell) {
-    els.appShell.hidden = showPublicAuth;
+    els.appShell.hidden = showPublicAuth || showProductFlow;
   }
   document.body.classList.toggle("auth-shell-active", showPublicAuth);
+  document.body.classList.toggle("product-flow-active", showProductFlow);
 }
 
 function setAuthModeTabsDisabled(disabled) {
@@ -1051,12 +1066,352 @@ function list(items = []) {
   return `<ul>${items.map((item) => `<li>${escapeHtml(typeof item === "string" ? item : JSON.stringify(item))}</li>`).join("")}</ul>`;
 }
 
+const PRODUCT_FLOW_STEPS = Object.freeze([
+  "pricing",
+  "trial_choice",
+  "payment_method",
+  "legal_consent",
+  "about_you",
+  "education_system",
+  "daily_schedule",
+  "exam_pattern",
+  "academic_context",
+  "classroom_setup",
+  "materials",
+  "setup_summary",
+  "workspace_preparation",
+  "tutorial",
+]);
+
+const ONBOARDING_PAGE_COPY = Object.freeze({
+  about_you: {
+    title: "About You",
+    copy: "Let’s start with what you would like StudentOS to call you.",
+    fields: [{ name: "displayName", label: "Your name", required: true, placeholder: "Your name" }],
+  },
+  education_system: {
+    title: "Education System",
+    copy: "Share the academic setting you are working in. You can refine this later.",
+    fields: [
+      { name: "level", label: "Level or year", placeholder: "For example, Grade 12 or second year" },
+      { name: "institution", label: "School, college, or institution", placeholder: "Optional" },
+      { name: "course", label: "Stream or course", placeholder: "Optional" },
+    ],
+  },
+  daily_schedule: {
+    title: "Daily Schedule",
+    copy: "Tell StudentOS when study usually fits into your day.",
+    fields: [{ name: "schedule", label: "Typical study times", placeholder: "For example, weekdays after 6 PM", multiline: true }],
+  },
+  exam_pattern: {
+    title: "Exam and Assessment Pattern",
+    copy: "Add the assessment rhythm you want Today to keep in mind.",
+    fields: [{ name: "examPattern", label: "Exams and assessments", placeholder: "For example, monthly tests and a semester exam", multiline: true }],
+  },
+  academic_context: {
+    title: "Syllabus and Academic Context",
+    copy: "List the subjects or courses that should shape your first workspace.",
+    fields: [
+      { name: "subjects", label: "Subjects or courses", placeholder: "One per line is fine", multiline: true },
+      { name: "syllabusNotes", label: "Syllabus notes", placeholder: "Add anything useful, or skip for now", multiline: true },
+    ],
+  },
+});
+
+function productPlan(planId) {
+  return (runtimeConfig.billing?.plans || []).find((plan) => plan.id === planId) || null;
+}
+
+function productPlanName(planId) {
+  return productPlan(planId)?.label || humanize(planId || "selected plan");
+}
+
+function renderProductProgress(lifecycle) {
+  if (!els.productFlowProgress) return;
+  const index = Math.max(0, PRODUCT_FLOW_STEPS.indexOf(lifecycle.nextStep));
+  const progress = Math.round(((index + 1) / PRODUCT_FLOW_STEPS.length) * 100);
+  els.productFlowProgress.innerHTML = `
+    <div class="product-progress-copy">
+      <span>StudentOS setup</span>
+      <strong>Step ${index + 1} of ${PRODUCT_FLOW_STEPS.length}</strong>
+    </div>
+    <div class="product-progress-track" aria-hidden="true"><span style="width:${progress}%"></span></div>
+  `;
+}
+
+function pricingStepMarkup() {
+  const plans = runtimeConfig.billing?.plans || [];
+  return `
+    <p class="eyebrow">Choose your plan</p>
+    <h2 id="product-flow-title">Build your academic workspace</h2>
+    <p class="product-flow-lead">Choose the support level that fits your semester. StudentOS has no free tier, and every plan can begin with optional Trial Mode.</p>
+    <div class="product-pricing-grid">
+      ${plans.map((plan) => `
+        <article class="product-plan-card">
+          <p class="eyebrow">${escapeHtml(plan.label)}</p>
+          <h3>₹${escapeHtml(plan.priceMonthlyInr) }<small>/month</small></h3>
+          <ul>${(plan.highlights || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+          <button class="primary-button wide" type="button" data-product-action="select-plan" data-plan-id="${escapeHtml(plan.id)}">Choose ${escapeHtml(plan.label)}</button>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function trialChoiceMarkup(lifecycle) {
+  const label = productPlanName(lifecycle.selectedPlanId);
+  return `
+    <p class="eyebrow">How would you like to start?</p>
+    <h2 id="product-flow-title">You selected ${escapeHtml(label)}</h2>
+    <p class="product-flow-lead">Trial Mode gives you limited access for 7 days before your ${escapeHtml(label)} subscription starts. Trial features are not the same as ${escapeHtml(label)}.</p>
+    <div class="product-choice-grid">
+      <button class="choice-card" type="button" data-product-action="choose-access" data-access-mode="trial">
+        <strong>Start with Trial Mode</strong>
+        <span>Try the guided workspace with limited access for 7 days.</span>
+      </button>
+      <button class="choice-card" type="button" data-product-action="choose-access" data-access-mode="paid_plan">
+        <strong>Start ${escapeHtml(label)} now</strong>
+        <span>Continue directly with your selected plan.</span>
+      </button>
+    </div>
+    <button class="text-button" type="button" data-product-action="back-to-pricing">Choose a different plan</button>
+  `;
+}
+
+function paymentStepMarkup(lifecycle) {
+  const enabled = runtimeConfig.productFlow?.paymentPlaceholderEnabled === true;
+  return `
+    <p class="eyebrow">Access check</p>
+    <h2 id="product-flow-title">Verify your payment method</h2>
+    <p class="product-flow-lead">StudentOS verifies your payment method before preparing your workspace. This access step does not claim that a payment has been completed.</p>
+    <div class="product-note-card">
+      <strong>No charge is created here</strong>
+      <p>${enabled ? "For current development, you can safely continue through the access check without a real charge or recurring mandate." : "This access step is not available in this environment yet. Your workspace will stay locked until verified billing is enabled."}</p>
+    </div>
+    <button class="primary-button" type="button" data-product-action="verify-payment" ${enabled ? "" : "disabled"}>Continue in development mode</button>
+    <p class="form-help">Selected start: ${escapeHtml(lifecycle.accessMode === "trial" ? "7-day Trial Mode" : productPlanName(lifecycle.selectedPlanId))}</p>
+  `;
+}
+
+function legalStepMarkup() {
+  const agreements = [
+    ["termsOfService", "I agree to the Terms of Service."],
+    ["privacyPolicy", "I agree to the Privacy Policy."],
+    ["trialBilling", "I understand the 7-day Trial Mode and automatic subscription billing."],
+    ["trialLimits", "I understand Trial Mode has limited access and is not the same as my selected paid plan."],
+    ["paymentMandate", "I authorize StudentOS and its payment partner to verify my payment method and create a recurring payment mandate."],
+    ["cancellationWindow", "I understand I can cancel before the trial ends."],
+    ["academicDataUse", "I understand StudentOS uses my academic files, timetable, Classroom data, and notes to build my workspace."],
+    ["noOutcomeGuarantee", "I understand StudentOS is a study assistant and does not guarantee marks, rankings, admissions, or exam results."],
+    ["responsibleUse", "I agree to use StudentOS responsibly and not for academic misconduct."],
+    ["aiAccuracy", "I understand AI-generated outputs may contain mistakes and should be checked before use."],
+  ];
+  return `
+    <p class="eyebrow">Required agreement</p>
+    <h2 id="product-flow-title">Review before we build your workspace</h2>
+    <p class="product-flow-lead">Please review each item separately. All acknowledgements are required before onboarding.</p>
+    <form id="product-legal-form" class="product-flow-form">
+      <fieldset class="legal-check-list">
+        <legend>Terms, privacy, and responsible use</legend>
+        ${agreements.map(([name, label]) => `<label class="check-row"><input name="${name}" type="checkbox" required><span>${escapeHtml(label)}</span></label>`).join("")}
+      </fieldset>
+      <fieldset class="age-gate-list">
+        <legend>Age and consent</legend>
+        <label class="check-row"><input name="ageGate" type="radio" value="adult" required><span>I am 18 or older.</span></label>
+        <label class="check-row"><input name="ageGate" type="radio" value="minor" required><span>I am under 18 and have parent/guardian consent.</span></label>
+        <label class="check-row guardian-ack"><input name="guardianConsentAcknowledged" type="checkbox"><span>If I am under 18, I confirm my parent or guardian has reviewed and agreed to this setup.</span></label>
+      </fieldset>
+      <div id="product-flow-message" class="result-box" aria-live="polite"></div>
+      <button class="primary-button" type="submit">Agree and continue</button>
+    </form>
+  `;
+}
+
+function onboardingStepMarkup(lifecycle, step) {
+  const page = ONBOARDING_PAGE_COPY[step];
+  const saved = lifecycle.onboarding?.answers?.[step] || {};
+  return `
+    <p class="eyebrow">Guided setup</p>
+    <h2 id="product-flow-title">${escapeHtml(page.title)}</h2>
+    <p class="product-flow-lead">${escapeHtml(page.copy)}</p>
+    <form id="product-onboarding-form" class="product-flow-form" data-step="${escapeHtml(step)}">
+      ${page.fields.map((field) => `
+        <label>${escapeHtml(field.label)}
+          ${field.multiline
+            ? `<textarea name="${escapeHtml(field.name)}" rows="4" placeholder="${escapeHtml(field.placeholder)}">${escapeHtml(saved[field.name] || "")}</textarea>`
+            : `<input name="${escapeHtml(field.name)}" type="text" value="${escapeHtml(saved[field.name] || (field.name === "displayName" ? state.studentProfile?.displayName || "" : ""))}" placeholder="${escapeHtml(field.placeholder)}" ${field.required ? "required" : ""}>`}
+        </label>
+      `).join("")}
+      <div id="product-flow-message" class="result-box" aria-live="polite"></div>
+      <div class="product-form-actions">
+        <button class="primary-button" type="submit">Save and continue</button>
+        ${step === "about_you" ? "" : `<button class="text-button" type="submit" name="skipStep" value="true">Skip for now</button>`}
+      </div>
+    </form>
+  `;
+}
+
+function classroomStepMarkup(lifecycle) {
+  if (lifecycle.classroomChoice === "classroom" && !lifecycle.classroomConnectedAt) {
+    return `
+      <p class="eyebrow">Classroom setup</p>
+      <h2 id="product-flow-title">Connect Google Classroom</h2>
+      <p class="product-flow-lead">Connect your account so StudentOS can show coursework you may want to add to your academic context.</p>
+      <div id="product-flow-message" class="result-box" aria-live="polite"></div>
+      <button class="primary-button" type="button" data-product-action="connect-classroom">Connect Google Classroom</button>
+      <button class="text-button" type="button" data-product-action="choose-path" data-choice="manual">My institution does not use Classroom</button>
+    `;
+  }
+  return `
+    <p class="eyebrow">Classroom or manual setup</p>
+    <h2 id="product-flow-title">How should StudentOS find your coursework?</h2>
+    <p class="product-flow-lead">Choose the path that matches your institution. Both paths lead to the same calm academic workspace.</p>
+    <div class="product-choice-grid">
+      <button class="choice-card" type="button" data-product-action="choose-path" data-choice="classroom">
+        <strong>Connect Google Classroom</strong>
+        <span>Choose coursework to include in your academic context.</span>
+      </button>
+      <button class="choice-card" type="button" data-product-action="choose-path" data-choice="manual">
+        <strong>My institution does not use Classroom</strong>
+        <span>Add your own subjects and materials now or later.</span>
+      </button>
+    </div>
+  `;
+}
+
+function materialCandidates() {
+  const rows = [
+    ...(state.sourceMaterials || []).map((item) => ({ id: item.id, title: item.title, date: item.createdAt || item.importedAt || "" })),
+    ...(state.assignments || []).filter((item) => item.source === "google_classroom").map((item) => ({ id: item.id, title: item.title, date: item.classroomUpdatedAt || item.dueDate || "" })),
+  ];
+  return rows.sort((left, right) => timestampFor(right.date) - timestampFor(left.date));
+}
+
+function materialsStepMarkup(lifecycle) {
+  const candidates = materialCandidates();
+  const classroom = lifecycle.classroomChoice === "classroom";
+  return `
+    <p class="eyebrow">Select academic materials</p>
+    <h2 id="product-flow-title">Choose what belongs in your first workspace</h2>
+    <p class="product-flow-lead">${classroom ? "Select the newest coursework and materials you want StudentOS to organize." : "Add a few material names now, or continue and add them later."}</p>
+    <form id="product-materials-form" class="product-flow-form">
+      ${candidates.length ? `<div class="material-choice-list">${candidates.map((item) => `
+        <label class="check-row"><input name="materialIds" type="checkbox" value="${escapeHtml(item.id)}" data-material-label="${escapeHtml(item.title)}"><span>${escapeHtml(item.title)}</span></label>
+      `).join("")}</div>` : `<div class="product-empty-state"><strong>No materials are waiting yet</strong><p>You can continue now and add material when your workspace is ready.</p></div>`}
+      ${classroom ? "" : `<label>Materials you may add<textarea name="materialLabels" rows="4" placeholder="For example, Chemistry syllabus&#10;Statistics lecture notes"></textarea></label>`}
+      <p class="form-help">You can add or remove materials later from Academic Context.</p>
+      <button class="primary-button" type="submit">Continue to setup summary</button>
+    </form>
+  `;
+}
+
+function summaryValue(lifecycle, key, fallback = "Not provided yet") {
+  const answers = lifecycle.onboarding?.answers || {};
+  for (const step of Object.values(answers)) {
+    if (step?.[key]) return step[key];
+  }
+  return fallback;
+}
+
+function setupSummaryMarkup(lifecycle) {
+  const materialLabels = lifecycle.selectedMaterialLabels || [];
+  return `
+    <p class="eyebrow">Setup summary</p>
+    <h2 id="product-flow-title">Does this look right?</h2>
+    <p class="product-flow-lead">Here is what StudentOS will use to prepare your first Today view.</p>
+    <dl class="setup-summary-list">
+      <div><dt>Name</dt><dd>${escapeHtml(state.studentProfile?.displayName || "Student")}</dd></div>
+      <div><dt>Level</dt><dd>${escapeHtml(summaryValue(lifecycle, "level"))}</dd></div>
+      <div><dt>Institution</dt><dd>${escapeHtml(summaryValue(lifecycle, "institution"))}</dd></div>
+      <div><dt>Stream or course</dt><dd>${escapeHtml(summaryValue(lifecycle, "course"))}</dd></div>
+      <div><dt>Subjects or courses</dt><dd>${escapeHtml(summaryValue(lifecycle, "subjects"))}</dd></div>
+      <div><dt>Exam pattern</dt><dd>${escapeHtml(summaryValue(lifecycle, "examPattern"))}</dd></div>
+      <div><dt>Timetable</dt><dd>${escapeHtml(summaryValue(lifecycle, "schedule"))}</dd></div>
+      <div><dt>Setup path</dt><dd>${escapeHtml(lifecycle.classroomChoice === "classroom" ? "Google Classroom" : "Manual academic context")}</dd></div>
+      <div><dt>Selected materials</dt><dd>${escapeHtml(materialLabels.length ? materialLabels.join(", ") : "Add later")}</dd></div>
+    </dl>
+    <div class="product-form-actions">
+      <button class="primary-button" type="button" data-product-action="confirm-summary">Yes, prepare my workspace</button>
+      <button class="secondary-button" type="button" data-product-action="confirm-summary">Continue with what I have</button>
+      <button class="text-button" type="button" data-product-action="edit-setup" data-target-step="about_you">Edit summary</button>
+      <button class="text-button" type="button" data-product-action="edit-setup" data-target-step="academic_context">Add more details</button>
+    </div>
+    <div id="product-flow-message" class="result-box" aria-live="polite"></div>
+  `;
+}
+
+function preparationStepMarkup(lifecycle) {
+  const started = Boolean(lifecycle.workspacePreparationStartedAt);
+  return `
+    <p class="eyebrow">Preparing Workspace</p>
+    <h2 id="product-flow-title">${started ? "Your workspace is taking shape" : "Ready to prepare your workspace"}</h2>
+    <p class="product-flow-lead">StudentOS will organize what you shared into a useful first day.</p>
+    <ul class="preparation-list">
+      <li>Reading your academic context</li>
+      <li>Organizing your courses</li>
+      <li>Preparing your first study plan</li>
+      <li>Checking upcoming work</li>
+      <li>Building your Today view</li>
+    </ul>
+    <button class="primary-button" type="button" data-product-action="${started ? "complete-preparation" : "start-preparation"}">${started ? "Continue when ready" : "Prepare workspace"}</button>
+  `;
+}
+
+function tutorialStepMarkup(lifecycle) {
+  if (lifecycle.tutorialChoice === "show") {
+    return `
+      <p class="eyebrow">Quick tour</p>
+      <h2 id="product-flow-title">Four places to begin</h2>
+      <div class="tutorial-grid">
+        <article><strong>Today</strong><p>See the clearest next study action.</p></article>
+        <article><strong>Academic Context</strong><p>Keep subjects and selected material current.</p></article>
+        <article><strong>Ask StudentOS</strong><p>Ask one assistant for explanations, plans, and revision help.</p></article>
+        <article><strong>Account</strong><p>Review your plan, privacy choices, and data controls.</p></article>
+      </div>
+      <button class="primary-button" type="button" data-product-action="complete-tutorial">Enter Today</button>
+    `;
+  }
+  return `
+    <p class="eyebrow">Workspace ready</p>
+    <h2 id="product-flow-title">Would you like a quick tour before entering Today?</h2>
+    <p class="product-flow-lead">The short tour covers Today, Academic Context, Ask StudentOS, and where to adjust your setup.</p>
+    <div class="product-choice-grid">
+      <button class="choice-card" type="button" data-product-action="choose-tutorial" data-choice="show"><strong>Show tutorial</strong><span>See the four main parts of StudentOS.</span></button>
+      <button class="choice-card" type="button" data-product-action="choose-tutorial" data-choice="skip"><strong>Skip for now</strong><span>Open Today immediately.</span></button>
+    </div>
+  `;
+}
+
+function renderProductFlow() {
+  const lifecycle = state?.productLifecycle;
+  if (!lifecycle || !els.productFlowContent) return;
+  renderProductProgress(lifecycle);
+  const step = lifecycle.nextStep;
+  if (step === "pricing") els.productFlowContent.innerHTML = pricingStepMarkup();
+  else if (step === "trial_choice") els.productFlowContent.innerHTML = trialChoiceMarkup(lifecycle);
+  else if (step === "payment_method") els.productFlowContent.innerHTML = paymentStepMarkup(lifecycle);
+  else if (step === "legal_consent") els.productFlowContent.innerHTML = legalStepMarkup();
+  else if (ONBOARDING_PAGE_COPY[step]) els.productFlowContent.innerHTML = onboardingStepMarkup(lifecycle, step);
+  else if (step === "classroom_setup") els.productFlowContent.innerHTML = classroomStepMarkup(lifecycle);
+  else if (step === "materials") els.productFlowContent.innerHTML = materialsStepMarkup(lifecycle);
+  else if (step === "setup_summary") els.productFlowContent.innerHTML = setupSummaryMarkup(lifecycle);
+  else if (step === "workspace_preparation") els.productFlowContent.innerHTML = preparationStepMarkup(lifecycle);
+  else if (step === "tutorial") els.productFlowContent.innerHTML = tutorialStepMarkup(lifecycle);
+  else els.productFlowContent.innerHTML = `<p class="eyebrow">Setup</p><h2 id="product-flow-title">Continue your StudentOS setup</h2><p>Your next step is ready.</p>`;
+}
+
 function render() {
   if (!state) return;
-  const plan = accountSnapshot?.quota?.plan || state.saas?.quotas?.defaultPlan || runtimeConfig.saas?.quotas?.defaultPlan || { label: "Free" };
+  updateShellVisibility();
+  if (productSetupActive()) {
+    renderProductFlow();
+    return;
+  }
+  const lifecyclePlan = productPlan(state.productLifecycle?.selectedPlanId);
+  const plan = lifecyclePlan || accountSnapshot?.quota?.plan || state.saas?.quotas?.defaultPlan || runtimeConfig.saas?.quotas?.defaultPlan || { label: "Starter" };
   els.studentName.textContent = state.studentProfile.displayName || "Student";
   els.creditBalance.textContent = state.creditBalance || 0;
-  els.planBadge.textContent = plan.label || "Free";
+  els.planBadge.textContent = plan.label || "Starter";
   els.studyRhythm.textContent = humanize(state.studentProfile.studyRhythm || "steady");
   els.creditEligibility.textContent = humanize(state.studentProfile.convenienceEligibility || "learning first");
   const backendPersistence = runtimeConfig.persistence || {};
@@ -1563,7 +1918,7 @@ function quotaPercent(used, total) {
 function accountAuthLabel(mode) {
   const value = String(mode || "").toLowerCase();
   if (value === "supabase_auth") return "Signed in with StudentOS Auth";
-  if (value === "local_demo") return "Demo session";
+  if (value === "local_demo") return "Local preview";
   return humanize(mode || "StudentOS session");
 }
 
@@ -1576,11 +1931,11 @@ function accountVisibilityLabel(value) {
 }
 
 function subscriptionLabel(status) {
-  const value = String(status || "free").toLowerCase();
-  if (value === "free") return "Free plan";
+  const value = String(status || "active").toLowerCase();
+  if (value === "free") return "Legacy access";
   if (value === "active") return "Active plan";
   if (value === "past_due") return "Payment review needed";
-  return humanize(status || "Free plan");
+  return humanize(status || "Active plan");
 }
 
 function usageLimitText(value, label) {
@@ -1606,27 +1961,16 @@ function quotaBar(label, used, total, formatter = (value) => value) {
 
 function planValueStatement(plan) {
   const copy = {
-    free: "Start with daily planning, course context, and a private source library.",
-    pro: "More room for heavier study weeks, deeper source libraries, and advanced workflows.",
-    group: "Higher limits for study groups, mentors, or small academic teams.",
-    institution: "Institution-scale limits for schools and managed academic programs.",
+    starter: "Build a focused academic workspace and know what to do today.",
+    essential: "Bring coursework and syllabus context into one study plan.",
+    plus: "Create deeper revision plans for a heavier semester.",
+    pro: "Get priority workspace preparation for demanding academic work.",
   };
-  return copy[plan.id] || "A StudentOS plan for academic planning and private materials.";
+  return copy[plan.id] || "A StudentOS plan for calm academic planning.";
 }
 
 function planFeatureBullets(plan) {
-  const quotas = plan.quotas || {};
-  const bullets = [
-    `${usageLimitText(quotas.aiRequestsPerDay, "AI help per day")}`,
-    `${usageLimitText(quotas.maxSources, "sources in your library")}`,
-    `${usageLimitText(quotas.maxCourses, "courses")}`,
-    `${formatBytes(quotas.storageBytes || 0)} private storage`,
-  ];
-  if (plan.features?.advancedAutomation) bullets.push("Advanced assignment and revision workflows");
-  else bullets.push("Core planning, review, and study workflows");
-  if (plan.features?.groupSpaces) bullets.push("Group workspace eligibility");
-  if (plan.features?.parentTeacherViews) bullets.push("Family and institution access groundwork");
-  return bullets.slice(0, 6);
+  return (plan.highlights || ["Build your academic workspace", "Prepare from your syllabus", "Know what to do today"]).slice(0, 6);
 }
 
 function billingPreviewCopy(result, action = "checkout") {
@@ -1692,7 +2036,8 @@ function familyAccessLabel(status) {
 }
 
 function localAccountSnapshot() {
-  const plan = runtimeConfig.saas?.quotas?.defaultPlan || { id: "free", label: "Free", quotas: {}, features: {} };
+  const selectedPlan = productPlan(state?.productLifecycle?.selectedPlanId);
+  const plan = selectedPlan || runtimeConfig.saas?.quotas?.defaultPlan || { id: "starter", label: "Starter", quotas: {}, features: {} };
   const activeSources = (state?.sourceMaterials || []).filter((source) => !source.deletedAt);
   return {
     user: {
@@ -1716,7 +2061,7 @@ function localAccountSnapshot() {
     quota: {
       plan,
       subscription: {
-        status: plan.id === "free" ? "free" : "active",
+        status: "active",
         renewalAt: null,
         cancelAtPeriodEnd: false,
       },
@@ -1762,10 +2107,8 @@ function renderAccount() {
   const account = accountSnapshot || localAccountSnapshot();
   const consent = account.profile?.consent || {};
   const quota = account.quota || localAccountSnapshot().quota;
-  const plan = quota.plan || { label: "Free", features: {} };
-  const limits = quota.quotas || {};
-  const usage = quota.usage || {};
-  const billing = runtimeConfig.billing || {};
+  const selectedPlan = productPlan(state.productLifecycle?.selectedPlanId);
+  const plan = selectedPlan || quota.plan || { label: "Starter", features: {} };
   if (els.accountResetEmail && !els.accountResetEmail.value) {
     els.accountResetEmail.value = account.user?.email || "";
   }
@@ -1786,7 +2129,7 @@ function renderAccount() {
       </div>
     </div>
     <div class="account-summary-list">
-      <span><strong>${escapeHtml(plan.label || "Free")}</strong> current plan</span>
+      <span><strong>${escapeHtml(plan.label || "Starter")}</strong> current plan</span>
       <span><strong>${escapeHtml(account.user?.emailVerified ? "Verified" : "Verification ready")}</strong> email status</span>
       <span><strong>${escapeHtml(accountVisibilityLabel(account.profile?.visibility?.defaultAudience || "student_only"))}</strong> visibility</span>
       <span><strong>${escapeHtml(subscriptionLabel(quota.subscription?.status))}</strong>${quota.subscription?.renewalAt ? ` renews ${escapeHtml(formatDate(quota.subscription.renewalAt))}` : ""}</span>
@@ -1797,21 +2140,15 @@ function renderAccount() {
     <div class="plan-card account-current-plan-card">
       <div>
         <span class="workspace-label">Current plan</span>
-        <strong>${escapeHtml(plan.label || "Free")}</strong>
-        <p>${quota.enforcementEnabled ? "Plan limits are active for this account." : "Limits are visible here, but relaxed for this preview."}</p>
+        <strong>${escapeHtml(plan.label || "Starter")}</strong>
+        <p>${escapeHtml(planValueStatement(plan))}</p>
       </div>
       <div class="account-plan-state">
-        <span>${billing.liveChargesEnabled ? "Payment launch review required" : "Payments are not active yet"}</span>
-        <p>${plan.features?.advancedAutomation ? "Advanced workflows are eligible on this plan." : "Core study workflows are available."}</p>
+        <span>Academic context ready</span>
+        <p>You can add courses and selected material as your semester changes.</p>
       </div>
     </div>
-    <div class="account-usage-list">
-      ${quotaBar("Daily AI help", usage.aiRequestsToday, limits.aiRequestsPerDay || 0)}
-      ${quotaBar("Sources", usage.sourceCount, limits.maxSources || 0)}
-      ${quotaBar("Courses", usage.courses, limits.maxCourses || 0)}
-      ${quotaBar("Study updates", usage.workerJobsToday, limits.workerJobsPerDay || 0)}
-      ${quotaBar("Storage", usage.storageBytes, limits.storageBytes || 0, formatBytes)}
-    </div>
+    <ul class="pricing-feature-list">${planFeatureBullets(plan).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
   `;
   renderLifecycle(account.lifecycle || {});
   renderPricing(plan.id);
@@ -1857,7 +2194,7 @@ function renderLifecycle(lifecycle = {}) {
   }
 }
 
-function renderPricing(activePlanId = "free") {
+function renderPricing(activePlanId = "starter") {
   if (!els.pricingPanel) return;
   const plans = runtimeConfig.billing?.plans || runtimeConfig.saas?.billing?.plans || [];
   if (!plans.length) {
@@ -1872,20 +2209,16 @@ function renderPricing(activePlanId = "free") {
   els.pricingPanel.innerHTML = plans.map((plan) => `
     <article class="pricing-card ${plan.id === activePlanId ? "active" : ""}">
       <div class="pricing-card-head">
-        <span>${plan.id === activePlanId ? "Current plan" : "Plan preview"}</span>
+        <span>${plan.id === activePlanId ? "Current plan" : "Plan option"}</span>
         <strong>${escapeHtml(plan.label)}</strong>
+        <h4>₹${escapeHtml(plan.priceMonthlyInr)}<small>/month</small></h4>
         <p>${escapeHtml(planValueStatement(plan))}</p>
-      </div>
-      <div class="pricing-limit-list" aria-label="${escapeHtml(plan.label)} usage limits">
-        <span><strong>${escapeHtml((plan.quotas.aiRequestsPerDay || 0).toLocaleString())}</strong> AI help/day</span>
-        <span><strong>${escapeHtml((plan.quotas.maxSources || 0).toLocaleString())}</strong> sources</span>
-        <span><strong>${escapeHtml(formatBytes(plan.quotas.storageBytes || 0))}</strong> storage</span>
       </div>
       <ul class="pricing-feature-list">
         ${planFeatureBullets(plan).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
       </ul>
       <button class="${plan.id === activePlanId ? "secondary-button" : "primary-button"} wide pricing-cta" type="button" data-plan-preview="${escapeHtml(plan.id)}">
-        ${plan.id === activePlanId ? "Current plan" : `Preview ${escapeHtml(plan.label)}`}
+        ${plan.id === activePlanId ? "Current plan" : `Choose ${escapeHtml(plan.label)}`}
       </button>
     </article>
   `).join("");
@@ -2250,7 +2583,7 @@ async function addSource(event) {
     } catch (error) {
       setResult(els.sourceResult, `
         <strong>Source upload unavailable</strong>
-        <p>${escapeHtml(error.message || "StudentOS could not finish this source upload. Check storage and try again.")}</p>
+        <p>${escapeHtml(error.message || "StudentOS could not finish adding this material. Check the file and try again.")}</p>
         <div class="tag-row">
           ${tag("try again", "medium")}
           ${tag("Private", "source")}
@@ -2595,6 +2928,141 @@ async function disconnectClassroom() {
   renderClassroomPanel();
 }
 
+function productFlowMessage(copy) {
+  const target = document.getElementById("product-flow-message");
+  if (target) setResult(target, `<p>${escapeHtml(copy)}</p>`);
+}
+
+async function transitionProductFlow(action, payload = {}) {
+  try {
+    if (els.productFlowAskResponse) els.productFlowAskResponse.hidden = true;
+    els.productFlowAskBtn?.setAttribute("aria-expanded", "false");
+    const result = await api("/api/product-flow", {
+      method: "POST",
+      body: JSON.stringify({ action, payload }),
+    });
+    state = result.state;
+    render();
+    if (state.productLifecycle?.dashboardActive) {
+      await loadAccountSnapshot();
+      await loadClassroomStatus();
+    }
+    return result;
+  } catch (error) {
+    productFlowMessage(error.message);
+    throw error;
+  }
+}
+
+function legalProductPayload(form) {
+  const data = new FormData(form);
+  const consentKeys = [
+    "termsOfService",
+    "privacyPolicy",
+    "trialBilling",
+    "trialLimits",
+    "paymentMandate",
+    "cancellationWindow",
+    "academicDataUse",
+    "noOutcomeGuarantee",
+    "responsibleUse",
+    "aiAccuracy",
+  ];
+  return {
+    consents: Object.fromEntries(consentKeys.map((key) => [key, data.get(key) === "on"])),
+    ageGate: data.get("ageGate") || "",
+    guardianConsentAcknowledged: data.get("guardianConsentAcknowledged") === "on",
+  };
+}
+
+async function connectClassroomFromProductFlow() {
+  productFlowMessage("Preparing the Classroom connection...");
+  const result = await api("/api/classroom/oauth/start", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  if (result.authorizationUrl) {
+    window.location.href = result.authorizationUrl;
+    return;
+  }
+  if (result.connector?.connected) {
+    await loadBootstrap({ showLoading: false });
+    return;
+  }
+  productFlowMessage(result.message || "Classroom is already connected. Refresh StudentOS to continue.");
+}
+
+async function handleProductFlowClick(event) {
+  const button = event.target.closest("[data-product-action]");
+  if (!button) return;
+  const action = button.dataset.productAction;
+  try {
+    await withButtonLoading(button, "Saving...", async () => {
+      if (action === "select-plan") await transitionProductFlow("select_plan", { planId: button.dataset.planId });
+      else if (action === "back-to-pricing") await transitionProductFlow("reset_plan");
+      else if (action === "choose-access") await transitionProductFlow("choose_access", { accessMode: button.dataset.accessMode });
+      else if (action === "verify-payment") await transitionProductFlow("verify_payment_method_placeholder");
+      else if (action === "choose-path") await transitionProductFlow("choose_classroom_path", { choice: button.dataset.choice });
+      else if (action === "connect-classroom") await connectClassroomFromProductFlow();
+      else if (action === "confirm-summary") await transitionProductFlow("confirm_setup_summary");
+      else if (action === "start-preparation") await transitionProductFlow("start_workspace_preparation");
+      else if (action === "complete-preparation") await transitionProductFlow("complete_workspace_preparation");
+      else if (action === "choose-tutorial") await transitionProductFlow("choose_tutorial", { choice: button.dataset.choice });
+      else if (action === "complete-tutorial") await transitionProductFlow("complete_tutorial");
+      else if (action === "edit-setup") await transitionProductFlow("edit_setup", { targetStep: button.dataset.targetStep });
+    }, {
+      timeoutTarget: document.getElementById("product-flow-message"),
+      timeoutCopy: "Saving this setup step is taking longer than expected. Please try again.",
+    });
+  } catch {
+    // transitionProductFlow has already shown student-safe copy.
+  }
+}
+
+async function handleProductFlowSubmit(event) {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement)) return;
+  event.preventDefault();
+  try {
+    if (form.id === "product-legal-form") {
+      await withButtonLoading(event.submitter, "Saving...", () => transitionProductFlow("complete_legal", legalProductPayload(form)));
+      return;
+    }
+    if (form.id === "product-onboarding-form") {
+      const answers = Object.fromEntries([...new FormData(form).entries()].filter(([key]) => key !== "skipStep"));
+      if (event.submitter?.value === "true") {
+        for (const key of Object.keys(answers)) answers[key] = "";
+      }
+      await withButtonLoading(event.submitter, "Saving...", () => transitionProductFlow("save_onboarding_step", {
+        step: form.dataset.step,
+        answers,
+      }));
+      return;
+    }
+    if (form.id === "product-materials-form") {
+      const checked = [...form.querySelectorAll("input[name='materialIds']:checked")];
+      const typedLabels = String(new FormData(form).get("materialLabels") || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+      await withButtonLoading(event.submitter, "Saving...", () => transitionProductFlow("save_materials", {
+        materialIds: checked.map((input) => input.value),
+        materialLabels: [...checked.map((input) => input.dataset.materialLabel || "Selected material"), ...typedLabels],
+      }));
+    }
+  } catch {
+    // transitionProductFlow has already shown student-safe copy.
+  }
+}
+
+function toggleProductFlowAsk() {
+  const response = els.productFlowAskResponse;
+  if (!response) return;
+  const preparing = state?.productLifecycle?.nextStep === "workspace_preparation";
+  response.hidden = !response.hidden;
+  els.productFlowAskBtn?.setAttribute("aria-expanded", response.hidden ? "false" : "true");
+  response.textContent = preparing
+    ? "Your workspace is being prepared. Ask StudentOS will open fully when Today is ready."
+    : "Finish the current setup step to activate your academic assistant. I can guide you through what comes next.";
+}
+
 function wireEvents() {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.addEventListener("click", () => setView(button.dataset.view));
@@ -2602,6 +3070,12 @@ function wireEvents() {
   els.aiLauncher.addEventListener("click", () => openAiDrawer());
   els.aiCloseBtn.addEventListener("click", () => closeAiDrawer());
   els.aiScrim.addEventListener("click", () => closeAiDrawer());
+  els.productFlowContent?.addEventListener("click", handleProductFlowClick);
+  els.productFlowContent?.addEventListener("submit", handleProductFlowSubmit);
+  els.productFlowAskBtn?.addEventListener("click", toggleProductFlowAsk);
+  els.productFlowLogoutBtn?.addEventListener("click", () => {
+    logout().catch((error) => productFlowMessage(error.message));
+  });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && isAiDrawerOpen()) {
       closeAiDrawer();

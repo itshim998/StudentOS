@@ -1,6 +1,7 @@
 import { confidenceLabel, createDeterministicEmbedding } from "../embeddings/embeddingService.js";
 import { createSeedState, retrieveGroundedSources } from "../domain/studentosDomain.js";
 import { publicShardRoute, routeUserToShard } from "../supabase/shardRouter.js";
+import { createInitialProductLifecycle } from "../domain/productLifecycleService.js";
 
 const COLLECTIONS = [
   ["courses", "courses"],
@@ -52,13 +53,20 @@ function displayNameFromEmail(email) {
 export function seedStateForUser(user) {
   const seed = createSeedState();
   const userId = user?.id || "student_demo_001";
+  const isLocalDemo = userId === "student_demo_001";
   const displayName = user?.email ? displayNameFromEmail(user.email) : seed.studentProfile.displayName;
   seed.studentProfile = {
     ...seed.studentProfile,
     id: userId,
     displayName,
     email: user?.email || seed.studentProfile.email,
+    productLifecycle: createInitialProductLifecycle({ ready: isLocalDemo }),
   };
+  if (!isLocalDemo) {
+    for (const [key, value] of Object.entries(seed)) {
+      if (Array.isArray(value)) seed[key] = [];
+    }
+  }
   seed.testResults = seed.testResults.map((item) => ({ ...item, studentId: userId }));
   seed.creditLedger = seed.creditLedger.map((item) => ({ ...item, studentId: userId }));
   seed.auditLog = seed.auditLog.map((item) => ({ ...item, actorId: userId }));

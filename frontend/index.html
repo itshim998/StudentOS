@@ -63,6 +63,31 @@
     </div>
   </section>
 
+  <section id="product-flow-shell" class="product-flow-shell" aria-labelledby="product-flow-title" hidden>
+    <header class="product-flow-header">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">SO</div>
+        <div>
+          <h1>StudentOS</h1>
+          <p>Build your academic workspace</p>
+        </div>
+      </div>
+      <button id="product-flow-logout-btn" class="text-button" type="button">Sign out</button>
+    </header>
+    <main class="product-flow-main">
+      <div id="product-flow-progress" class="product-flow-progress" aria-label="Setup progress"></div>
+      <section id="product-flow-content" class="product-flow-card" aria-live="polite">
+        <p class="eyebrow">Getting ready</p>
+        <h2 id="product-flow-title">Preparing your next step</h2>
+      </section>
+    </main>
+    <button id="product-flow-ask-btn" class="ai-launcher product-flow-ask" type="button" aria-label="Ask StudentOS" aria-expanded="false">
+      <span aria-hidden="true">?</span>
+      <strong>Ask StudentOS</strong>
+    </button>
+    <div id="product-flow-ask-response" class="product-flow-ask-response" role="status" hidden></div>
+  </section>
+
   <div class="app-shell" id="app-shell" aria-busy="true">
     <aside class="rail" aria-label="Primary navigation">
       <div class="brand-lockup">
@@ -119,7 +144,7 @@
         <div class="profile-strip">
           <div class="metric-pill plan-pill">
             <span>Plan</span>
-            <strong id="plan-badge">Free</strong>
+            <strong id="plan-badge">Starter</strong>
           </div>
           <div class="metric-pill">
             <span>Credits</span>
@@ -595,9 +620,9 @@ Thu|19:00|English writing sprint|English</textarea>
               <div>
                 <p class="eyebrow">Pricing</p>
                 <h3>Choose the StudentOS plan that fits your study system.</h3>
-                <p>Plan previews show limits and feature eligibility. Payments are not active yet, so no checkout starts from this page.</p>
+                <p>Compare how each plan supports your semester. Your academic context can grow with you.</p>
               </div>
-              <span class="brain-badge">Payments are not active yet</span>
+              <span class="brain-badge">Four student plans</span>
             </div>
             <div id="pricing-panel" class="pricing-panel"></div>
           </section>
@@ -686,23 +711,16 @@ Thu|19:00|English writing sprint|English</textarea>
     <aside class="ai-panel" id="ai-panel" aria-label="AI drawer" aria-hidden="true" tabindex="-1">
       <div class="ai-panel-head">
         <div>
-          <p class="eyebrow">AI Verbs</p>
-          <h3>Academic Copilot</h3>
+          <p class="eyebrow">Ask StudentOS</p>
+          <h3>Your study assistant</h3>
         </div>
         <div class="heading-actions">
-          <span class="brain-badge">Powered by SentIQ</span>
           <button id="ai-close-btn" class="icon-button ai-close-button" type="button" aria-label="Close AI drawer">X</button>
         </div>
       </div>
-      <div class="verb-tabs" role="tablist" aria-label="AI verbs">
-        <button class="verb-tab active" data-verb="Ask" type="button">Ask</button>
-        <button class="verb-tab" data-verb="Plan" type="button">Plan</button>
-        <button class="verb-tab" data-verb="Make" type="button">Make</button>
-        <button class="verb-tab" data-verb="Review" type="button">Review</button>
-      </div>
       <form id="ai-form" class="ai-form">
         <textarea id="ai-message" rows="5">Ask about a topic, source, or assignment.</textarea>
-        <button class="primary-button wide" type="submit">Run</button>
+        <button class="primary-button wide" type="submit">Ask</button>
       </form>
       <div id="ai-response" class="ai-response" aria-live="polite"></div>
       <div class="contract-zone">

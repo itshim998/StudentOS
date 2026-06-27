@@ -20,6 +20,13 @@ import {
   applyStudentOnboarding,
   buildDemoOnboardingPayload,
 } from "./domain/onboardingService.js";
+import {
+  applyProductLifecycleAction,
+  getProductFlowConfig,
+  getProductLifecycleSnapshot,
+  markProductClassroomConnected,
+  requireDashboardActive,
+} from "./domain/productLifecycleService.js";
 import { getRequestSession } from "./auth/session.js";
 import {
   getPublicAuthConfig,
@@ -173,6 +180,21 @@ const saasConfig = getSaasConfig({
   embeddingConfig,
   billingConfig: billingProviderConfig,
 });
+const productFlowConfig = getProductFlowConfig(process.env, saasConfig.deployment);
+const publicFrontendUrl = (() => {
+  const configured = String(process.env.STUDENTOS_PUBLIC_FRONTEND_URL || "").trim();
+  const fallback = saasConfig.deployment === "production"
+    ? saasConfig.corsOrigins.find((origin) => origin.startsWith("https://")) || "https://studentos.sentiqlabs.com"
+    : "/";
+  if (!configured) return fallback;
+  try {
+    const parsed = new URL(configured);
+    if (!["http:", "https:"].includes(parsed.protocol)) return fallback;
+    return parsed.origin;
+  } catch {
+    return fallback;
+  }
+})();
 const billingAdapter = createBillingAdapter(billingProviderConfig);
 const lifecycleConfig = getAccountLifecycleConfig();
 const dataExportConfig = getDataExportConfig(process.env, supabaseConfig);
@@ -433,6 +455,7 @@ function publicState(state, persistence) {
     todayNextActions: getTodayNextActions(state),
     queueHealth: buildQueueHealth(state.backgroundJobs || []),
     persistence: publicRetrievalStatus(persistence),
+    productLifecycle: getProductLifecycleSnapshot(state),
     saas: getPublicSaasStatus(saasConfig),
     storagePlan: getSourceStoragePlan(supabaseConfig),
     internalMetricsHidden: true,
@@ -907,6 +930,7 @@ async function handleApi(req, res, url) {
         enabled: true,
         demoSeedEnabled: saasConfig.demoSeedEnabled,
       },
+      productFlow: productFlowConfig,
       accountManagement: {
         enabled: true,
         passwordResetScaffolded: true,
@@ -1603,9 +1627,38 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (req.method === "POST" && url.pathname === "/api/product-flow") {
+    const body = await readJsonBody(req);
+    const { session, state, persistence } = await getStateContext(req);
+    requireAccountSession(session);
+    const lifecycle = applyProductLifecycleAction(state, body.action, body.payload || {}, {
+      config: productFlowConfig,
+    });
+    if (body.action === "complete_legal") {
+      recordLegalAcceptance(state, {
+        accepted: true,
+        acceptanceSource: "required_product_flow",
+      }, lifecycleConfig);
+    }
+    await repository.saveState(session, state);
+    sendJson(res, 200, {
+      lifecycle: getProductLifecycleSnapshot(state),
+      state: publicState(state, persistence),
+      payment: {
+        verificationMode: lifecycle.paymentMethodVerificationMode,
+        realPaymentCompleted: false,
+        chargeCreated: false,
+        mandateCreated: false,
+      },
+      secretsPrinted: false,
+    });
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/onboarding") {
     const body = await readJsonBody(req);
     const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
     const onboarding = applyStudentOnboarding(state, body, { demo: false });
     await repository.saveState(session, state);
     sendJson(res, 200, {
@@ -1669,6 +1722,12 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/classroom/oauth/start") {
     const { session, state } = await getStateContext(req);
+    const productLifecycle = getProductLifecycleSnapshot(state);
+    if (!productLifecycle.paymentMethodVerified || !productLifecycle.legalConsentComplete || productLifecycle.classroomChoice !== "classroom") {
+      const error = new Error("Choose Classroom during setup after completing the access and agreement steps.");
+      error.status = 403;
+      throw error;
+    }
     const connector = await getClassroomConnectorStatus({
       state,
       session,
@@ -1677,6 +1736,10 @@ async function handleApi(req, res, url) {
       config: googleClassroomConfig,
     });
     if (!connector.actions.connect && !connector.actions.reconnect) {
+      if (connector.connected) {
+        markProductClassroomConnected(state);
+        await repository.saveState(session, state);
+      }
       sendJson(res, connector.connected ? 200 : 409, {
         connector: publicClassroomConnector(connector),
         authorizationUrl: null,
@@ -1731,13 +1794,14 @@ async function handleApi(req, res, url) {
         providerAccountEmail: profile.email || "",
       });
       markClassroomConnected(state, metadata, { mode: "oauth" });
+      markProductClassroomConnected(state);
       await repository.saveState(session, state);
       sendHtml(res, 200, `<!doctype html>
         <title>StudentOS Classroom Connected</title>
         <body>
           <h1>Google Classroom connected</h1>
           <p>Classroom connection is ready. StudentOS will add coursework to your study plan only.</p>
-          <script>setTimeout(() => { location.href = "/"; }, 1200);</script>
+          <script>setTimeout(() => { location.href = ${JSON.stringify(publicFrontendUrl).replace(/</g, "\\u003c")}; }, 1200);</script>
         </body>`);
     } catch {
       sendHtml(res, 400, "<!doctype html><title>StudentOS Classroom</title><p>Classroom connection could not finish. Return to StudentOS and reconnect when ready.</p>");
@@ -1783,6 +1847,7 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/classroom/sync") {
     const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
     const connector = await getClassroomConnectorStatus({
       state,
       session,
@@ -1845,6 +1910,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/ai/verb") {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
+    requireDashboardActive(state);
     enforceRateLimit(req, session, "ai_call");
     enforceUsage(state, "ai_call");
     const groundingContext = getGroundingContext(state, body.message || "");
@@ -1870,6 +1936,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/embeddings/reindex") {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
+    requireDashboardActive(state);
     requireUploadSession(session);
     const summary = await reindexSourceChunkEmbeddings({
       sourceChunks: state.sourceChunks,
@@ -1911,6 +1978,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/jobs/retry-failed") {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
+    requireDashboardActive(state);
     requireUploadSession(session);
     enforceRateLimit(req, session, "worker_retry");
     enforceUsage(state, "worker_retry");
@@ -1948,6 +2016,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/tests/score") {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
+    requireDashboardActive(state);
     const result = applyTestScore(state, body);
     await repository.saveTestResultBundle(session, state);
     sendJson(res, 200, result);
@@ -1957,6 +2026,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/assignment-flow") {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
+    requireDashboardActive(state);
     try {
       const flow = handleAssignmentLearningFlow(state, body.assignmentId);
       await repository.saveAssignmentFlow(session, state);
@@ -1994,6 +2064,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/assignment-contract") {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
+    requireDashboardActive(state);
     const assignment = findAssignment(state, body.assignmentId);
     if (!assignment) {
       sendJson(res, 404, { error: "Assignment not found" });
@@ -2024,6 +2095,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/extension/draft") {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
+    requireDashboardActive(state);
     const assignment = findAssignment(state, body.assignmentId) || state.assignments[0];
     const draft = buildExtensionDecisionDraft({
       profile: state.studentProfile,
@@ -2045,6 +2117,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/tutor/lesson") {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
+    requireDashboardActive(state);
     const topic = state.topics.find((item) => item.id === body.topicId) || state.topics[0];
     const course = findCourse(state, topic.courseId);
     const sources = state.sourceMaterials.filter((source) => topic.sourceMaterialIds.includes(source.id));
@@ -2065,6 +2138,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/files/mock") {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
+    requireDashboardActive(state);
     const material = {
       id: `src_mock_${Date.now()}`,
       courseId: body.courseId || state.courses[0].id,
@@ -2122,6 +2196,7 @@ async function handleApi(req, res, url) {
       const { session, state } = await runUploadStage(req, uploadStage, () => getStateContext(req), {
         timeoutMs: 10000,
       });
+      requireDashboardActive(state);
       requireUploadSession(session);
       enforceRateLimit(req, session, "upload");
 
@@ -2330,6 +2405,7 @@ async function handleApi(req, res, url) {
   if (req.method === "DELETE" && url.pathname.startsWith("/api/sources/")) {
     const sourceId = decodeURIComponent(url.pathname.split("/")[3] || "");
     const { session, state } = await getStateContext(req);
+    requireDashboardActive(state);
     requireUploadSession(session);
     const cleanupPlan = buildSourceCleanupPlan(state, sourceId);
     if (!cleanupPlan) {
