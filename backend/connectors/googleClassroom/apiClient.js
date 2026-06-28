@@ -156,6 +156,25 @@ export class GoogleClassroomApiClient {
     }));
   }
 
+  async listCourseWorkMaterials(courseId) {
+    const materials = await listPaged(`/courses/${encodeURIComponent(courseId)}/courseWorkMaterials`, "courseWorkMaterial", {
+      token: this.accessToken,
+      fetchImpl: this.fetchImpl,
+      params: { courseWorkMaterialStates: "PUBLISHED" },
+    });
+    return materials.map((item) => ({
+      providerCourseId: courseId,
+      providerCourseWorkMaterialId: item.id,
+      title: item.title || "Classroom material",
+      description: item.description || "",
+      state: item.state || "",
+      alternateLink: item.alternateLink || "",
+      creationTime: item.creationTime || "",
+      updateTime: item.updateTime || "",
+      materials: (item.materials || []).map(materialMetadata),
+    }));
+  }
+
   async listOwnSubmissions(courseId, courseWorkId) {
     const payload = await classroomFetch(
       `/courses/${encodeURIComponent(courseId)}/courseWork/${encodeURIComponent(courseWorkId)}/studentSubmissions`,

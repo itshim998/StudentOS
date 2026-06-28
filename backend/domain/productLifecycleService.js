@@ -277,6 +277,26 @@ export function getProductLifecycleSnapshot(state = {}, now = new Date()) {
   };
 }
 
+export function requireProductMaterialAccess(state) {
+  const snapshot = getProductLifecycleSnapshot(state);
+  if (snapshot.dashboardActive) return snapshot;
+  const stepIndex = PRODUCT_FLOW_STEP_ORDER.indexOf(snapshot.nextStep);
+  const materialStartIndex = PRODUCT_FLOW_STEP_ORDER.indexOf("academic_context");
+  if (!snapshot.paymentMethodVerified || !snapshot.legalConsentComplete || stepIndex < materialStartIndex) {
+    throw productError("Complete the access and agreement steps before adding academic files.", 403);
+  }
+  return snapshot;
+}
+
+export function requireProductClassroomSyncAccess(state) {
+  const snapshot = getProductLifecycleSnapshot(state);
+  if (snapshot.dashboardActive) return snapshot;
+  if (!snapshot.paymentMethodVerified || !snapshot.legalConsentComplete || snapshot.classroomChoice !== "classroom" || !snapshot.classroomConnectedAt) {
+    throw productError("Finish connecting Classroom during setup before refreshing coursework.", 403);
+  }
+  return snapshot;
+}
+
 function requireValue(condition, message) {
   if (!condition) throw productError(message);
 }
@@ -477,6 +497,14 @@ export function applyProductLifecycleAction(state, action, payload = {}, {
     case "complete_workspace_preparation": {
       requireValue(lifecycle.workspacePreparationStartedAt, "Start workspace preparation first.");
       requireValue(config.workspacePreparationSimulationEnabled === true, "Workspace preparation simulation is not available in this environment.");
+      lifecycle.workspaceReadyAt = timestamp;
+      lifecycle.tutorialOfferedAt = timestamp;
+      return finishStep(lifecycle, "tutorial_offered", now, "workspace_preparation");
+    }
+    case "prepare_workspace": {
+      requireValue(lifecycle.setupSummaryReadyAt, "Confirm the setup summary before preparing the workspace.");
+      requireValue(config.workspacePreparationSimulationEnabled === true, "Workspace preparation is not available in this environment.");
+      lifecycle.workspacePreparationStartedAt = lifecycle.workspacePreparationStartedAt || timestamp;
       lifecycle.workspaceReadyAt = timestamp;
       lifecycle.tutorialOfferedAt = timestamp;
       return finishStep(lifecycle, "tutorial_offered", now, "workspace_preparation");

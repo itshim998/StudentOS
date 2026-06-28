@@ -93,6 +93,18 @@ const snapshot = {
       linkUrl: "https://classroom.google.com/material",
     }],
   }],
+  courseWorkMaterials: [{
+    providerCourseId: "google_course_math",
+    providerCourseWorkMaterialId: "material_post_1",
+    title: "Revision pack",
+    updateTime: "2026-06-03T10:00:00.000Z",
+    materials: [{
+      providerMaterialId: "standalone_mat_1",
+      title: "Revision pack PDF",
+      rawType: "drive_file",
+      linkUrl: "https://classroom.google.com/material/revision",
+    }],
+  }],
   submissions: [{
     providerCourseId: "google_course_math",
     providerCourseWorkId: "work_1",
@@ -103,12 +115,13 @@ const snapshot = {
 const firstSummary = importClassroomSnapshotIntoState(state, snapshot, { now });
 assert.equal(firstSummary.importedCourses, 1);
 assert.equal(firstSummary.importedAssignments, 1);
-assert.equal(firstSummary.importedMaterials, 1);
+assert.equal(firstSummary.importedMaterials, 2);
 const secondSummary = importClassroomSnapshotIntoState(state, snapshot, { now });
 assert.equal(secondSummary.importedCourses, 0);
 assert.equal(secondSummary.updatedCourses, 1);
 assert.equal(secondSummary.updatedAssignments, 1);
 assert.equal(state.assignments.filter((item) => item.providerCourseWorkId === "work_1").length, 1);
+assert(state.sourceMaterials.some((item) => item.providerCourseWorkMaterialId === "material_post_1"));
 const importedAssignment = state.assignments.find((item) => item.providerCourseWorkId === "work_1");
 assert.equal(importedAssignment.source, "google_classroom");
 assert.equal(importedAssignment.readOnly, true);

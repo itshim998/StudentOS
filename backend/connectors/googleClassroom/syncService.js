@@ -261,11 +261,18 @@ async function fetchOAuthSnapshot({ session, repository, config, fetchImpl = fet
   const client = new GoogleClassroomApiClient({ accessToken: token.accessToken, fetchImpl });
   const courses = await client.listCourses();
   const courseWork = [];
+  const courseWorkMaterials = [];
   const submissions = [];
   const errors = [];
   for (const course of courses) {
     const workForCourse = await client.listCourseWork(course.providerCourseId);
     courseWork.push(...workForCourse);
+    try {
+      courseWorkMaterials.push(...await client.listCourseWorkMaterials(course.providerCourseId));
+    } catch (error) {
+      if (error.status === 401) throw error;
+      errors.push(safeErrorSummary(error));
+    }
     for (const work of workForCourse) {
       try {
         submissions.push(...await client.listOwnSubmissions(work.providerCourseId, work.providerCourseWorkId));
@@ -275,7 +282,7 @@ async function fetchOAuthSnapshot({ session, repository, config, fetchImpl = fet
       }
     }
   }
-  return { courses, courseWork, submissions, errors, providerAccountEmail: token.providerAccountEmail || null };
+  return { courses, courseWork, courseWorkMaterials, submissions, errors, providerAccountEmail: token.providerAccountEmail || null };
 }
 
 export async function syncGoogleClassroomIntoState({

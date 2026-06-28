@@ -1,4 +1,4 @@
-# Pass 35.1 lifecycle product flow
+# Pass 35.2 lifecycle product flow
 
 StudentOS now renders an authenticated student from persisted lifecycle state instead of opening Today by default.
 
@@ -21,6 +21,8 @@ The required flow is:
 13. enter Today.
 
 From the academic identity page onward, Previous returns to the immediately preceding setup page and preserves entered values. Plan and trial pages remain revisitable until payment-method verification; after verification, navigation cannot cross back into those choices. The onboarding shell uses its own high-contrast light surfaces so global dashboard theme values do not wash out form labels, placeholders, controls, or messages.
+
+Onboarding answers now update the visible flow immediately and persist through one ordered background queue. Later gates flush pending answers before continuing, and workspace preparation refuses to start if the latest setup changes cannot be saved. The syllabus page accepts natural-language context plus staged academic files after the access and agreement gates. Classroom setup uses the same read-only metadata refresh as the dashboard, then displays assignments and coursework materials newest-first. Setup summary has one prepare action and one edit action, followed by a single unified preparation page.
 
 `STUDENTOS_PAYMENT_PLACEHOLDER_ENABLED` and `STUDENTOS_WORKSPACE_PREPARATION_SIMULATION_ENABLED` are development controls. Both are ignored in production by design. The payment-method check cannot create a charge or recurring mandate, and it never reports payment completion.
 

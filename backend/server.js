@@ -25,6 +25,8 @@ import {
   getProductFlowConfig,
   getProductLifecycleSnapshot,
   markProductClassroomConnected,
+  requireProductClassroomSyncAccess,
+  requireProductMaterialAccess,
   requireDashboardActive,
 } from "./domain/productLifecycleService.js";
 import { getRequestSession } from "./auth/session.js";
@@ -1771,7 +1773,7 @@ async function handleApi(req, res, url) {
     const code = String(url.searchParams.get("code") || "");
     const stateToken = String(url.searchParams.get("state") || "");
     if (!code || !stateToken) {
-      sendHtml(res, 400, "<!doctype html><title>StudentOS Classroom</title><p>Missing Google Classroom OAuth code or state.</p>");
+      sendHtml(res, 400, "<!doctype html><title>StudentOS Classroom</title><p>Classroom connection details are missing. Return to StudentOS and try again.</p>");
       return;
     }
     try {
@@ -1795,6 +1797,18 @@ async function handleApi(req, res, url) {
       });
       markClassroomConnected(state, metadata, { mode: "oauth" });
       markProductClassroomConnected(state);
+      await syncGoogleClassroomIntoState({
+        state,
+        session,
+        repository,
+        config: googleClassroomConfig,
+      }).catch((error) => {
+        logger.warn("classroom_onboarding_sync.failed", {
+          requestId: req.requestId,
+          status: error.status || 500,
+          error: error.message,
+        });
+      });
       await repository.saveState(session, state);
       sendHtml(res, 200, `<!doctype html>
         <title>StudentOS Classroom Connected</title>
@@ -1847,7 +1861,7 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/classroom/sync") {
     const { session, state, persistence } = await getStateContext(req);
-    requireDashboardActive(state);
+    requireProductClassroomSyncAccess(state);
     const connector = await getClassroomConnectorStatus({
       state,
       session,
@@ -2193,10 +2207,10 @@ async function handleApi(req, res, url) {
     let uploadStage = "initializing";
     try {
       uploadStage = "session_context";
-      const { session, state } = await runUploadStage(req, uploadStage, () => getStateContext(req), {
+      const { session, state, persistence } = await runUploadStage(req, uploadStage, () => getStateContext(req), {
         timeoutMs: 10000,
       });
-      requireDashboardActive(state);
+      requireProductMaterialAccess(state);
       requireUploadSession(session);
       enforceRateLimit(req, session, "upload");
 
@@ -2210,7 +2224,10 @@ async function handleApi(req, res, url) {
         sendJson(res, 400, { error: "Missing file field", uploadError: true, uploadStage, secretsPrinted: false });
         return;
       }
-      const course = findCourse(state, form.fields.courseId) || state.courses[0];
+      const course = findCourse(state, form.fields.courseId) || state.courses[0] || {
+        id: "academic-context",
+        title: "Academic context",
+      };
       const validation = validateSourceUpload({
         filename: file.filename,
         mimeType: file.mimeType,
@@ -2381,6 +2398,7 @@ async function handleApi(req, res, url) {
         privateStorage: {
           public: false,
         },
+        state: publicState(state, persistence),
         secretsPrinted: false,
       });
     } catch (error) {

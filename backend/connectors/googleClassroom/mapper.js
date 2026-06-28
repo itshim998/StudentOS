@@ -233,7 +233,7 @@ export function importClassroomSnapshotIntoState(state, snapshot, { now = new Da
     retentionApplied: false,
     googleClassroomDeleted: false,
     errors: [],
-    emptyClassroom: !(snapshot.courses || []).length && !(snapshot.courseWork || []).length,
+    emptyClassroom: !(snapshot.courses || []).length && !(snapshot.courseWork || []).length && !(snapshot.courseWorkMaterials || []).length,
   };
   const providerCourseIdToCourseId = new Map();
   for (const classroomCourse of [...(snapshot.courses || [])].sort(newestFirst)) {
@@ -331,6 +331,50 @@ export function importClassroomSnapshotIntoState(state, snapshot, { now = new Da
         updatedAt: material.updateTime || courseWork.updateTime || nowIso(now),
       });
       if (materialAction === "imported") summary.importedMaterials += 1;
+      else summary.updatedMaterials += 1;
+    });
+  }
+  for (const post of [...(snapshot.courseWorkMaterials || [])].sort(newestFirst)) {
+    if (!post.providerCourseId || !post.providerCourseWorkMaterialId) {
+      summary.skippedItems += 1;
+      continue;
+    }
+    const mappedCourseId = providerCourseIdToCourseId.get(post.providerCourseId) || courseId(post.providerCourseId);
+    const postMaterials = post.materials?.length ? post.materials : [{
+      providerMaterialId: post.providerCourseWorkMaterialId,
+      title: post.title,
+      rawType: "coursework_material",
+      linkUrl: post.alternateLink || null,
+    }];
+    postMaterials.forEach((material, index) => {
+      const sourceId = materialId(post.providerCourseId, `post_${post.providerCourseWorkMaterialId}`, material.providerMaterialId, index);
+      const action = upsertById(state.sourceMaterials, {
+        id: sourceId,
+        courseId: mappedCourseId,
+        title: material.title || post.title || "Classroom material",
+        kind: "classroom_coursework_material_metadata",
+        sourceType: "google_classroom_coursework_material_metadata",
+        filename: material.title || post.title || null,
+        mimeType: null,
+        sizeBytes: null,
+        status: "ready",
+        storageMode: "external_metadata_only",
+        extractionSummary: "Read-only Classroom coursework material details. StudentOS did not fetch file contents.",
+        citationLabel: `Google Classroom: ${post.title || "Coursework material"}`,
+        webFallbackAllowed: false,
+        provider: "google_classroom",
+        providerCourseId: post.providerCourseId,
+        providerCourseWorkMaterialId: post.providerCourseWorkMaterialId,
+        providerMaterialId: material.providerMaterialId || null,
+        linkUrl: material.linkUrl || post.alternateLink || null,
+        readOnly: true,
+        updateTime: material.updateTime || post.updateTime || null,
+        creationTime: material.creationTime || post.creationTime || null,
+        importedAt: nowIso(now),
+        createdAt: material.creationTime || post.creationTime || nowIso(now),
+        updatedAt: material.updateTime || post.updateTime || nowIso(now),
+      });
+      if (action === "imported") summary.importedMaterials += 1;
       else summary.updatedMaterials += 1;
     });
   }

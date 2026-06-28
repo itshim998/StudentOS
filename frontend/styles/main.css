@@ -3297,6 +3297,127 @@ textarea:focus-visible {
   }
 }
 
+/* Pass 35.2: responsive setup persistence and academic material controls. */
+.product-save-status {
+  min-height: 20px;
+  margin: 4px 2px 10px;
+  color: var(--flow-muted);
+  font-size: 0.82rem;
+  text-align: right;
+}
+
+.product-save-status[data-state="error"] {
+  color: #854a32;
+}
+
+.product-guidance-example {
+  margin: -4px 0 22px;
+  padding: 14px 16px;
+  color: #354f43;
+  border-left: 3px solid #6d9a86;
+  border-radius: 0 10px 10px 0;
+  background: #e2eae5;
+  line-height: 1.55;
+}
+
+.academic-file-upload {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--flow-border);
+  border-radius: 12px;
+  background: var(--flow-surface);
+}
+
+.academic-file-upload p {
+  margin: 5px 0 0;
+  color: var(--flow-muted);
+  line-height: 1.5;
+}
+
+.academic-file-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 12px 18px;
+  color: #254b3c;
+  border: 1px dashed #6f9584;
+  border-radius: 10px;
+  background: #dce8e1;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.academic-file-picker:hover,
+.academic-file-picker:focus-within {
+  border-color: var(--flow-focus);
+  background: #d1e1d8;
+}
+
+.academic-file-picker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.academic-upload-status {
+  display: grid;
+  gap: 8px;
+}
+
+.academic-upload-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 11px;
+  color: var(--flow-ink);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.42);
+  font-size: 0.86rem;
+}
+
+.academic-upload-item span {
+  color: var(--flow-muted);
+  text-align: right;
+}
+
+.academic-upload-item.failed span {
+  color: #854a32;
+}
+
+.material-choice-row span {
+  display: grid;
+  gap: 3px;
+}
+
+.material-choice-row small {
+  color: var(--flow-muted);
+  font-size: 0.78rem;
+  font-weight: 550;
+}
+
+@media (max-width: 620px) {
+  .product-save-status {
+    text-align: left;
+  }
+
+  .academic-upload-item {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .academic-upload-item span {
+    text-align: left;
+  }
+}
+
 /* Pass 35.1: isolate lifecycle screens from the dark dashboard theme. */
 .product-flow-shell {
   --flow-ink: #1d2b25;

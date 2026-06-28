@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { seedStateForUser } from "./repository/studentOsRepository.js";
 import { getPublicPlanCatalog } from "./saas/plans.js";
+import { validateSourceUpload } from "./storage/sourceMaterialService.js";
 import {
   ONBOARDING_STEPS,
   PRODUCT_FLOW_STEP_ORDER,
@@ -9,7 +10,10 @@ import {
   applyProductLifecycleAction,
   getProductFlowConfig,
   getProductLifecycleSnapshot,
+  markProductClassroomConnected,
   requireDashboardActive,
+  requireProductClassroomSyncAccess,
+  requireProductMaterialAccess,
 } from "./domain/productLifecycleService.js";
 
 const fixedNow = new Date("2026-06-27T10:00:00.000Z");
@@ -21,6 +25,7 @@ assert.equal(state.assignments.length, 0, "new authenticated profiles must not i
 assert.equal(getProductLifecycleSnapshot(state, fixedNow).nextStep, "about_you");
 assert.equal(getProductLifecycleSnapshot(state, fixedNow).canGoPrevious, false);
 assert.throws(() => requireDashboardActive(state), /Complete StudentOS setup/);
+assert.throws(() => requireProductMaterialAccess(state), /access and agreement/);
 
 const publicPlans = getPublicPlanCatalog();
 assert.deepEqual(publicPlans.map((plan) => [plan.id, plan.priceMonthlyInr]), [
@@ -30,6 +35,12 @@ assert.deepEqual(publicPlans.map((plan) => [plan.id, plan.priceMonthlyInr]), [
   ["pro", 549],
 ]);
 assert(publicPlans.every((plan) => !("quotas" in plan) && !("features" in plan)));
+for (const file of [
+  ["semester-plan.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+  ["timetable.png", "image/png"],
+]) {
+  assert.equal(validateSourceUpload({ filename: file[0], mimeType: file[1], sizeBytes: 120 }).ok, true);
+}
 
 assert.deepEqual(PRODUCT_FLOW_STEP_ORDER.slice(0, 4), ["about_you", "education_system", "pricing", "trial_choice"]);
 assert.throws(() => applyProductLifecycleAction(state, "select_plan", { planId: "plus" }, { config, now: fixedNow }), /name and academic identity/);
@@ -131,10 +142,14 @@ for (const step of ONBOARDING_STEPS.filter((item) => !["about_you", "education_s
 lifecycle = getProductLifecycleSnapshot(state);
 assert.equal(lifecycle.nextStep, "classroom_setup");
 assert.equal(lifecycle.onboarding.progressPercent, 100);
+assert.doesNotThrow(() => requireProductMaterialAccess(state));
+assert.throws(() => requireProductClassroomSyncAccess(state), /Finish connecting Classroom/);
 
 applyProductLifecycleAction(state, "choose_classroom_path", { choice: "classroom" }, { config, now: fixedNow });
 assert.equal(getProductLifecycleSnapshot(state).state, "classroom_choice_pending");
 assert.throws(() => applyProductLifecycleAction(state, "save_materials", {}, { config, now: fixedNow }), /Complete the Classroom/);
+markProductClassroomConnected(state, fixedNow);
+assert.doesNotThrow(() => requireProductClassroomSyncAccess(state));
 
 applyProductLifecycleAction(state, "choose_classroom_path", { choice: "manual" }, { config, now: fixedNow });
 assert.equal(getProductLifecycleSnapshot(state).state, "manual_setup_selected");
@@ -144,9 +159,7 @@ applyProductLifecycleAction(state, "save_materials", {
 assert.equal(getProductLifecycleSnapshot(state).nextStep, "setup_summary");
 applyProductLifecycleAction(state, "confirm_setup_summary", {}, { config, now: fixedNow });
 assert.equal(getProductLifecycleSnapshot(state).nextStep, "workspace_preparation");
-applyProductLifecycleAction(state, "start_workspace_preparation", {}, { config, now: fixedNow });
-assert.equal(getProductLifecycleSnapshot(state).state, "workspace_preparing");
-applyProductLifecycleAction(state, "complete_workspace_preparation", {}, { config, now: fixedNow });
+applyProductLifecycleAction(state, "prepare_workspace", {}, { config, now: fixedNow });
 assert.equal(getProductLifecycleSnapshot(state).nextStep, "tutorial");
 applyProductLifecycleAction(state, "choose_tutorial", { choice: "show" }, { config, now: fixedNow });
 assert.equal(getProductLifecycleSnapshot(state).dashboardActive, false);
@@ -162,7 +175,7 @@ assert.equal(config.placeholderCanCreateCharge, false);
 assert.equal(config.placeholderCanCreateMandate, false);
 
 console.log(JSON.stringify({
-  pass: "35.1",
+  pass: "35.2",
   lifecycleState: getProductLifecycleSnapshot(state).state,
   publicPlans: publicPlans.map((plan) => `${plan.label}:₹${plan.priceMonthlyInr}`),
   realPaymentEnabled: config.realPaymentEnabled,

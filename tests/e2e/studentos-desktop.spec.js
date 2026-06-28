@@ -123,7 +123,7 @@ async function expectNoVisibleExternalBranding(page, label) {
 
 async function expectNoLifecycleTechnicalCopy(page, label) {
   const visibleText = await page.locator("#product-flow-shell").innerText();
-  const blocked = /\b(Supabase|Groq|Pollinations|Gemini|provider|model|token|vector|embedding|backend|mock|demo response|OAuth|connector)\b/i;
+  const blocked = /\b(Supabase|Groq|Pollinations|Gemini|provider|model|token|vector|embedding|chunks?|backend|storage|mock|demo response|OAuth|connector|source-grounded|web fallback|no write scopes?|no writeback)\b/i;
   expect(visibleText, `${label} should use student-facing product copy`).not.toMatch(blocked);
 }
 
@@ -389,6 +389,14 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
   }
 
   refreshLifecycle();
+  const persistenceOrder = [];
+  let releaseDailySave;
+  const dailySaveGate = new Promise((resolve) => { releaseDailySave = resolve; });
+  let dailySaveReleased = false;
+  let examSaveAttempts = 0;
+  let failAcademicSaves = false;
+  let academicFailureAttempts = 0;
+  let classroomSyncCalls = 0;
 
   await page.addInitScript(() => {
     sessionStorage.setItem("studentos.auth.session", JSON.stringify({
@@ -412,6 +420,64 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
   await page.route("**/api/bootstrap", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(newUserState) }));
   await page.route("**/api/account", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(account) }));
   await page.route("**/api/classroom/status", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(classroom) }));
+  await page.route("**/api/sources/upload", async (route) => {
+    const material = {
+      id: "src_onboarding_syllabus",
+      courseId: "academic-context",
+      title: "semester-syllabus.txt",
+      filename: "semester-syllabus.txt",
+      status: "indexed",
+      sourceType: "uploaded_file",
+    };
+    if (!newUserState.sourceMaterials.some((item) => item.id === material.id)) newUserState.sourceMaterials.push(material);
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ material, state: newUserState, secretsPrinted: false }),
+    });
+  });
+  await page.route("**/api/classroom/oauth/start", async (route) => {
+    const timestamp = "2026-06-27T10:00:00.000Z";
+    lifecycle.classroomConnectedAt = timestamp;
+    lifecycle.state = "classroom_connected";
+    finishStep("classroom_setup");
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        authorizationUrl: null,
+        connector: { connected: true, state: "connected", actions: { sync: true } },
+        secretsPrinted: false,
+      }),
+    });
+  });
+  await page.route("**/api/classroom/sync", async (route) => {
+    classroomSyncCalls += 1;
+    newUserState.courses = [{ id: "course_current", title: "Current Semester" }];
+    newUserState.assignments = [
+      { id: "assignment_old", courseId: "course_current", title: "Older Classroom assignment", source: "google_classroom", classroomUpdatedAt: "2026-05-01T09:00:00.000Z" },
+      { id: "assignment_new", courseId: "course_current", title: "Newest Classroom assignment", source: "google_classroom", classroomUpdatedAt: "2026-06-20T09:00:00.000Z" },
+    ];
+    const classroomMaterial = {
+      id: "material_current",
+      courseId: "course_current",
+      title: "Current Classroom notes",
+      source: "google_classroom",
+      provider: "google_classroom",
+      updateTime: "2026-06-10T09:00:00.000Z",
+    };
+    newUserState.sourceMaterials = [
+      ...newUserState.sourceMaterials.filter((item) => item.id !== classroomMaterial.id),
+      classroomMaterial,
+    ];
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: newUserState,
+        connector: { connected: true, state: "connected", actions: { sync: true } },
+        summary: { importedAssignments: 2, importedMaterials: 1 },
+        secretsPrinted: false,
+      }),
+    });
+  });
   await page.route("**/api/product-flow", async (route) => {
     const request = route.request().postDataJSON();
     const payload = request.payload || {};
@@ -445,6 +511,28 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
       lifecycle.state = "legal_consent_complete";
       finishStep("legal_consent");
     } else if (request.action === "save_onboarding_step") {
+      if (payload.step === "academic_context" && failAcademicSaves) {
+        academicFailureAttempts += 1;
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Please try again." }),
+        });
+        return;
+      }
+      if (payload.step === "exam_pattern") {
+        examSaveAttempts += 1;
+        if (examSaveAttempts === 1) {
+          await route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "Please try again." }),
+          });
+          return;
+        }
+      }
+      persistenceOrder.push({ step: payload.step, answers: payload.answers || {} });
+      if (payload.step === "daily_schedule" && !dailySaveReleased) await dailySaveGate;
       lifecycle.onboarding.answers[payload.step] = payload.answers || {};
       if (!lifecycle.onboarding.completedSteps.includes(payload.step)) lifecycle.onboarding.completedSteps.push(payload.step);
       if (payload.step === "about_you") newUserState.studentProfile.displayName = payload.answers.displayName;
@@ -468,11 +556,30 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
       lifecycle.setupSummaryReadyAt = timestamp;
       lifecycle.state = "setup_summary_ready";
       finishStep("setup_summary");
+    } else if (request.action === "edit_setup") {
+      const targetIndex = onboardingSteps.indexOf("academic_context");
+      lifecycle.onboarding.completedSteps = lifecycle.onboarding.completedSteps.filter((step) => onboardingSteps.indexOf(step) < targetIndex);
+      lifecycle.onboarding.currentStep = "academic_context";
+      lifecycle.classroomChoice = null;
+      lifecycle.classroomConnectedAt = null;
+      lifecycle.manualSetupSelectedAt = null;
+      lifecycle.materialsSelectedAt = null;
+      lifecycle.setupSummaryReadyAt = null;
+      lifecycle.navigationStep = null;
+      lifecycle.navigationHistory = [];
+      lifecycle.state = "onboarding_progress_saved";
+      refreshLifecycle();
     } else if (request.action === "start_workspace_preparation") {
       lifecycle.workspacePreparationStartedAt = timestamp;
       lifecycle.state = "workspace_preparing";
       finishStep("workspace_preparation");
     } else if (request.action === "complete_workspace_preparation") {
+      lifecycle.workspaceReadyAt = timestamp;
+      lifecycle.tutorialOfferedAt = timestamp;
+      lifecycle.state = "tutorial_offered";
+      finishStep("workspace_preparation");
+    } else if (request.action === "prepare_workspace") {
+      lifecycle.workspacePreparationStartedAt = timestamp;
       lifecycle.workspaceReadyAt = timestamp;
       lifecycle.tutorialOfferedAt = timestamp;
       lifecycle.state = "tutorial_offered";
@@ -578,20 +685,55 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
   await page.locator("#product-legal-form input[name='ageGate'][value='adult']").check();
   await page.getByRole("button", { name: "Agree and continue" }).click();
 
-  for (const heading of ["Daily Schedule", "Exam and Assessment Pattern", "Syllabus and Academic Context"]) {
-    await expect(page.getByRole("heading", { name: heading })).toBeVisible();
-    await page.getByRole("button", { name: "Skip for now" }).click();
-  }
+  await expect(page.getByRole("heading", { name: "Daily Schedule" })).toBeVisible();
+  await page.getByRole("button", { name: "Skip for now" }).click();
+  await expect(page.getByRole("heading", { name: "Exam and Assessment Pattern" })).toBeVisible();
+  expect(dailySaveReleased, "daily save should still be pending while the next page is already visible").toBe(false);
+  await expect(page.locator("#product-save-status")).toContainText("Saving your setup");
+  await expect(page.locator("#product-flow-content")).toContainText("how exams and assessments work in your institution");
+  await expect(page.locator("#product-flow-content")).toContainText("Continuous Internal Assessments");
+  await expect(page.locator("#product-flow-content")).toContainText("one per month");
+  const examPattern = page.locator("textarea[name='examPattern']");
+  await examPattern.fill("We have monthly internals.");
+  await examPattern.fill("We have four monthly internals, practicals, a viva, and a semester exam.");
+  await page.getByRole("button", { name: "Save and continue" }).click();
+
+  await expect(page.getByRole("heading", { name: "Syllabus and Academic Context" })).toBeVisible();
+  await expect(page.locator("#product-flow-content")).toContainText("Upload academic files or describe your syllabus naturally");
+  await expect(page.getByText("Choose files", { exact: true })).toBeVisible();
+  await expect(page.locator("#product-academic-files")).toHaveAttribute("accept", /\.pdf/);
+  await expect(page.locator("#product-academic-files")).toHaveAttribute("accept", /\.xlsx/);
+  await expect(page.locator("#product-academic-files")).toHaveAttribute("accept", /image/);
+  expect(persistenceOrder.filter((item) => ["daily_schedule", "exam_pattern", "academic_context"].includes(item.step)).map((item) => item.step)).toEqual(["daily_schedule"]);
+  dailySaveReleased = true;
+  releaseDailySave();
+  await expect.poll(() => persistenceOrder.filter((item) => ["daily_schedule", "exam_pattern", "academic_context"].includes(item.step)).map((item) => item.step).slice(-2)).toEqual(["daily_schedule", "exam_pattern"]);
+  expect(examSaveAttempts).toBe(2);
+  expect(persistenceOrder.find((item) => item.step === "exam_pattern")?.answers.examPattern).toContain("four monthly internals");
+
+  await page.locator("textarea[name='subjects']").fill("Mathematics\nPhysics");
+  await page.locator("textarea[name='syllabusNotes']").fill("Our semester covers calculus, mechanics, and weekly problem sets.");
+  await page.locator("#product-academic-files").setInputFiles(path.join(FIXTURE_DIR, "quadratics-note.txt"));
+  await expect(page.locator("#product-upload-status")).toContainText("Added to your academic context");
+  await expectNoLifecycleTechnicalCopy(page, "academic context upload page");
+  await page.getByRole("button", { name: "Save and continue" }).click();
 
   await expect(page.getByRole("heading", { name: "How should StudentOS find your coursework?" })).toBeVisible();
   await expectNoLifecycleTechnicalCopy(page, "Classroom choice page");
   await page.getByRole("button", { name: "Connect Google Classroom" }).click();
   await expect(page.getByRole("heading", { name: "Connect Google Classroom" })).toBeVisible();
-  await page.getByRole("button", { name: "My institution does not use Classroom" }).click();
+  await page.getByRole("button", { name: "Connect Google Classroom" }).click();
   await expect(page.getByRole("heading", { name: "Choose what belongs in your first workspace" })).toBeVisible();
+  await expect.poll(() => classroomSyncCalls).toBe(1);
   await expectNoLifecycleTechnicalCopy(page, "materials page");
   await expect(page.locator("#product-flow-content")).toContainText("You can add or remove materials later from Academic Context");
-  await page.locator("#product-materials-form textarea[name='materialLabels']").fill("Calculus syllabus");
+  await expect(page.locator("#product-flow-content")).not.toContainText("No materials are waiting yet");
+  await expect(page.locator("#product-flow-content")).toContainText("Newest Classroom assignment");
+  await expect(page.locator("#product-flow-content")).toContainText("Current Classroom notes");
+  const materialTitles = await page.locator(".material-choice-row strong").allTextContents();
+  expect(materialTitles.indexOf("Newest Classroom assignment")).toBeLessThan(materialTitles.indexOf("Older Classroom assignment"));
+  expect(materialTitles.indexOf("Newest Classroom assignment")).toBeLessThan(materialTitles.indexOf("Current Classroom notes"));
+  await page.locator("#product-materials-form input[name='materialIds']").first().check();
   await page.getByRole("button", { name: "Continue to setup summary" }).click();
 
   await expect(page.getByRole("heading", { name: "Does this look right?" })).toBeVisible();
@@ -599,14 +741,32 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
   await expect(page.locator("#product-flow-content")).toContainText("Lifecycle Student");
   await expect(page.locator("#product-flow-content")).toContainText("Example University");
   await expect(page.locator("#product-flow-content")).toContainText("Semester 2");
-  await expect(page.getByRole("button", { name: "Yes, prepare my workspace" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Edit summary" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Add more details" })).toBeVisible();
-  await page.getByRole("button", { name: "Continue with what I have" }).click();
-  await page.getByRole("button", { name: "Prepare workspace" }).click();
+  await expect(page.getByRole("button", { name: "Prepare my workspace", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Edit details", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Continue with what I have" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add more details" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Edit details", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Syllabus and Academic Context" })).toBeVisible();
+  await expect(page.locator("textarea[name='syllabusNotes']")).toHaveValue("Our semester covers calculus, mechanics, and weekly problem sets.");
+  await expect(page.locator("#product-upload-status")).toContainText("Added to your academic context");
+  failAcademicSaves = true;
+  await page.getByRole("button", { name: "Save and continue" }).click();
+  await expect(page.getByRole("heading", { name: "How should StudentOS find your coursework?" })).toBeVisible();
+  await page.getByRole("button", { name: "My institution does not use Classroom" }).click();
+  await expect(page.getByRole("heading", { name: "How should StudentOS find your coursework?" })).toBeVisible();
+  await expect(page.locator("#product-flow-message")).toContainText("could not save your latest setup changes");
+  expect(academicFailureAttempts).toBeGreaterThanOrEqual(3);
+  failAcademicSaves = false;
+  await page.getByRole("button", { name: "My institution does not use Classroom" }).click();
+  await page.getByRole("button", { name: "Continue to setup summary" }).click();
+  await expect(page.getByRole("heading", { name: "Does this look right?" })).toBeVisible();
+  await page.getByRole("button", { name: "Prepare my workspace", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Preparing your workspace" })).toBeVisible();
+  await expect(page.locator("#product-flow-content")).not.toContainText(/Ready to prepare your workspace|Your workspace is taking shape/);
+  await expect(page.getByRole("button", { name: "Continue to quick tour" })).toHaveCount(1);
   await expect(page.locator("#product-flow-content")).toContainText(/building your Today view/i);
   await expectNoLifecycleTechnicalCopy(page, "workspace preparation page");
-  await page.getByRole("button", { name: "Continue when ready" }).click();
+  await page.getByRole("button", { name: "Continue to quick tour" }).click();
 
   await expect(page.getByRole("heading", { name: "Would you like a quick tour before entering Today?" })).toBeVisible();
   await expectNoLifecycleTechnicalCopy(page, "tutorial choice page");

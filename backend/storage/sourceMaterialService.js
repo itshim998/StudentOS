@@ -14,6 +14,13 @@ const ALLOWED_MIME_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
 ]);
 
 const EXTENSION_MIME = {
@@ -25,6 +32,14 @@ const EXTENSION_MIME = {
   ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   ".ppt": "application/vnd.ms-powerpoint",
   ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".heic": "image/heic",
+  ".heif": "image/heif",
 };
 
 function normalizeFilename(filename) {

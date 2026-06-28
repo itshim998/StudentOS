@@ -15,6 +15,13 @@ let classroomStatusLoaded = false;
 let aiDrawerReturnFocus = null;
 let sourceSearchQuery = "";
 let authShellMode = "signin";
+let productPersistenceQueue = [];
+let productPersistenceRunner = null;
+let productPersistenceError = null;
+let productUploadTail = Promise.resolve();
+let productUploadsPending = 0;
+let productClassroomRefreshAttempted = false;
+const productUploadResults = new Map();
 const ACTION_LOADING_TIMEOUT_MS = 30000;
 const LONG_ACTION_LOADING_TIMEOUT_MS = 60000;
 
@@ -23,6 +30,7 @@ const els = {
   productFlowShell: document.getElementById("product-flow-shell"),
   productFlowContent: document.getElementById("product-flow-content"),
   productFlowProgress: document.getElementById("product-flow-progress"),
+  productSaveStatus: document.getElementById("product-save-status"),
   productFlowLogoutBtn: document.getElementById("product-flow-logout-btn"),
   productFlowAskBtn: document.getElementById("product-flow-ask-btn"),
   productFlowAskResponse: document.getElementById("product-flow-ask-response"),
@@ -407,7 +415,7 @@ function studentFacingRequestError(message = "", status = 0) {
   if (lower.includes("email not confirmed") || lower.includes("not confirmed") || lower.includes("verification")) {
     return "Please check your email to continue.";
   }
-  if (/\b(supabase|groq|pollinations|gemini|openai|gpt|gpt-oss|anthropic|claude|provider|model)\b/i.test(text)) {
+  if (/\b(supabase|groq|pollinations|gemini|openai|gpt|gpt-oss|anthropic|claude|provider|model|token|vector|embedding|chunks?|backend|storage|oauth|connector)\b/i.test(text)) {
     return "We couldn’t complete that request. Please try again.";
   }
   return text || "We couldn’t complete that request. Please try again.";
@@ -1083,6 +1091,14 @@ const PRODUCT_FLOW_STEPS = Object.freeze([
   "tutorial",
 ]);
 
+const ONBOARDING_STEPS = Object.freeze([
+  "about_you",
+  "education_system",
+  "daily_schedule",
+  "exam_pattern",
+  "academic_context",
+]);
+
 const ONBOARDING_PAGE_COPY = Object.freeze({
   about_you: {
     title: "What is your name?",
@@ -1106,18 +1122,38 @@ const ONBOARDING_PAGE_COPY = Object.freeze({
   },
   exam_pattern: {
     title: "Exam and Assessment Pattern",
-    copy: "Add the assessment rhythm you want Today to keep in mind.",
-    fields: [{ name: "examPattern", label: "Exams and assessments", placeholder: "For example, monthly tests and a semester exam", multiline: true }],
+    copy: "Tell StudentOS how exams and assessments work in your institution.",
+    detail: "For example: In my 5-month semester, we have 4 Continuous Internal Assessments of 20 marks each, one per month, followed by a 60-mark semester exam.",
+    fields: [{ name: "examPattern", label: "Your institution's exam pattern", placeholder: "Describe your exams, internals, practicals, viva, assignments, marks, frequency, and semester pattern.", multiline: true }],
   },
   academic_context: {
     title: "Syllabus and Academic Context",
-    copy: "List the subjects or courses that should shape your first workspace.",
+    copy: "Upload academic files or describe your syllabus naturally. You can use either option or both.",
     fields: [
       { name: "subjects", label: "Subjects or courses", placeholder: "One per line is fine", multiline: true },
-      { name: "syllabusNotes", label: "Syllabus notes", placeholder: "Add anything useful, or skip for now", multiline: true },
+      { name: "syllabusNotes", label: "Describe your syllabus or courses", placeholder: "Type naturally about topics, units, routines, assignments, or anything StudentOS should understand.", multiline: true },
     ],
   },
 });
+
+function academicContextUploadMarkup() {
+  const uploads = [...productUploadResults.values()];
+  return `
+    <section class="academic-file-upload" aria-labelledby="academic-file-upload-title">
+      <div>
+        <strong id="academic-file-upload-title">Add academic files</strong>
+        <p>Upload a syllabus, notes, routines, assignments, or files such as PDF, image, DOCX, PPTX, XLSX, or similar.</p>
+      </div>
+      <label class="academic-file-picker" for="product-academic-files">
+        <span>Choose files</span>
+        <input id="product-academic-files" type="file" multiple accept=".txt,.md,.markdown,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.jpg,.jpeg,.png,.webp,.heic,.heif,text/plain,text/markdown,application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif">
+      </label>
+      <div id="product-upload-status" class="academic-upload-status" aria-live="polite">
+        ${uploads.map((item) => `<div class="academic-upload-item ${escapeHtml(item.status)}"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.copy)}</span></div>`).join("")}
+      </div>
+    </section>
+  `;
+}
 
 function productPlan(planId) {
   return (runtimeConfig.billing?.plans || []).find((plan) => plan.id === planId) || null;
@@ -1251,7 +1287,9 @@ function onboardingStepMarkup(lifecycle, step) {
     <p class="eyebrow">Guided setup</p>
     <h2 id="product-flow-title">${escapeHtml(page.title)}</h2>
     <p class="product-flow-lead">${escapeHtml(page.copy)}</p>
+    ${page.detail ? `<p class="product-guidance-example">${escapeHtml(page.detail)}</p>` : ""}
     <form id="product-onboarding-form" class="product-flow-form ${step === "education_system" ? "academic-identity-form" : ""}" data-step="${escapeHtml(step)}">
+      ${step === "academic_context" ? academicContextUploadMarkup() : ""}
       <div class="${step === "education_system" ? "academic-identity-grid" : "product-field-stack"}">
       ${page.fields.map((field) => {
         const fieldId = `product-${step}-${field.name}`;
@@ -1287,6 +1325,7 @@ function classroomStepMarkup(lifecycle) {
     <p class="eyebrow">Classroom or manual setup</p>
     <h2 id="product-flow-title">How should StudentOS find your coursework?</h2>
     <p class="product-flow-lead">Choose the path that matches your institution. Both paths lead to the same calm academic workspace.</p>
+    <div id="product-flow-message" class="result-box" aria-live="polite"></div>
     <div class="product-choice-grid">
       <button class="choice-card" type="button" data-product-action="choose-path" data-choice="classroom">
         <strong>Connect Google Classroom</strong>
@@ -1301,9 +1340,22 @@ function classroomStepMarkup(lifecycle) {
 }
 
 function materialCandidates() {
+  const courses = new Map((state.courses || []).map((course) => [course.id, course.title]));
   const rows = [
-    ...(state.sourceMaterials || []).map((item) => ({ id: item.id, title: item.title, date: item.createdAt || item.importedAt || "" })),
-    ...(state.assignments || []).filter((item) => item.source === "google_classroom").map((item) => ({ id: item.id, title: item.title, date: item.classroomUpdatedAt || item.dueDate || "" })),
+    ...(state.sourceMaterials || []).map((item) => ({
+      id: item.id,
+      title: item.title,
+      course: courses.get(item.courseId) || "Academic context",
+      type: item.source === "google_classroom" || item.provider === "google_classroom" ? "Classroom material" : "Uploaded file",
+      date: item.updateTime || item.updatedAt || item.creationTime || item.createdAt || item.dueDate || item.importedAt || "",
+    })),
+    ...(state.assignments || []).filter((item) => item.source === "google_classroom").map((item) => ({
+      id: item.id,
+      title: item.title,
+      course: courses.get(item.courseId) || "Classroom course",
+      type: "Classroom assignment",
+      date: item.classroomUpdatedAt || item.updateTime || item.updatedAt || item.creationTime || item.createdAt || item.dueAt || item.dueDate || item.importedAt || "",
+    })),
   ];
   return rows.sort((left, right) => timestampFor(right.date) - timestampFor(left.date));
 }
@@ -1320,8 +1372,11 @@ function materialsStepMarkup(lifecycle) {
     <p class="product-flow-lead">${classroom ? "Select the newest coursework and materials you want StudentOS to organize." : "Add a few material names now, or continue and add them later."}</p>
     <form id="product-materials-form" class="product-flow-form">
       ${candidates.length ? `<div class="material-choice-list">${candidates.map((item) => `
-        <label class="check-row"><input name="materialIds" type="checkbox" value="${escapeHtml(item.id)}" data-material-label="${escapeHtml(item.title)}" ${draftIds.has(item.id) ? "checked" : ""}><span>${escapeHtml(item.title)}</span></label>
-      `).join("")}</div>` : `<div class="product-empty-state"><strong>No materials are waiting yet</strong><p>You can continue now and add material when your workspace is ready.</p></div>`}
+        <label class="check-row material-choice-row">
+          <input name="materialIds" type="checkbox" value="${escapeHtml(item.id)}" data-material-label="${escapeHtml(item.title)}" ${draftIds.has(item.id) ? "checked" : ""}>
+          <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.course)} · ${escapeHtml(item.type)}${item.date ? ` · ${escapeHtml(formatDate(item.date))}` : ""}</small></span>
+        </label>
+      `).join("")}</div>` : `<div class="product-empty-state"><strong>${classroom ? "No current Classroom coursework found" : "No materials are waiting yet"}</strong><p>${classroom ? "StudentOS did not find current Classroom coursework yet. You can continue and add material later." : "You can continue now and add material when your workspace is ready."}</p></div>`}
       ${classroom ? "" : `<label for="product-material-labels">Materials you may add<textarea id="product-material-labels" name="materialLabels" rows="4" placeholder="For example, Chemistry syllabus&#10;Statistics lecture notes">${escapeHtml(draftLabels.join("\n"))}</textarea></label>`}
       <p class="form-help">You can add or remove materials later from Academic Context.</p>
       <button class="primary-button" type="submit">Continue to setup summary</button>
@@ -1356,21 +1411,18 @@ function setupSummaryMarkup(lifecycle) {
       <div><dt>Selected materials</dt><dd>${escapeHtml(materialLabels.length ? materialLabels.join(", ") : "Add later")}</dd></div>
     </dl>
     <div class="product-form-actions">
-      <button class="primary-button" type="button" data-product-action="confirm-summary">Yes, prepare my workspace</button>
-      <button class="secondary-button" type="button" data-product-action="confirm-summary">Continue with what I have</button>
-      <button class="text-button" type="button" data-product-action="edit-setup" data-target-step="about_you">Edit summary</button>
-      <button class="text-button" type="button" data-product-action="edit-setup" data-target-step="academic_context">Add more details</button>
+      <button class="primary-button" type="button" data-product-action="confirm-summary">Prepare my workspace</button>
+      <button class="secondary-button" type="button" data-product-action="edit-setup" data-target-step="academic_context">Edit details</button>
     </div>
     <div id="product-flow-message" class="result-box" aria-live="polite"></div>
   `;
 }
 
-function preparationStepMarkup(lifecycle) {
-  const started = Boolean(lifecycle.workspacePreparationStartedAt);
+function preparationStepMarkup() {
   return `
     <p class="eyebrow">Preparing Workspace</p>
-    <h2 id="product-flow-title">${started ? "Your workspace is taking shape" : "Ready to prepare your workspace"}</h2>
-    <p class="product-flow-lead">StudentOS will organize what you shared into a useful first day.</p>
+    <h2 id="product-flow-title">Preparing your workspace</h2>
+    <p class="product-flow-lead">StudentOS is organizing what you shared into your first Today view.</p>
     <ul class="preparation-list">
       <li>Reading your academic context</li>
       <li>Organizing your courses</li>
@@ -1378,7 +1430,8 @@ function preparationStepMarkup(lifecycle) {
       <li>Checking upcoming work</li>
       <li>Building your Today view</li>
     </ul>
-    <button class="primary-button" type="button" data-product-action="${started ? "complete-preparation" : "start-preparation"}">${started ? "Continue when ready" : "Prepare workspace"}</button>
+    <div id="product-flow-message" class="result-box" aria-live="polite"></div>
+    <button class="primary-button" type="button" data-product-action="prepare-workspace">Continue to quick tour</button>
   `;
 }
 
@@ -1430,6 +1483,11 @@ function renderProductFlow() {
         <button class="secondary-button product-previous-button" type="button" data-product-action="previous-step">Previous</button>
       </nav>
     `);
+  }
+  renderProductPersistenceStatus();
+  if (step === "materials" && lifecycle.classroomChoice === "classroom" && lifecycle.classroomConnectedAt && !productClassroomRefreshAttempted) {
+    productClassroomRefreshAttempted = true;
+    window.setTimeout(() => refreshClassroomForProductFlow(), 0);
   }
 }
 
@@ -1663,7 +1721,7 @@ function classroomStatusCard() {
     <article class="course-card course-workspace-card classroom-import-card" data-color="sky">
       <header class="course-card-head">
         <div>
-          <span class="workspace-label">Connector workspace</span>
+          <span class="workspace-label">Classroom workspace</span>
           <strong>Google Classroom import</strong>
           <p>${providerEmail ? `Connected as ${escapeHtml(providerEmail)}` : "Classroom planning import"}</p>
         </div>
@@ -2966,8 +3024,192 @@ function productFlowMessage(copy) {
   if (target) setResult(target, `<p>${escapeHtml(copy)}</p>`);
 }
 
-async function transitionProductFlow(action, payload = {}) {
+function renderProductPersistenceStatus() {
+  if (!els.productSaveStatus) return;
+  if (productPersistenceError) {
+    els.productSaveStatus.dataset.state = "error";
+    els.productSaveStatus.textContent = "Some setup changes still need to be saved. StudentOS will retry before preparing your workspace.";
+    return;
+  }
+  if (productPersistenceQueue.length) {
+    els.productSaveStatus.dataset.state = "saving";
+    els.productSaveStatus.textContent = "Saving your setup…";
+    return;
+  }
+  els.productSaveStatus.dataset.state = "saved";
+  els.productSaveStatus.textContent = "";
+}
+
+function localProductStep(lifecycle) {
+  const completed = lifecycle.onboarding?.completedSteps || [];
+  if (lifecycle.dashboardActivatedAt) return "dashboard";
+  if (!completed.includes("about_you")) return "about_you";
+  if (!completed.includes("education_system")) return "education_system";
+  if (!lifecycle.selectedPlanId) return "pricing";
+  if (!lifecycle.accessMode) return "trial_choice";
+  if (!lifecycle.paymentMethodVerifiedAt) return "payment_method";
+  if (!lifecycle.legalConsentCompleteAt) return "legal_consent";
+  const onboardingStep = ONBOARDING_STEPS.slice(2).find((step) => !completed.includes(step));
+  if (onboardingStep) return onboardingStep;
+  if (!lifecycle.classroomChoice || (lifecycle.classroomChoice === "classroom" && !lifecycle.classroomConnectedAt)) return "classroom_setup";
+  if (!lifecycle.materialsSelectedAt) return "materials";
+  if (!lifecycle.setupSummaryReadyAt) return "setup_summary";
+  if (lifecycle.workspaceReadyAt || lifecycle.tutorialOfferedAt) return "tutorial";
+  return "workspace_preparation";
+}
+
+function refreshLocalProductLifecycle(lifecycle) {
+  const derivedNextStep = localProductStep(lifecycle);
+  lifecycle.derivedNextStep = derivedNextStep;
+  lifecycle.nextStep = lifecycle.navigationStep || derivedNextStep;
+  const index = PRODUCT_FLOW_STEPS.indexOf(lifecycle.nextStep);
+  lifecycle.canGoPrevious = index > 0 && !(lifecycle.paymentMethodVerifiedAt && lifecycle.nextStep === "payment_method");
+  lifecycle.onboarding.completedStepCount = lifecycle.onboarding.completedSteps.length;
+  lifecycle.onboarding.progressPercent = Math.round((lifecycle.onboarding.completedSteps.length / ONBOARDING_STEPS.length) * 100);
+}
+
+function applyLocalOnboardingStep(step, answers) {
+  const lifecycle = state.productLifecycle;
+  lifecycle.onboarding.answers[step] = { ...answers };
+  if (!lifecycle.onboarding.completedSteps.includes(step)) lifecycle.onboarding.completedSteps.push(step);
+  lifecycle.onboarding.currentStep = ONBOARDING_STEPS.find((item) => !lifecycle.onboarding.completedSteps.includes(item)) || "complete";
+  if (step === "about_you" && answers.displayName) state.studentProfile.displayName = answers.displayName;
+  if (lifecycle.navigationStep === step) {
+    const [returnStep, ...remaining] = lifecycle.navigationHistory || [];
+    lifecycle.navigationStep = returnStep || null;
+    lifecycle.navigationHistory = remaining;
+  }
+  lifecycle.state = lifecycle.onboarding.currentStep === "complete" ? "classroom_choice_pending" : "onboarding_progress_saved";
+  refreshLocalProductLifecycle(lifecycle);
+  render();
+}
+
+async function postProductPersistence(item) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await api("/api/product-flow", {
+        method: "POST",
+        body: JSON.stringify(item),
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise((resolve) => window.setTimeout(resolve, 160 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
+function runProductPersistenceQueue() {
+  if (productPersistenceRunner) return productPersistenceRunner;
+  productPersistenceRunner = (async () => {
+    productPersistenceError = null;
+    renderProductPersistenceStatus();
+    while (productPersistenceQueue.length) {
+      try {
+        await postProductPersistence(productPersistenceQueue[0]);
+        productPersistenceQueue.shift();
+        renderProductPersistenceStatus();
+      } catch (error) {
+        productPersistenceError = error;
+        renderProductPersistenceStatus();
+        break;
+      }
+    }
+  })().finally(() => {
+    productPersistenceRunner = null;
+    renderProductPersistenceStatus();
+  });
+  return productPersistenceRunner;
+}
+
+function enqueueProductPersistence(action, payload) {
+  productPersistenceQueue.push({ action, payload: JSON.parse(JSON.stringify(payload || {})) });
+  renderProductPersistenceStatus();
+  runProductPersistenceQueue();
+}
+
+async function flushProductPersistence() {
+  await runProductPersistenceQueue();
+  if (productPersistenceError || productPersistenceQueue.length) {
+    await runProductPersistenceQueue();
+  }
+  if (productPersistenceError || productPersistenceQueue.length) {
+    throw new Error("StudentOS could not save your latest setup changes. Check your connection and try again before preparing your workspace.");
+  }
+}
+
+function renderProductUploadStatus() {
+  const target = document.getElementById("product-upload-status");
+  if (!target) return;
+  target.innerHTML = [...productUploadResults.values()].map((item) => `
+    <div class="academic-upload-item ${escapeHtml(item.status)}"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.copy)}</span></div>
+  `).join("");
+}
+
+function productFileKey(file) {
+  return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
+async function uploadAcademicContextFile(file) {
+  const key = productFileKey(file);
+  productUploadResults.set(key, { name: file.name, status: "adding", copy: "Adding to your academic context…" });
+  productUploadsPending += 1;
+  renderProductUploadStatus();
   try {
+    await flushProductPersistence();
+    const form = new FormData();
+    form.set("title", file.name);
+    form.set("file", file);
+    const result = await api("/api/sources/upload", { method: "POST", body: form });
+    const material = result.material;
+    if (!state.sourceMaterials.some((item) => item.id === material.id)) {
+      state.sourceMaterials.push({ ...material, sourceType: "uploaded_file", createdAt: new Date().toISOString() });
+    }
+    const lifecycle = state.productLifecycle;
+    lifecycle.materialsDraft ||= { materialIds: [], materialLabels: [] };
+    if (!lifecycle.materialsDraft.materialIds.includes(material.id)) lifecycle.materialsDraft.materialIds.push(material.id);
+    if (!lifecycle.materialsDraft.materialLabels.includes(material.title)) lifecycle.materialsDraft.materialLabels.push(material.title);
+    productUploadResults.set(key, {
+      name: file.name,
+      status: "added",
+      copy: "Added to your academic context.",
+      materialId: material.id,
+      materialTitle: material.title,
+    });
+    if (lifecycle.nextStep === "materials") renderProductFlow();
+  } catch (error) {
+    productUploadResults.set(key, { name: file.name, status: "failed", copy: error.message || "This file could not be added. You can try again." });
+  } finally {
+    productUploadsPending -= 1;
+    renderProductUploadStatus();
+  }
+}
+
+function queueAcademicContextFiles(files) {
+  for (const file of files) {
+    productUploadTail = productUploadTail.then(() => uploadAcademicContextFile(file));
+  }
+}
+
+async function flushProductUploads() {
+  while (productUploadsPending || productUploadTail) {
+    const current = productUploadTail;
+    await current;
+    if (current === productUploadTail && productUploadsPending === 0) break;
+  }
+}
+
+async function flushProductSetupWrites() {
+  await flushProductPersistence();
+  await flushProductUploads();
+  await flushProductPersistence();
+}
+
+async function transitionProductFlow(action, payload = {}, { flushPending = true } = {}) {
+  try {
+    if (flushPending) await flushProductPersistence();
     if (els.productFlowAskResponse) els.productFlowAskResponse.hidden = true;
     els.productFlowAskBtn?.setAttribute("aria-expanded", "false");
     const result = await api("/api/product-flow", {
@@ -3010,24 +3252,32 @@ function legalProductPayload(form) {
 
 function materialProductPayload(form) {
   const checked = [...form.querySelectorAll("input[name='materialIds']:checked")];
+  const representedIds = new Set([...form.querySelectorAll("input[name='materialIds']")].map((input) => input.value));
   const typedLabels = String(new FormData(form).get("materialLabels") || "")
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
-  return {
-    materialIds: checked.map((input) => input.value),
-    materialLabels: [...checked.map((input) => input.dataset.materialLabel || "Selected material"), ...typedLabels],
-  };
+  const materialIds = checked.map((input) => input.value);
+  const materialLabels = [...checked.map((input) => input.dataset.materialLabel || "Selected material"), ...typedLabels];
+  for (const upload of productUploadResults.values()) {
+    if (upload.status === "added" && upload.materialId && !representedIds.has(upload.materialId)) {
+      materialIds.push(upload.materialId);
+      materialLabels.push(upload.materialTitle || upload.name);
+    }
+  }
+  return { materialIds: [...new Set(materialIds)], materialLabels: [...new Set(materialLabels)] };
 }
 
 async function saveCurrentProductFlowDraft() {
+  await flushProductSetupWrites();
   const step = state?.productLifecycle?.nextStep;
   let payload = null;
   const onboardingForm = document.getElementById("product-onboarding-form");
   if (onboardingForm && onboardingForm.dataset.step === step) {
     payload = {
       step,
-      answers: Object.fromEntries([...new FormData(onboardingForm).entries()].filter(([key]) => key !== "skipStep")),
+      answers: Object.fromEntries([...new FormData(onboardingForm).entries()]
+        .filter(([key, value]) => key !== "skipStep" && typeof value === "string")),
     };
   } else if (step === "legal_consent") {
     const legalForm = document.getElementById("product-legal-form");
@@ -3056,9 +3306,27 @@ async function connectClassroomFromProductFlow() {
   }
   if (result.connector?.connected) {
     await loadBootstrap({ showLoading: false });
+    if (!productClassroomRefreshAttempted) await refreshClassroomForProductFlow();
     return;
   }
   productFlowMessage(result.message || "Classroom is already connected. Refresh StudentOS to continue.");
+}
+
+async function refreshClassroomForProductFlow() {
+  productClassroomRefreshAttempted = true;
+  productFlowMessage("Checking for current Classroom coursework…");
+  try {
+    const result = await api("/api/classroom/sync", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    state = result.state || state;
+    classroomStatus = { connector: result.connector, syncSummary: result.summary, syncHistory: result.connector?.syncHistory || [] };
+    classroomStatusLoaded = true;
+    render();
+  } catch (error) {
+    productFlowMessage(error.message || "StudentOS could not refresh Classroom coursework yet. You can continue and add material later.");
+  }
 }
 
 async function handleProductFlowClick(event) {
@@ -3070,11 +3338,19 @@ async function handleProductFlowClick(event) {
       if (action === "select-plan") await transitionProductFlow("select_plan", { planId: button.dataset.planId });
       else if (action === "choose-access") await transitionProductFlow("choose_access", { accessMode: button.dataset.accessMode });
       else if (action === "verify-payment") await transitionProductFlow("verify_payment_method_placeholder");
-      else if (action === "choose-path") await transitionProductFlow("choose_classroom_path", { choice: button.dataset.choice });
+      else if (action === "choose-path") {
+        productClassroomRefreshAttempted = false;
+        await transitionProductFlow("choose_classroom_path", { choice: button.dataset.choice });
+      }
       else if (action === "connect-classroom") await connectClassroomFromProductFlow();
-      else if (action === "confirm-summary") await transitionProductFlow("confirm_setup_summary");
-      else if (action === "start-preparation") await transitionProductFlow("start_workspace_preparation");
-      else if (action === "complete-preparation") await transitionProductFlow("complete_workspace_preparation");
+      else if (action === "confirm-summary") {
+        await flushProductSetupWrites();
+        await transitionProductFlow("confirm_setup_summary");
+      }
+      else if (action === "prepare-workspace") {
+        await flushProductSetupWrites();
+        await transitionProductFlow("prepare_workspace");
+      }
       else if (action === "choose-tutorial") await transitionProductFlow("choose_tutorial", { choice: button.dataset.choice });
       else if (action === "complete-tutorial") await transitionProductFlow("complete_tutorial");
       else if (action === "edit-setup") await transitionProductFlow("edit_setup", { targetStep: button.dataset.targetStep });
@@ -3101,22 +3377,45 @@ async function handleProductFlowSubmit(event) {
       return;
     }
     if (form.id === "product-onboarding-form") {
-      const answers = Object.fromEntries([...new FormData(form).entries()].filter(([key]) => key !== "skipStep"));
+      const answers = Object.fromEntries([...new FormData(form).entries()]
+        .filter(([key, value]) => key !== "skipStep" && typeof value === "string"));
       if (event.submitter?.value === "true") {
         for (const key of Object.keys(answers)) answers[key] = "";
       }
-      await withButtonLoading(event.submitter, "Saving...", () => transitionProductFlow("save_onboarding_step", {
-        step: form.dataset.step,
-        answers,
-      }));
+      const step = form.dataset.step;
+      applyLocalOnboardingStep(step, answers);
+      enqueueProductPersistence("save_onboarding_step", { step, answers });
       return;
     }
     if (form.id === "product-materials-form") {
-      await withButtonLoading(event.submitter, "Saving...", () => transitionProductFlow("save_materials", materialProductPayload(form)));
+      const pendingPayload = materialProductPayload(form);
+      await withButtonLoading(event.submitter, "Saving...", async () => {
+        await flushProductSetupWrites();
+        const uploadedPayload = materialProductPayload(form);
+        await transitionProductFlow("save_materials", {
+          materialIds: [...new Set([...pendingPayload.materialIds, ...uploadedPayload.materialIds])],
+          materialLabels: [...new Set([...pendingPayload.materialLabels, ...uploadedPayload.materialLabels])],
+        });
+      });
     }
   } catch {
     // transitionProductFlow has already shown student-safe copy.
   }
+}
+
+function handleProductFlowInput(event) {
+  const form = event.target.closest("#product-onboarding-form");
+  if (!form || event.target.type === "file" || !event.target.name) return;
+  const step = form.dataset.step;
+  const lifecycle = state?.productLifecycle;
+  if (!lifecycle?.onboarding?.answers?.[step]) lifecycle.onboarding.answers[step] = {};
+  lifecycle.onboarding.answers[step][event.target.name] = event.target.value;
+}
+
+function handleProductFlowChange(event) {
+  if (event.target.id !== "product-academic-files") return;
+  queueAcademicContextFiles([...event.target.files]);
+  event.target.value = "";
 }
 
 function toggleProductFlowAsk() {
@@ -3139,6 +3438,8 @@ function wireEvents() {
   els.aiScrim.addEventListener("click", () => closeAiDrawer());
   els.productFlowContent?.addEventListener("click", handleProductFlowClick);
   els.productFlowContent?.addEventListener("submit", handleProductFlowSubmit);
+  els.productFlowContent?.addEventListener("input", handleProductFlowInput);
+  els.productFlowContent?.addEventListener("change", handleProductFlowChange);
   els.productFlowAskBtn?.addEventListener("click", toggleProductFlowAsk);
   els.productFlowLogoutBtn?.addEventListener("click", () => {
     logout().catch((error) => productFlowMessage(error.message));
