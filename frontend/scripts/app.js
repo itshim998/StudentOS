@@ -1067,12 +1067,12 @@ function list(items = []) {
 }
 
 const PRODUCT_FLOW_STEPS = Object.freeze([
+  "about_you",
+  "education_system",
   "pricing",
   "trial_choice",
   "payment_method",
   "legal_consent",
-  "about_you",
-  "education_system",
   "daily_schedule",
   "exam_pattern",
   "academic_context",
@@ -1085,17 +1085,18 @@ const PRODUCT_FLOW_STEPS = Object.freeze([
 
 const ONBOARDING_PAGE_COPY = Object.freeze({
   about_you: {
-    title: "About You",
-    copy: "Let’s start with what you would like StudentOS to call you.",
-    fields: [{ name: "displayName", label: "Your name", required: true, placeholder: "Your name" }],
+    title: "What is your name?",
+    copy: "This is the only required profile question. You can adjust everything else later.",
+    fields: [{ name: "displayName", label: "Your name", required: true, placeholder: "Enter your name" }],
   },
   education_system: {
-    title: "Education System",
-    copy: "Share the academic setting you are working in. You can refine this later.",
+    title: "Academic identity",
+    copy: "A little context helps StudentOS shape your workspace. Every field on this page is optional.",
     fields: [
-      { name: "level", label: "Level or year", placeholder: "For example, Grade 12 or second year" },
       { name: "institution", label: "School, college, or institution", placeholder: "Optional" },
-      { name: "course", label: "Stream or course", placeholder: "Optional" },
+      { name: "level", label: "Level", placeholder: "For example, Grade 12 or undergraduate" },
+      { name: "stream", label: "Stream or course", placeholder: "Optional" },
+      { name: "yearSemester", label: "Year or semester", placeholder: "Optional" },
     ],
   },
   daily_schedule: {
@@ -1174,7 +1175,6 @@ function trialChoiceMarkup(lifecycle) {
         <span>Continue directly with your selected plan.</span>
       </button>
     </div>
-    <button class="text-button" type="button" data-product-action="back-to-pricing">Choose a different plan</button>
   `;
 }
 
@@ -1186,14 +1186,14 @@ function paymentStepMarkup(lifecycle) {
     <p class="product-flow-lead">StudentOS verifies your payment method before preparing your workspace. This access step does not claim that a payment has been completed.</p>
     <div class="product-note-card">
       <strong>No charge is created here</strong>
-      <p>${enabled ? "For current development, you can safely continue through the access check without a real charge or recurring mandate." : "This access step is not available in this environment yet. Your workspace will stay locked until verified billing is enabled."}</p>
+      <p>${enabled ? "You can safely continue through this access check without a real charge or recurring payment instruction." : "This access step is not available yet. Your workspace will stay locked until payment verification is ready."}</p>
     </div>
-    <button class="primary-button" type="button" data-product-action="verify-payment" ${enabled ? "" : "disabled"}>Continue in development mode</button>
+    <button class="primary-button" type="button" data-product-action="verify-payment" ${enabled ? "" : "disabled"}>Continue setup</button>
     <p class="form-help">Selected start: ${escapeHtml(lifecycle.accessMode === "trial" ? "7-day Trial Mode" : productPlanName(lifecycle.selectedPlanId))}</p>
   `;
 }
 
-function legalStepMarkup() {
+function legalStepMarkup(lifecycle) {
   const agreements = [
     ["termsOfService", "I agree to the Terms of Service."],
     ["privacyPolicy", "I agree to the Privacy Policy."],
@@ -1206,6 +1206,8 @@ function legalStepMarkup() {
     ["responsibleUse", "I agree to use StudentOS responsibly and not for academic misconduct."],
     ["aiAccuracy", "I understand AI-generated outputs may contain mistakes and should be checked before use."],
   ];
+  const draft = lifecycle.legalConsentDraft || {};
+  const draftConsents = draft.consents || lifecycle.legalConsents || {};
   return `
     <p class="eyebrow">Required agreement</p>
     <h2 id="product-flow-title">Review before we build your workspace</h2>
@@ -1213,13 +1215,13 @@ function legalStepMarkup() {
     <form id="product-legal-form" class="product-flow-form">
       <fieldset class="legal-check-list">
         <legend>Terms, privacy, and responsible use</legend>
-        ${agreements.map(([name, label]) => `<label class="check-row"><input name="${name}" type="checkbox" required><span>${escapeHtml(label)}</span></label>`).join("")}
+        ${agreements.map(([name, label]) => `<label class="check-row"><input name="${name}" type="checkbox" required ${draftConsents[name] ? "checked" : ""}><span>${escapeHtml(label)}</span></label>`).join("")}
       </fieldset>
       <fieldset class="age-gate-list">
         <legend>Age and consent</legend>
-        <label class="check-row"><input name="ageGate" type="radio" value="adult" required><span>I am 18 or older.</span></label>
-        <label class="check-row"><input name="ageGate" type="radio" value="minor" required><span>I am under 18 and have parent/guardian consent.</span></label>
-        <label class="check-row guardian-ack"><input name="guardianConsentAcknowledged" type="checkbox"><span>If I am under 18, I confirm my parent or guardian has reviewed and agreed to this setup.</span></label>
+        <label class="check-row"><input name="ageGate" type="radio" value="adult" required ${draft.ageGate === "adult" || lifecycle.ageGate === "adult" ? "checked" : ""}><span>I am 18 or older.</span></label>
+        <label class="check-row"><input name="ageGate" type="radio" value="minor" required ${draft.ageGate === "minor" || lifecycle.ageGate === "minor" ? "checked" : ""}><span>I am under 18 and have parent/guardian consent.</span></label>
+        <label class="check-row guardian-ack"><input name="guardianConsentAcknowledged" type="checkbox" ${draft.guardianConsentAcknowledged || lifecycle.guardianConsentAcknowledged ? "checked" : ""}><span>If I am under 18, I confirm my parent or guardian has reviewed and agreed to this setup.</span></label>
       </fieldset>
       <div id="product-flow-message" class="result-box" aria-live="polite"></div>
       <button class="primary-button" type="submit">Agree and continue</button>
@@ -1230,18 +1232,37 @@ function legalStepMarkup() {
 function onboardingStepMarkup(lifecycle, step) {
   const page = ONBOARDING_PAGE_COPY[step];
   const saved = lifecycle.onboarding?.answers?.[step] || {};
+  if (step === "about_you") {
+    return `
+      <div class="product-name-step">
+        <p class="eyebrow">Welcome to StudentOS</p>
+        <h2 id="product-flow-title">What is your name?</h2>
+        <p class="product-flow-lead">${escapeHtml(page.copy)}</p>
+        <form id="product-onboarding-form" class="product-flow-form" data-step="about_you">
+          <label for="product-display-name">Your name</label>
+          <input id="product-display-name" name="displayName" type="text" value="${escapeHtml(saved.displayName || state.studentProfile?.displayName || "")}" placeholder="Enter your name" autocomplete="name" required autofocus>
+          <div id="product-flow-message" class="result-box" aria-live="polite"></div>
+          <button class="primary-button" type="submit">Continue</button>
+        </form>
+      </div>
+    `;
+  }
   return `
     <p class="eyebrow">Guided setup</p>
     <h2 id="product-flow-title">${escapeHtml(page.title)}</h2>
     <p class="product-flow-lead">${escapeHtml(page.copy)}</p>
-    <form id="product-onboarding-form" class="product-flow-form" data-step="${escapeHtml(step)}">
-      ${page.fields.map((field) => `
-        <label>${escapeHtml(field.label)}
+    <form id="product-onboarding-form" class="product-flow-form ${step === "education_system" ? "academic-identity-form" : ""}" data-step="${escapeHtml(step)}">
+      <div class="${step === "education_system" ? "academic-identity-grid" : "product-field-stack"}">
+      ${page.fields.map((field) => {
+        const fieldId = `product-${step}-${field.name}`;
+        return `
+        <label for="${escapeHtml(fieldId)}">${escapeHtml(field.label)}
           ${field.multiline
-            ? `<textarea name="${escapeHtml(field.name)}" rows="4" placeholder="${escapeHtml(field.placeholder)}">${escapeHtml(saved[field.name] || "")}</textarea>`
-            : `<input name="${escapeHtml(field.name)}" type="text" value="${escapeHtml(saved[field.name] || (field.name === "displayName" ? state.studentProfile?.displayName || "" : ""))}" placeholder="${escapeHtml(field.placeholder)}" ${field.required ? "required" : ""}>`}
+            ? `<textarea id="${escapeHtml(fieldId)}" name="${escapeHtml(field.name)}" rows="4" placeholder="${escapeHtml(field.placeholder)}">${escapeHtml(saved[field.name] || "")}</textarea>`
+            : `<input id="${escapeHtml(fieldId)}" name="${escapeHtml(field.name)}" type="text" value="${escapeHtml(saved[field.name] || "")}" placeholder="${escapeHtml(field.placeholder)}" ${field.required ? "required" : ""}>`}
         </label>
-      `).join("")}
+      `; }).join("")}
+      </div>
       <div id="product-flow-message" class="result-box" aria-live="polite"></div>
       <div class="product-form-actions">
         <button class="primary-button" type="submit">Save and continue</button>
@@ -1290,15 +1311,18 @@ function materialCandidates() {
 function materialsStepMarkup(lifecycle) {
   const candidates = materialCandidates();
   const classroom = lifecycle.classroomChoice === "classroom";
+  const draft = lifecycle.materialsDraft || {};
+  const draftIds = new Set((draft.materialIds || []).length ? draft.materialIds : lifecycle.selectedMaterialIds || []);
+  const draftLabels = (draft.materialLabels || []).length ? draft.materialLabels : lifecycle.selectedMaterialLabels || [];
   return `
     <p class="eyebrow">Select academic materials</p>
     <h2 id="product-flow-title">Choose what belongs in your first workspace</h2>
     <p class="product-flow-lead">${classroom ? "Select the newest coursework and materials you want StudentOS to organize." : "Add a few material names now, or continue and add them later."}</p>
     <form id="product-materials-form" class="product-flow-form">
       ${candidates.length ? `<div class="material-choice-list">${candidates.map((item) => `
-        <label class="check-row"><input name="materialIds" type="checkbox" value="${escapeHtml(item.id)}" data-material-label="${escapeHtml(item.title)}"><span>${escapeHtml(item.title)}</span></label>
+        <label class="check-row"><input name="materialIds" type="checkbox" value="${escapeHtml(item.id)}" data-material-label="${escapeHtml(item.title)}" ${draftIds.has(item.id) ? "checked" : ""}><span>${escapeHtml(item.title)}</span></label>
       `).join("")}</div>` : `<div class="product-empty-state"><strong>No materials are waiting yet</strong><p>You can continue now and add material when your workspace is ready.</p></div>`}
-      ${classroom ? "" : `<label>Materials you may add<textarea name="materialLabels" rows="4" placeholder="For example, Chemistry syllabus&#10;Statistics lecture notes"></textarea></label>`}
+      ${classroom ? "" : `<label for="product-material-labels">Materials you may add<textarea id="product-material-labels" name="materialLabels" rows="4" placeholder="For example, Chemistry syllabus&#10;Statistics lecture notes">${escapeHtml(draftLabels.join("\n"))}</textarea></label>`}
       <p class="form-help">You can add or remove materials later from Academic Context.</p>
       <button class="primary-button" type="submit">Continue to setup summary</button>
     </form>
@@ -1323,7 +1347,8 @@ function setupSummaryMarkup(lifecycle) {
       <div><dt>Name</dt><dd>${escapeHtml(state.studentProfile?.displayName || "Student")}</dd></div>
       <div><dt>Level</dt><dd>${escapeHtml(summaryValue(lifecycle, "level"))}</dd></div>
       <div><dt>Institution</dt><dd>${escapeHtml(summaryValue(lifecycle, "institution"))}</dd></div>
-      <div><dt>Stream or course</dt><dd>${escapeHtml(summaryValue(lifecycle, "course"))}</dd></div>
+      <div><dt>Stream or course</dt><dd>${escapeHtml(summaryValue(lifecycle, "stream", summaryValue(lifecycle, "course")))}</dd></div>
+      <div><dt>Year or semester</dt><dd>${escapeHtml(summaryValue(lifecycle, "yearSemester"))}</dd></div>
       <div><dt>Subjects or courses</dt><dd>${escapeHtml(summaryValue(lifecycle, "subjects"))}</dd></div>
       <div><dt>Exam pattern</dt><dd>${escapeHtml(summaryValue(lifecycle, "examPattern"))}</dd></div>
       <div><dt>Timetable</dt><dd>${escapeHtml(summaryValue(lifecycle, "schedule"))}</dd></div>
@@ -1387,10 +1412,11 @@ function renderProductFlow() {
   if (!lifecycle || !els.productFlowContent) return;
   renderProductProgress(lifecycle);
   const step = lifecycle.nextStep;
+  els.productFlowContent.dataset.productStep = step;
   if (step === "pricing") els.productFlowContent.innerHTML = pricingStepMarkup();
   else if (step === "trial_choice") els.productFlowContent.innerHTML = trialChoiceMarkup(lifecycle);
   else if (step === "payment_method") els.productFlowContent.innerHTML = paymentStepMarkup(lifecycle);
-  else if (step === "legal_consent") els.productFlowContent.innerHTML = legalStepMarkup();
+  else if (step === "legal_consent") els.productFlowContent.innerHTML = legalStepMarkup(lifecycle);
   else if (ONBOARDING_PAGE_COPY[step]) els.productFlowContent.innerHTML = onboardingStepMarkup(lifecycle, step);
   else if (step === "classroom_setup") els.productFlowContent.innerHTML = classroomStepMarkup(lifecycle);
   else if (step === "materials") els.productFlowContent.innerHTML = materialsStepMarkup(lifecycle);
@@ -1398,6 +1424,13 @@ function renderProductFlow() {
   else if (step === "workspace_preparation") els.productFlowContent.innerHTML = preparationStepMarkup(lifecycle);
   else if (step === "tutorial") els.productFlowContent.innerHTML = tutorialStepMarkup(lifecycle);
   else els.productFlowContent.innerHTML = `<p class="eyebrow">Setup</p><h2 id="product-flow-title">Continue your StudentOS setup</h2><p>Your next step is ready.</p>`;
+  if (lifecycle.canGoPrevious) {
+    els.productFlowContent.insertAdjacentHTML("beforeend", `
+      <nav class="product-step-navigation" aria-label="Setup navigation">
+        <button class="secondary-button product-previous-button" type="button" data-product-action="previous-step">Previous</button>
+      </nav>
+    `);
+  }
 }
 
 function render() {
@@ -2975,6 +3008,42 @@ function legalProductPayload(form) {
   };
 }
 
+function materialProductPayload(form) {
+  const checked = [...form.querySelectorAll("input[name='materialIds']:checked")];
+  const typedLabels = String(new FormData(form).get("materialLabels") || "")
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return {
+    materialIds: checked.map((input) => input.value),
+    materialLabels: [...checked.map((input) => input.dataset.materialLabel || "Selected material"), ...typedLabels],
+  };
+}
+
+async function saveCurrentProductFlowDraft() {
+  const step = state?.productLifecycle?.nextStep;
+  let payload = null;
+  const onboardingForm = document.getElementById("product-onboarding-form");
+  if (onboardingForm && onboardingForm.dataset.step === step) {
+    payload = {
+      step,
+      answers: Object.fromEntries([...new FormData(onboardingForm).entries()].filter(([key]) => key !== "skipStep")),
+    };
+  } else if (step === "legal_consent") {
+    const legalForm = document.getElementById("product-legal-form");
+    if (legalForm) payload = { step, ...legalProductPayload(legalForm) };
+  } else if (step === "materials") {
+    const materialsForm = document.getElementById("product-materials-form");
+    if (materialsForm) payload = { step, ...materialProductPayload(materialsForm) };
+  }
+  if (!payload) return;
+  const result = await api("/api/product-flow", {
+    method: "POST",
+    body: JSON.stringify({ action: "save_step_draft", payload }),
+  });
+  state = result.state;
+}
+
 async function connectClassroomFromProductFlow() {
   productFlowMessage("Preparing the Classroom connection...");
   const result = await api("/api/classroom/oauth/start", {
@@ -2999,7 +3068,6 @@ async function handleProductFlowClick(event) {
   try {
     await withButtonLoading(button, "Saving...", async () => {
       if (action === "select-plan") await transitionProductFlow("select_plan", { planId: button.dataset.planId });
-      else if (action === "back-to-pricing") await transitionProductFlow("reset_plan");
       else if (action === "choose-access") await transitionProductFlow("choose_access", { accessMode: button.dataset.accessMode });
       else if (action === "verify-payment") await transitionProductFlow("verify_payment_method_placeholder");
       else if (action === "choose-path") await transitionProductFlow("choose_classroom_path", { choice: button.dataset.choice });
@@ -3010,6 +3078,10 @@ async function handleProductFlowClick(event) {
       else if (action === "choose-tutorial") await transitionProductFlow("choose_tutorial", { choice: button.dataset.choice });
       else if (action === "complete-tutorial") await transitionProductFlow("complete_tutorial");
       else if (action === "edit-setup") await transitionProductFlow("edit_setup", { targetStep: button.dataset.targetStep });
+      else if (action === "previous-step") {
+        await saveCurrentProductFlowDraft();
+        await transitionProductFlow("navigate_previous");
+      }
     }, {
       timeoutTarget: document.getElementById("product-flow-message"),
       timeoutCopy: "Saving this setup step is taking longer than expected. Please try again.",
@@ -3040,12 +3112,7 @@ async function handleProductFlowSubmit(event) {
       return;
     }
     if (form.id === "product-materials-form") {
-      const checked = [...form.querySelectorAll("input[name='materialIds']:checked")];
-      const typedLabels = String(new FormData(form).get("materialLabels") || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
-      await withButtonLoading(event.submitter, "Saving...", () => transitionProductFlow("save_materials", {
-        materialIds: checked.map((input) => input.value),
-        materialLabels: [...checked.map((input) => input.dataset.materialLabel || "Selected material"), ...typedLabels],
-      }));
+      await withButtonLoading(event.submitter, "Saving...", () => transitionProductFlow("save_materials", materialProductPayload(form)));
     }
   } catch {
     // transitionProductFlow has already shown student-safe copy.

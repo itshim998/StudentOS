@@ -121,6 +121,43 @@ async function expectNoVisibleExternalBranding(page, label) {
   expect(visibleText, `${label} should not expose external provider branding`).not.toMatch(blocked);
 }
 
+async function expectNoLifecycleTechnicalCopy(page, label) {
+  const visibleText = await page.locator("#product-flow-shell").innerText();
+  const blocked = /\b(Supabase|Groq|Pollinations|Gemini|provider|model|token|vector|embedding|backend|mock|demo response|OAuth|connector)\b/i;
+  expect(visibleText, `${label} should use student-facing product copy`).not.toMatch(blocked);
+}
+
+async function expectReadableContrast(page, selector, label, { pseudo = "", minimum = 4.5 } = {}) {
+  const result = await page.locator(selector).first().evaluate((element, options) => {
+    function rgba(value) {
+      const parts = String(value).match(/[\d.]+/g)?.map(Number) || [];
+      return { r: parts[0] || 0, g: parts[1] || 0, b: parts[2] || 0, a: parts.length > 3 ? parts[3] : 1 };
+    }
+    function channel(value) {
+      const normalized = value / 255;
+      return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+    }
+    function luminance(color) {
+      return (0.2126 * channel(color.r)) + (0.7152 * channel(color.g)) + (0.0722 * channel(color.b));
+    }
+    const foregroundValue = getComputedStyle(element, options.pseudo || null).color;
+    let backgroundValue = "rgb(255, 255, 255)";
+    for (let node = element; node; node = node.parentElement) {
+      const candidate = getComputedStyle(node).backgroundColor;
+      if (rgba(candidate).a > 0.01) {
+        backgroundValue = candidate;
+        break;
+      }
+    }
+    const foreground = rgba(foregroundValue);
+    const background = rgba(backgroundValue);
+    const light = Math.max(luminance(foreground), luminance(background));
+    const dark = Math.min(luminance(foreground), luminance(background));
+    return { ratio: (light + 0.05) / (dark + 0.05), foregroundValue, backgroundValue };
+  }, { pseudo });
+  expect(result.ratio, `${label}: ${JSON.stringify(result)}`).toBeGreaterThanOrEqual(minimum);
+}
+
 const CLASSROOM_DEVELOPER_COPY = /Classroom import unavailable|Google Classroom import is disabled|no write scopes|no writeback|try again|Read-only Classroom import|Token storage|Scopes:/i;
 
 async function expectNoClassroomDeveloperCopy(page, label) {
@@ -262,12 +299,14 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
     accessMode: null,
     paymentMethodVerifiedAt: null,
     legalConsentCompleteAt: null,
+    legalConsentDraft: {},
     onboarding: { currentStep: "about_you", completedSteps: [], answers: {}, stepCount: 5, completedStepCount: 0, progressPercent: 0 },
     classroomChoice: null,
     classroomConnectedAt: null,
     manualSetupSelectedAt: null,
     selectedMaterialIds: [],
     selectedMaterialLabels: [],
+    materialsDraft: { materialIds: [], materialLabels: [] },
     materialsSelectedAt: null,
     setupSummaryReadyAt: null,
     workspacePreparationStartedAt: null,
@@ -275,7 +314,11 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
     tutorialOfferedAt: null,
     tutorialChoice: null,
     dashboardActivatedAt: null,
-    nextStep: "pricing",
+    navigationStep: null,
+    navigationHistory: [],
+    nextStep: "about_you",
+    derivedNextStep: "about_you",
+    canGoPrevious: false,
     paymentMethodVerified: false,
     legalConsentComplete: false,
     workspaceReady: false,
@@ -293,6 +336,59 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
     productLifecycle: lifecycle,
   };
   const onboardingSteps = ["about_you", "education_system", "daily_schedule", "exam_pattern", "academic_context"];
+  const flowSteps = [
+    "about_you", "education_system", "pricing", "trial_choice", "payment_method", "legal_consent",
+    "daily_schedule", "exam_pattern", "academic_context", "classroom_setup", "materials", "setup_summary",
+    "workspace_preparation", "tutorial",
+  ];
+
+  function derivedStep() {
+    if (lifecycle.dashboardActivatedAt) return "dashboard";
+    if (!lifecycle.onboarding.completedSteps.includes("about_you")) return "about_you";
+    if (!lifecycle.onboarding.completedSteps.includes("education_system")) return "education_system";
+    if (!lifecycle.selectedPlanId) return "pricing";
+    if (!lifecycle.accessMode) return "trial_choice";
+    if (!lifecycle.paymentMethodVerifiedAt) return "payment_method";
+    if (!lifecycle.legalConsentCompleteAt) return "legal_consent";
+    const remainingOnboarding = onboardingSteps.slice(2).find((step) => !lifecycle.onboarding.completedSteps.includes(step));
+    if (remainingOnboarding) return remainingOnboarding;
+    if (!lifecycle.classroomChoice || (lifecycle.classroomChoice === "classroom" && !lifecycle.classroomConnectedAt)) return "classroom_setup";
+    if (!lifecycle.materialsSelectedAt) return "materials";
+    if (!lifecycle.setupSummaryReadyAt) return "setup_summary";
+    if (lifecycle.workspaceReadyAt) return "tutorial";
+    return "workspace_preparation";
+  }
+
+  function previousStep(currentStep) {
+    const index = flowSteps.indexOf(currentStep);
+    if (index <= 0) return null;
+    const previous = flowSteps[index - 1];
+    if (lifecycle.paymentMethodVerifiedAt && flowSteps.indexOf(previous) < flowSteps.indexOf("payment_method")) return null;
+    return previous;
+  }
+
+  function refreshLifecycle() {
+    lifecycle.derivedNextStep = derivedStep();
+    lifecycle.nextStep = lifecycle.navigationStep || lifecycle.derivedNextStep;
+    lifecycle.canGoPrevious = Boolean(previousStep(lifecycle.nextStep));
+    lifecycle.paymentMethodVerified = Boolean(lifecycle.paymentMethodVerifiedAt);
+    lifecycle.legalConsentComplete = Boolean(lifecycle.legalConsentCompleteAt);
+    lifecycle.workspaceReady = Boolean(lifecycle.workspaceReadyAt);
+    lifecycle.dashboardActive = Boolean(lifecycle.dashboardActivatedAt);
+    lifecycle.onboarding.completedStepCount = lifecycle.onboarding.completedSteps.length;
+    lifecycle.onboarding.progressPercent = Math.round((lifecycle.onboarding.completedSteps.length / onboardingSteps.length) * 100);
+  }
+
+  function finishStep(step) {
+    if (lifecycle.navigationStep === step) {
+      const [returnStep, ...remaining] = lifecycle.navigationHistory;
+      lifecycle.navigationStep = returnStep || null;
+      lifecycle.navigationHistory = remaining;
+    }
+    refreshLifecycle();
+  }
+
+  refreshLifecycle();
 
   await page.addInitScript(() => {
     sessionStorage.setItem("studentos.auth.session", JSON.stringify({
@@ -320,71 +416,74 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
     const request = route.request().postDataJSON();
     const payload = request.payload || {};
     const timestamp = "2026-06-27T10:00:00.000Z";
-    if (request.action === "select_plan") {
+    if (request.action === "save_step_draft") {
+      if (onboardingSteps.includes(payload.step)) lifecycle.onboarding.answers[payload.step] = payload.answers || {};
+      else if (payload.step === "legal_consent") lifecycle.legalConsentDraft = payload;
+      else if (payload.step === "materials") lifecycle.materialsDraft = payload;
+      refreshLifecycle();
+    } else if (request.action === "navigate_previous") {
+      const previous = previousStep(lifecycle.nextStep);
+      lifecycle.navigationHistory = [lifecycle.nextStep, ...lifecycle.navigationHistory];
+      lifecycle.navigationStep = previous;
+      refreshLifecycle();
+    } else if (request.action === "select_plan") {
       lifecycle.selectedPlanId = payload.planId;
       lifecycle.state = "plan_selected";
-      lifecycle.nextStep = "trial_choice";
-    } else if (request.action === "reset_plan") {
-      lifecycle.selectedPlanId = null;
-      lifecycle.state = "signed_up";
-      lifecycle.nextStep = "pricing";
+      lifecycle.accessMode = null;
+      finishStep("pricing");
     } else if (request.action === "choose_access") {
       lifecycle.accessMode = payload.accessMode;
       lifecycle.state = payload.accessMode === "trial" ? "trial_selected" : "paid_plan_selected";
-      lifecycle.nextStep = "payment_method";
+      finishStep("trial_choice");
     } else if (request.action === "verify_payment_method_placeholder") {
       lifecycle.paymentMethodVerifiedAt = timestamp;
-      lifecycle.paymentMethodVerified = true;
       lifecycle.state = "payment_method_verified";
-      lifecycle.nextStep = "legal_consent";
+      finishStep("payment_method");
     } else if (request.action === "complete_legal") {
       lifecycle.legalConsentCompleteAt = timestamp;
-      lifecycle.legalConsentComplete = true;
+      lifecycle.legalConsentDraft = {};
       lifecycle.state = "legal_consent_complete";
-      lifecycle.nextStep = "about_you";
+      finishStep("legal_consent");
     } else if (request.action === "save_onboarding_step") {
       lifecycle.onboarding.answers[payload.step] = payload.answers || {};
       if (!lifecycle.onboarding.completedSteps.includes(payload.step)) lifecycle.onboarding.completedSteps.push(payload.step);
       if (payload.step === "about_you") newUserState.studentProfile.displayName = payload.answers.displayName;
       const next = onboardingSteps.find((step) => !lifecycle.onboarding.completedSteps.includes(step));
       lifecycle.onboarding.currentStep = next || "complete";
-      lifecycle.onboarding.completedStepCount = lifecycle.onboarding.completedSteps.length;
-      lifecycle.onboarding.progressPercent = Math.round((lifecycle.onboarding.completedSteps.length / onboardingSteps.length) * 100);
       lifecycle.state = next ? "onboarding_progress_saved" : "classroom_choice_pending";
-      lifecycle.nextStep = next || "classroom_setup";
+      finishStep(payload.step);
     } else if (request.action === "choose_classroom_path") {
       lifecycle.classroomChoice = payload.choice;
       lifecycle.state = payload.choice === "manual" ? "manual_setup_selected" : "classroom_choice_pending";
       if (payload.choice === "manual") lifecycle.manualSetupSelectedAt = timestamp;
-      lifecycle.nextStep = payload.choice === "manual" ? "materials" : "classroom_setup";
+      finishStep("classroom_setup");
     } else if (request.action === "save_materials") {
       lifecycle.selectedMaterialIds = payload.materialIds || [];
       lifecycle.selectedMaterialLabels = payload.materialLabels || [];
       lifecycle.materialsSelectedAt = timestamp;
+      lifecycle.materialsDraft = { materialIds: [], materialLabels: [] };
       lifecycle.state = "materials_selected";
-      lifecycle.nextStep = "setup_summary";
+      finishStep("materials");
     } else if (request.action === "confirm_setup_summary") {
       lifecycle.setupSummaryReadyAt = timestamp;
       lifecycle.state = "setup_summary_ready";
-      lifecycle.nextStep = "workspace_preparation";
+      finishStep("setup_summary");
     } else if (request.action === "start_workspace_preparation") {
       lifecycle.workspacePreparationStartedAt = timestamp;
       lifecycle.state = "workspace_preparing";
-      lifecycle.nextStep = "workspace_preparation";
+      finishStep("workspace_preparation");
     } else if (request.action === "complete_workspace_preparation") {
       lifecycle.workspaceReadyAt = timestamp;
-      lifecycle.workspaceReady = true;
       lifecycle.tutorialOfferedAt = timestamp;
       lifecycle.state = "tutorial_offered";
-      lifecycle.nextStep = "tutorial";
+      finishStep("workspace_preparation");
     } else if (request.action === "choose_tutorial") {
       lifecycle.tutorialChoice = payload.choice;
       if (payload.choice === "skip") {
         lifecycle.dashboardActivatedAt = timestamp;
-        lifecycle.dashboardActive = true;
         lifecycle.state = "dashboard_active";
-        lifecycle.nextStep = "dashboard";
       }
+      finishStep("tutorial");
     }
     await route.fulfill({
       contentType: "application/json",
@@ -397,59 +496,120 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
     });
   });
 
-  await page.setViewportSize({ width: 390, height: 820 });
+  await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto(baseUrl);
   await expect(page.locator("#product-flow-shell")).toBeVisible();
   await expect(page.locator("#app-shell")).toBeHidden();
-  for (const price of ["₹99", "₹159", "₹259", "₹549"]) await expect(page.locator("#product-flow-content")).toContainText(price);
-  await expectNoHorizontalOverflow(page, "390px lifecycle pricing");
+  await expect(page.getByRole("heading", { name: "What is your name?" })).toBeVisible();
+  await expect(page.locator("#product-flow-progress")).toContainText("Step 1 of 14");
+  await expect(page.locator("#product-flow-content")).not.toContainText("Choose your plan");
+  await expect(page.getByRole("button", { name: "Previous" })).toHaveCount(0);
+  await expect(page.locator("#product-flow-message")).toBeHidden();
+  await expectNoHorizontalOverflow(page, "1366px lifecycle name");
+  await expectNoLifecycleTechnicalCopy(page, "name page");
   await expect(page.locator("#product-flow-content")).not.toContainText(/storage|tokens|model|provider|Supabase|Groq|Gemini/i);
   await expect(page.getByRole("button", { name: "Ask StudentOS" })).toHaveCount(1);
+  const nameInput = page.locator("#product-display-name");
+  await nameInput.fill("");
+  await expectReadableContrast(page, "#product-display-name", "name placeholder", { pseudo: "::placeholder" });
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "What is your name?" })).toBeVisible();
+  await nameInput.fill("Lifecycle Student");
+  await expectReadableContrast(page, "#product-display-name", "entered name");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "Academic identity" })).toBeVisible();
+  await expect(page.locator("#product-flow-progress")).toContainText("Step 2 of 14");
+  await expect(page.locator("#product-flow-content")).toContainText("Every field on this page is optional");
+  await page.locator("#product-flow-content input[name='institution']").fill("Example University");
+  await page.locator("#product-flow-content input[name='level']").fill("Undergraduate");
+  await page.locator("#product-flow-content input[name='stream']").fill("Science");
+  await page.locator("#product-flow-content input[name='yearSemester']").fill("Semester 2");
+  await page.getByRole("button", { name: "Previous" }).click();
+  await expect(page.getByRole("heading", { name: "What is your name?" })).toBeVisible();
+  await expect(page.locator("#product-display-name")).toHaveValue("Lifecycle Student");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.locator("#product-flow-content input[name='institution']")).toHaveValue("Example University");
+  await expect(page.locator("#product-flow-content input[name='yearSemester']")).toHaveValue("Semester 2");
+  await page.getByRole("button", { name: "Save and continue" }).click();
+
+  await expect(page.getByRole("heading", { name: "Build your academic workspace" })).toBeVisible();
+  await expect(page.locator("#product-flow-progress")).toContainText("Step 3 of 14");
+  await expect(page.locator(".product-plan-card h3")).toHaveText([/99.*month/, /159.*month/, /259.*month/, /549.*month/]);
+  await page.setViewportSize({ width: 390, height: 820 });
+  await expectNoHorizontalOverflow(page, "390px lifecycle pricing");
+  await expectNoLifecycleTechnicalCopy(page, "pricing page");
   await page.getByRole("button", { name: "Ask StudentOS" }).click();
   await expect(page.locator("#product-flow-ask-response")).toContainText("Finish the current setup step");
 
+  const blankDarkArtifacts = await page.locator("#product-flow-shell *").evaluateAll((elements) => elements.filter((element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    const rgb = style.backgroundColor.match(/[\d.]+/g)?.map(Number) || [];
+    const visible = style.display !== "none" && style.visibility !== "hidden" && rect.width > 30 && rect.height > 20;
+    return visible && rgb.length >= 3 && rgb[0] < 35 && rgb[1] < 35 && rgb[2] < 35 && !element.textContent.trim();
+  }).map((element) => ({ tag: element.tagName, id: element.id, className: element.className })));
+  expect(blankDarkArtifacts, "onboarding should not contain an unexplained dark rectangle").toEqual([]);
+
   await page.getByRole("button", { name: "Choose Plus" }).click();
+  await expect(page.locator("#product-flow-ask-response")).toBeHidden();
   await expect(page.locator("#product-flow-content")).toContainText("Trial features are not the same as Plus");
+  await page.getByRole("button", { name: "Previous" }).click();
+  await expect(page.getByRole("heading", { name: "Build your academic workspace" })).toBeVisible();
+  await page.getByRole("button", { name: "Choose Plus" }).click();
   await page.getByRole("button", { name: "Start with Trial Mode" }).click();
   await expect(page.locator("#product-flow-content")).toContainText("does not claim that a payment has been completed");
   await expect(page.locator("#product-flow-content")).toContainText("No charge is created here");
-  await page.getByRole("button", { name: "Continue in development mode" }).click();
+  await page.getByRole("button", { name: "Previous" }).click();
+  await expect(page.locator("#product-flow-content")).toContainText("Trial features are not the same as Plus");
+  await page.getByRole("button", { name: "Start with Trial Mode" }).click();
+  await page.getByRole("button", { name: "Continue setup" }).click();
 
   await expect(page.getByRole("heading", { name: "Review before we build your workspace" })).toBeVisible();
+  await expectNoLifecycleTechnicalCopy(page, "legal page");
+  await page.getByRole("button", { name: "Previous" }).click();
+  await expect(page.getByRole("heading", { name: "Verify your payment method" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Previous" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Continue setup" }).click();
   await page.getByRole("button", { name: "Agree and continue" }).click();
   await expect(page.getByRole("heading", { name: "Review before we build your workspace" })).toBeVisible();
   for (const checkbox of await page.locator("#product-legal-form .legal-check-list input[type='checkbox']").all()) await checkbox.check();
+  await expectReadableContrast(page, "#product-legal-form .check-row span", "legal checkbox label");
   await page.locator("#product-legal-form input[name='ageGate'][value='adult']").check();
   await page.getByRole("button", { name: "Agree and continue" }).click();
 
-  await expect(page.getByRole("heading", { name: "About You" })).toBeVisible();
-  await page.locator("#product-onboarding-form input[name='displayName']").fill("Lifecycle Student");
-  await page.getByRole("button", { name: "Save and continue" }).click();
-  for (const heading of ["Education System", "Daily Schedule", "Exam and Assessment Pattern", "Syllabus and Academic Context"]) {
+  for (const heading of ["Daily Schedule", "Exam and Assessment Pattern", "Syllabus and Academic Context"]) {
     await expect(page.getByRole("heading", { name: heading })).toBeVisible();
     await page.getByRole("button", { name: "Skip for now" }).click();
   }
 
   await expect(page.getByRole("heading", { name: "How should StudentOS find your coursework?" })).toBeVisible();
+  await expectNoLifecycleTechnicalCopy(page, "Classroom choice page");
   await page.getByRole("button", { name: "Connect Google Classroom" }).click();
   await expect(page.getByRole("heading", { name: "Connect Google Classroom" })).toBeVisible();
   await page.getByRole("button", { name: "My institution does not use Classroom" }).click();
   await expect(page.getByRole("heading", { name: "Choose what belongs in your first workspace" })).toBeVisible();
+  await expectNoLifecycleTechnicalCopy(page, "materials page");
   await expect(page.locator("#product-flow-content")).toContainText("You can add or remove materials later from Academic Context");
   await page.locator("#product-materials-form textarea[name='materialLabels']").fill("Calculus syllabus");
   await page.getByRole("button", { name: "Continue to setup summary" }).click();
 
   await expect(page.getByRole("heading", { name: "Does this look right?" })).toBeVisible();
+  await expectNoLifecycleTechnicalCopy(page, "setup summary page");
   await expect(page.locator("#product-flow-content")).toContainText("Lifecycle Student");
+  await expect(page.locator("#product-flow-content")).toContainText("Example University");
+  await expect(page.locator("#product-flow-content")).toContainText("Semester 2");
   await expect(page.getByRole("button", { name: "Yes, prepare my workspace" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Edit summary" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add more details" })).toBeVisible();
   await page.getByRole("button", { name: "Continue with what I have" }).click();
   await page.getByRole("button", { name: "Prepare workspace" }).click();
   await expect(page.locator("#product-flow-content")).toContainText(/building your Today view/i);
+  await expectNoLifecycleTechnicalCopy(page, "workspace preparation page");
   await page.getByRole("button", { name: "Continue when ready" }).click();
 
   await expect(page.getByRole("heading", { name: "Would you like a quick tour before entering Today?" })).toBeVisible();
+  await expectNoLifecycleTechnicalCopy(page, "tutorial choice page");
   await page.getByRole("button", { name: "Skip for now" }).click();
   await expect(page.locator("#product-flow-shell")).toBeHidden();
   await expect(page.locator("#app-shell")).toBeVisible();

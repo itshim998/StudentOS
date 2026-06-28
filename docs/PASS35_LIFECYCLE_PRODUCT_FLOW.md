@@ -1,4 +1,4 @@
-# Pass 35.0 lifecycle product flow
+# Pass 35.1 lifecycle product flow
 
 StudentOS now renders an authenticated student from persisted lifecycle state instead of opening Today by default.
 
@@ -6,17 +6,21 @@ The lifecycle record is stored in `student_profiles.payload.productLifecycle`. T
 
 The required flow is:
 
-1. select Starter, Essential, Plus, or Pro;
-2. choose optional Trial Mode or the selected plan directly;
-3. pass the development-only payment-method check;
-4. accept every required legal item and complete the age gate;
-5. complete or skip the guided onboarding pages (name is required);
-6. choose Google Classroom or manual setup;
-7. select initial academic materials;
-8. confirm the setup summary;
-9. prepare the workspace;
-10. view or skip the tutorial;
-11. enter Today.
+1. enter a name, which is the only required profile field;
+2. optionally add institution, level, stream or course, and year or semester;
+3. select Starter, Essential, Plus, or Pro;
+4. choose optional Trial Mode or the selected plan directly;
+5. pass the development-only payment-method check;
+6. accept every required legal item and complete the age gate;
+7. complete or skip the remaining guided setup pages;
+8. choose Google Classroom or manual setup;
+9. select initial academic materials;
+10. confirm the setup summary;
+11. prepare the workspace;
+12. view or skip the tutorial;
+13. enter Today.
+
+From the academic identity page onward, Previous returns to the immediately preceding setup page and preserves entered values. Plan and trial pages remain revisitable until payment-method verification; after verification, navigation cannot cross back into those choices. The onboarding shell uses its own high-contrast light surfaces so global dashboard theme values do not wash out form labels, placeholders, controls, or messages.
 
 `STUDENTOS_PAYMENT_PLACEHOLDER_ENABLED` and `STUDENTOS_WORKSPACE_PREPARATION_SIMULATION_ENABLED` are development controls. Both are ignored in production by design. The payment-method check cannot create a charge or recurring mandate, and it never reports payment completion.
 

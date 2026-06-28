@@ -3,6 +3,7 @@ import { seedStateForUser } from "./repository/studentOsRepository.js";
 import { getPublicPlanCatalog } from "./saas/plans.js";
 import {
   ONBOARDING_STEPS,
+  PRODUCT_FLOW_STEP_ORDER,
   PRODUCT_LIFECYCLE_STATES,
   REQUIRED_LEGAL_CONSENTS,
   applyProductLifecycleAction,
@@ -17,7 +18,8 @@ const state = seedStateForUser({ id: "student_pass35_new", email: "new@student.e
 
 assert.equal(state.courses.length, 0, "new authenticated profiles must not inherit demo courses");
 assert.equal(state.assignments.length, 0, "new authenticated profiles must not inherit demo assignments");
-assert.equal(getProductLifecycleSnapshot(state, fixedNow).nextStep, "pricing");
+assert.equal(getProductLifecycleSnapshot(state, fixedNow).nextStep, "about_you");
+assert.equal(getProductLifecycleSnapshot(state, fixedNow).canGoPrevious, false);
 assert.throws(() => requireDashboardActive(state), /Complete StudentOS setup/);
 
 const publicPlans = getPublicPlanCatalog();
@@ -29,10 +31,59 @@ assert.deepEqual(publicPlans.map((plan) => [plan.id, plan.priceMonthlyInr]), [
 ]);
 assert(publicPlans.every((plan) => !("quotas" in plan) && !("features" in plan)));
 
+assert.deepEqual(PRODUCT_FLOW_STEP_ORDER.slice(0, 4), ["about_you", "education_system", "pricing", "trial_choice"]);
+assert.throws(() => applyProductLifecycleAction(state, "select_plan", { planId: "plus" }, { config, now: fixedNow }), /name and academic identity/);
+assert.throws(() => applyProductLifecycleAction(state, "save_onboarding_step", {
+  step: "about_you",
+  answers: { displayName: "" },
+}, { config, now: fixedNow }), /Enter your name/);
+
+applyProductLifecycleAction(state, "save_onboarding_step", {
+  step: "about_you",
+  answers: { displayName: "Pass 35 Student" },
+}, { config, now: fixedNow });
+assert.equal(getProductLifecycleSnapshot(state).nextStep, "education_system");
+
+const academicIdentity = {
+  institution: "Example University",
+  level: "Undergraduate",
+  stream: "Science",
+  yearSemester: "Semester 2",
+};
+applyProductLifecycleAction(state, "save_step_draft", {
+  step: "education_system",
+  answers: academicIdentity,
+}, { config, now: fixedNow });
+applyProductLifecycleAction(state, "navigate_previous", {}, { config, now: fixedNow });
+assert.equal(getProductLifecycleSnapshot(state).nextStep, "about_you");
+assert.equal(getProductLifecycleSnapshot(state).canGoPrevious, false);
+applyProductLifecycleAction(state, "save_onboarding_step", {
+  step: "about_you",
+  answers: { displayName: "Pass 35 Student" },
+}, { config, now: fixedNow });
+assert.equal(getProductLifecycleSnapshot(state).nextStep, "education_system");
+assert.deepEqual(getProductLifecycleSnapshot(state).onboarding.answers.education_system, academicIdentity);
+applyProductLifecycleAction(state, "save_onboarding_step", {
+  step: "education_system",
+  answers: academicIdentity,
+}, { config, now: fixedNow });
+assert.equal(getProductLifecycleSnapshot(state).nextStep, "pricing");
+
 applyProductLifecycleAction(state, "select_plan", { planId: "plus" }, { config, now: fixedNow });
 assert.equal(getProductLifecycleSnapshot(state).state, "plan_selected");
+assert.equal(getProductLifecycleSnapshot(state).nextStep, "trial_choice");
+applyProductLifecycleAction(state, "navigate_previous", {}, { config, now: fixedNow });
+assert.equal(getProductLifecycleSnapshot(state).nextStep, "pricing");
+assert.equal(getProductLifecycleSnapshot(state).selectedPlanId, "plus");
+applyProductLifecycleAction(state, "select_plan", { planId: "plus" }, { config, now: fixedNow });
 applyProductLifecycleAction(state, "choose_access", { accessMode: "trial" }, { config, now: fixedNow });
 assert.equal(getProductLifecycleSnapshot(state).state, "trial_selected");
+assert.equal(getProductLifecycleSnapshot(state).nextStep, "payment_method");
+
+applyProductLifecycleAction(state, "navigate_previous", {}, { config, now: fixedNow });
+assert.equal(getProductLifecycleSnapshot(state).nextStep, "trial_choice");
+assert.equal(getProductLifecycleSnapshot(state).accessMode, "trial");
+applyProductLifecycleAction(state, "choose_access", { accessMode: "trial" }, { config, now: fixedNow });
 
 assert.throws(() => applyProductLifecycleAction(state, "verify_payment_method_placeholder", {}, {
   config: getProductFlowConfig({}, "production"),
@@ -43,6 +94,16 @@ let lifecycle = getProductLifecycleSnapshot(state);
 assert.equal(lifecycle.paymentMethodVerificationMode, "development_placeholder");
 assert.equal(lifecycle.realPaymentCompleted, false);
 assert.equal(lifecycle.nextStep, "legal_consent");
+
+applyProductLifecycleAction(state, "navigate_previous", {}, { config, now: fixedNow });
+lifecycle = getProductLifecycleSnapshot(state);
+assert.equal(lifecycle.nextStep, "payment_method");
+assert.equal(lifecycle.canGoPrevious, false, "verified payment must lock plan and trial pages");
+assert.throws(() => applyProductLifecycleAction(state, "navigate_previous", {}, { config, now: fixedNow }), /no earlier setup page/);
+assert.throws(() => applyProductLifecycleAction(state, "select_plan", { planId: "starter" }, { config, now: fixedNow }), /cannot be changed/);
+assert.throws(() => applyProductLifecycleAction(state, "choose_access", { accessMode: "paid_plan" }, { config, now: fixedNow }), /cannot be changed/);
+applyProductLifecycleAction(state, "verify_payment_method_placeholder", {}, { config, now: fixedNow });
+assert.equal(getProductLifecycleSnapshot(state).nextStep, "legal_consent");
 
 assert.throws(() => applyProductLifecycleAction(state, "complete_legal", {
   consents: {},
@@ -59,12 +120,12 @@ applyProductLifecycleAction(state, "complete_legal", {
   ageGate: "minor",
   guardianConsentAcknowledged: true,
 }, { config, now: fixedNow });
-assert.equal(getProductLifecycleSnapshot(state).nextStep, "about_you");
+assert.equal(getProductLifecycleSnapshot(state).nextStep, "daily_schedule");
 
-for (const step of ONBOARDING_STEPS) {
+for (const step of ONBOARDING_STEPS.filter((item) => !["about_you", "education_system"].includes(item))) {
   applyProductLifecycleAction(state, "save_onboarding_step", {
     step,
-    answers: step === "about_you" ? { displayName: "Pass 35 Student" } : {},
+    answers: {},
   }, { config, now: fixedNow });
 }
 lifecycle = getProductLifecycleSnapshot(state);
@@ -101,7 +162,7 @@ assert.equal(config.placeholderCanCreateCharge, false);
 assert.equal(config.placeholderCanCreateMandate, false);
 
 console.log(JSON.stringify({
-  pass: "35.0",
+  pass: "35.1",
   lifecycleState: getProductLifecycleSnapshot(state).state,
   publicPlans: publicPlans.map((plan) => `${plan.label}:₹${plan.priceMonthlyInr}`),
   realPaymentEnabled: config.realPaymentEnabled,
