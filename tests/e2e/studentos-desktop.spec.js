@@ -397,6 +397,8 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
   let failAcademicSaves = false;
   let academicFailureAttempts = 0;
   let classroomSyncCalls = 0;
+  const selectedPlanPayloads = [];
+  const selectedAccessModes = [];
 
   await page.addInitScript(() => {
     sessionStorage.setItem("studentos.auth.session", JSON.stringify({
@@ -493,11 +495,13 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
       lifecycle.navigationStep = previous;
       refreshLifecycle();
     } else if (request.action === "select_plan") {
+      selectedPlanPayloads.push(payload.planId);
       lifecycle.selectedPlanId = payload.planId;
       lifecycle.state = "plan_selected";
       lifecycle.accessMode = null;
       finishStep("pricing");
     } else if (request.action === "choose_access") {
+      selectedAccessModes.push(payload.accessMode);
       lifecycle.accessMode = payload.accessMode;
       lifecycle.state = payload.accessMode === "trial" ? "trial_selected" : "paid_plan_selected";
       finishStep("trial_choice");
@@ -642,7 +646,33 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
 
   await expect(page.getByRole("heading", { name: "Build your academic workspace" })).toBeVisible();
   await expect(page.locator("#product-flow-progress")).toContainText("Step 3 of 14");
+  await expect(page.locator(".product-plan-card")).toHaveCount(4);
   await expect(page.locator(".product-plan-card h3")).toHaveText([/99.*month/, /159.*month/, /259.*month/, /549.*month/]);
+  const starterCard = page.locator('.product-plan-card[data-plan-key="starter"]');
+  const essentialCard = page.locator('.product-plan-card[data-plan-key="essential"]');
+  const plusCard = page.locator('.product-plan-card[data-plan-key="plus"]');
+  const proCard = page.locator('.product-plan-card[data-plan-key="pro"]');
+  await expect(starterCard).toContainText("Daily study plan from your syllabus");
+  await expect(starterCard).toContainText("Adaptive To-Do list");
+  await expect(starterCard).toContainText("Manual material upload");
+  await expect(starterCard).toContainText("Basic tests and revision");
+  await expect(starterCard).toContainText("Ask StudentOS for guided help");
+  await expect(essentialCard).toContainText("Recommended");
+  await expect(essentialCard).toContainText("Weekly Classroom coursework checks");
+  await expect(essentialCard).toContainText("Flashcards for active subjects");
+  await expect(essentialCard).toContainText("Visual notes with simple diagrams");
+  await expect(essentialCard).toContainText("More room for your academic context");
+  await expect(plusCard).toContainText("More frequent Classroom checks");
+  await expect(plusCard).toContainText("Learning Level");
+  await expect(plusCard).toContainText("Deeper explanations and stronger planning");
+  await expect(proCard).toContainText("Consistency Points");
+  await expect(proCard).toContainText("Priority roadmap and assignment preparation");
+  await expect(proCard).toContainText("Advanced assignment checking");
+  await expect(page.locator(".product-plan-card.recommended")).toHaveCount(1);
+  await expect(page.locator(".product-plan-card.recommended")).toHaveAttribute("data-plan-key", "essential");
+  await expect(page.locator(".product-plan-card .plan-best-for")).toHaveCount(4);
+  await expect(page.getByRole("button", { name: /^Choose (Starter|Essential|Plus|Pro)$/ })).toHaveCount(4);
+  await expect(page.locator(".product-pricing-grid")).not.toContainText(/\b(storage|GB|MB|tokens?|model|provider|Groq|Gemini|Pollinations|Supabase|backend|database|embeddings?|vectors?|chunks?|writeback|OAuth|API|rate limit|auto-submit)\b/i);
   await page.setViewportSize({ width: 390, height: 820 });
   await expectNoHorizontalOverflow(page, "390px lifecycle pricing");
   await expectNoLifecycleTechnicalCopy(page, "pricing page");
@@ -659,16 +689,23 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
   expect(blankDarkArtifacts, "onboarding should not contain an unexplained dark rectangle").toEqual([]);
 
   await page.getByRole("button", { name: "Choose Plus" }).click();
+  expect(selectedPlanPayloads.at(-1)).toBe("plus");
+  expect(lifecycle.selectedPlanId).toBe("plus");
   await expect(page.locator("#product-flow-ask-response")).toBeHidden();
-  await expect(page.locator("#product-flow-content")).toContainText("Trial features are not the same as Plus");
+  await expect(page.locator("#product-flow-content")).toContainText("Trial features are different from Plus");
+  await expect(page.locator("#product-flow-content")).toContainText("Your selected Plus plan stays saved while Trial Mode is active");
   await page.getByRole("button", { name: "Previous" }).click();
   await expect(page.getByRole("heading", { name: "Build your academic workspace" })).toBeVisible();
   await page.getByRole("button", { name: "Choose Plus" }).click();
   await page.getByRole("button", { name: "Start with Trial Mode" }).click();
+  expect(selectedPlanPayloads.at(-1)).toBe("plus");
+  expect(selectedAccessModes.at(-1)).toBe("trial");
+  expect(lifecycle.selectedPlanId).toBe("plus");
+  expect(lifecycle.accessMode).toBe("trial");
   await expect(page.locator("#product-flow-content")).toContainText("does not claim that a payment has been completed");
   await expect(page.locator("#product-flow-content")).toContainText("No charge is created here");
   await page.getByRole("button", { name: "Previous" }).click();
-  await expect(page.locator("#product-flow-content")).toContainText("Trial features are not the same as Plus");
+  await expect(page.locator("#product-flow-content")).toContainText("Trial features are different from Plus");
   await page.getByRole("button", { name: "Start with Trial Mode" }).click();
   await page.getByRole("button", { name: "Continue setup" }).click();
 
@@ -1021,7 +1058,14 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#quota-panel")).not.toContainText(/MB|GB|storage|tokens/i);
   await expect(page.locator("#pricing-panel")).toContainText(/Starter|Essential|Plus|Pro/i);
   await expect(page.locator("#pricing-panel")).toContainText(/₹99|₹159|₹259|₹549/);
-  await expect(page.locator("#pricing-panel")).not.toContainText(/storage|tokens|model|provider/i);
+  await expect(page.locator("#pricing-panel .pricing-card")).toHaveCount(4);
+  await expect(page.locator('#pricing-panel .pricing-card[data-plan-key="essential"]')).toContainText("Recommended");
+  await expect(page.locator("#pricing-panel .pricing-card.recommended")).toHaveCount(1);
+  await expect(page.locator("#pricing-panel .plan-best-for")).toHaveCount(4);
+  await expect(page.locator("#pricing-panel")).toContainText("Learning Level");
+  await expect(page.locator("#pricing-panel")).toContainText("Consistency Points");
+  await expect(page.locator("#pricing-panel")).not.toContainText(/\b(storage|GB|MB|tokens?|model|provider|Groq|Gemini|Pollinations|Supabase|backend|database|embeddings?|vectors?|chunks?|writeback|OAuth|API|rate limit|auto-submit)\b/i);
+  await expect(page.locator("body")).not.toContainText("Plan Free");
   await expectNoVisibleExternalBranding(page, "account and pricing");
   await page.evaluate(() => { window.location.hash = "pricing"; });
   await expect(page.locator("#view-title")).toHaveText("Account");

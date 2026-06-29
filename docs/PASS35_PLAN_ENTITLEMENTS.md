@@ -63,6 +63,8 @@ Future backend passes should use:
 
 Frontend pricing work should consume `/api/config` plan summaries. Authenticated product surfaces should consume the safe `planAccess` summary from bootstrap/account responses. They must not copy internal limits into browser constants.
 
+PASS 35.5 implements that contract: onboarding and Account pricing now use one shared renderer backed by the public entitlement summaries, including positioning, benefits, best-for guidance, and the Essential recommendation flag.
+
 ## Launch Safety
 
 PASS 35.4 does not activate a payment provider, recurring mandate, real checkout, Classroom write scopes, assignment writeback, BGE embeddings, retrieval migrations, reranking, flashcard generation, visual-note generation, or automatic assignment submission.

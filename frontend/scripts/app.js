@@ -1239,12 +1239,98 @@ function academicContextUploadMarkup() {
   `;
 }
 
+const PAID_PRODUCT_PLAN_KEYS = Object.freeze(["starter", "essential", "plus", "pro"]);
+
+function publicPlanSummaries() {
+  const plans = runtimeConfig.billing?.plans || runtimeConfig.saas?.billing?.plans || [];
+  return Array.isArray(plans) ? plans.filter((plan) => PAID_PRODUCT_PLAN_KEYS.includes(publicPlanKey(plan))) : [];
+}
+
+function publicPlanKey(plan) {
+  const planKey = String(plan?.planKey || plan?.id || "").trim().toLowerCase();
+  return PAID_PRODUCT_PLAN_KEYS.includes(planKey) ? planKey : null;
+}
+
 function productPlan(planId) {
-  return (runtimeConfig.billing?.plans || []).find((plan) => plan.id === planId) || null;
+  const normalized = String(planId || "").trim().toLowerCase();
+  if (!normalized) return null;
+  return publicPlanSummaries().find((plan) => publicPlanKey(plan) === normalized) || null;
+}
+
+function normalizedProductPlanKey(value) {
+  const plan = productPlan(value);
+  return plan ? publicPlanKey(plan) : null;
 }
 
 function productPlanName(planId) {
-  return productPlan(planId)?.label || humanize(planId || "selected plan");
+  const plan = productPlan(planId);
+  return plan?.displayName || plan?.label || "selected plan";
+}
+
+function planPriceDisplay(plan) {
+  if (plan?.priceDisplay) return String(plan.priceDisplay);
+  const monthlyPrice = Number(plan?.priceMonthlyInr);
+  return Number.isFinite(monthlyPrice) && monthlyPrice > 0 ? `₹${monthlyPrice}/month` : "Plan setup pending";
+}
+
+function planValueStatement(plan) {
+  return String(plan?.positioning || "Plan details are temporarily unavailable.");
+}
+
+function planFeatureBullets(plan) {
+  const features = plan?.featureBullets || plan?.highlights || [];
+  return Array.isArray(features) ? features.slice(0, 6) : [];
+}
+
+function planBestFor(plan) {
+  return String(plan?.bestFor || "");
+}
+
+function pendingPlanSummary() {
+  return {
+    id: null,
+    planKey: null,
+    label: "Plan setup pending",
+    displayName: "Plan setup pending",
+    positioning: "Choose a StudentOS plan to continue setting up your workspace.",
+    featureBullets: [],
+    bestFor: "Completing plan selection.",
+    recommended: false,
+  };
+}
+
+function planSummaryCardMarkup(plan, { context = "onboarding", activePlanId = null } = {}) {
+  const planKey = publicPlanKey(plan);
+  if (!planKey) return "";
+  const displayName = plan.displayName || plan.label || humanize(planKey);
+  const active = planKey === activePlanId;
+  const recommended = plan.recommended === true;
+  const cardClass = context === "account" ? "pricing-card" : "product-plan-card";
+  const headingTag = context === "account" ? "h4" : "h3";
+  const buttonAttributes = context === "account"
+    ? `data-plan-preview="${escapeHtml(planKey)}"`
+    : `data-product-action="select-plan" data-plan-id="${escapeHtml(planKey)}"`;
+  const buttonLabel = context === "account" && active ? "Current plan" : `Choose ${displayName}`;
+  const buttonClass = context === "account" && active ? "secondary-button" : "primary-button";
+  const bestFor = planBestFor(plan);
+  return `
+    <article class="${cardClass} plan-summary-card${recommended ? " recommended" : ""}${active ? " active" : ""}" data-plan-key="${escapeHtml(planKey)}">
+      <div class="plan-card-topline">
+        <p class="eyebrow">${escapeHtml(displayName)}</p>
+        <div class="plan-card-badges">
+          ${recommended ? '<span class="plan-recommended-badge">Recommended</span>' : ""}
+          ${active ? '<span class="plan-current-badge">Current plan</span>' : ""}
+        </div>
+      </div>
+      <${headingTag} class="plan-price">${escapeHtml(planPriceDisplay(plan))}</${headingTag}>
+      <p class="plan-positioning">${escapeHtml(planValueStatement(plan))}</p>
+      <ul class="pricing-feature-list plan-feature-list">
+        ${planFeatureBullets(plan).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+      ${bestFor ? `<div class="plan-best-for"><span>Best for</span><p>${escapeHtml(bestFor)}</p></div>` : ""}
+      <button class="${buttonClass} wide pricing-cta" type="button" ${buttonAttributes}>${escapeHtml(buttonLabel)}</button>
+    </article>
+  `;
 }
 
 function renderProductProgress(lifecycle) {
@@ -1261,20 +1347,15 @@ function renderProductProgress(lifecycle) {
 }
 
 function pricingStepMarkup() {
-  const plans = runtimeConfig.billing?.plans || [];
+  const plans = publicPlanSummaries();
   return `
     <p class="eyebrow">Choose your plan</p>
     <h2 id="product-flow-title">Build your academic workspace</h2>
     <p class="product-flow-lead">Choose the support level that fits your semester. StudentOS has no free tier, and every plan can begin with optional Trial Mode.</p>
     <div class="product-pricing-grid">
-      ${plans.map((plan) => `
-        <article class="product-plan-card">
-          <p class="eyebrow">${escapeHtml(plan.label)}</p>
-          <h3>₹${escapeHtml(plan.priceMonthlyInr) }<small>/month</small></h3>
-          <ul>${(plan.highlights || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
-          <button class="primary-button wide" type="button" data-product-action="select-plan" data-plan-id="${escapeHtml(plan.id)}">Choose ${escapeHtml(plan.label)}</button>
-        </article>
-      `).join("")}
+      ${plans.length
+        ? plans.map((plan) => planSummaryCardMarkup(plan)).join("")
+        : '<article class="product-empty-state"><strong>Plans unavailable</strong><p>StudentOS could not load plan details yet. Refresh before continuing.</p></article>'}
     </div>
   `;
 }
@@ -1284,11 +1365,11 @@ function trialChoiceMarkup(lifecycle) {
   return `
     <p class="eyebrow">How would you like to start?</p>
     <h2 id="product-flow-title">You selected ${escapeHtml(label)}</h2>
-    <p class="product-flow-lead">Trial Mode gives you limited access for 7 days before your ${escapeHtml(label)} subscription starts. Trial features are not the same as ${escapeHtml(label)}.</p>
+    <p class="product-flow-lead">You selected ${escapeHtml(label)}. Trial Mode gives you limited access for 7 days before your ${escapeHtml(label)} subscription starts. Trial features are different from ${escapeHtml(label)}. Start with Trial Mode, or begin ${escapeHtml(label)} now.</p>
     <div class="product-choice-grid">
       <button class="choice-card" type="button" data-product-action="choose-access" data-access-mode="trial">
         <strong>Start with Trial Mode</strong>
-        <span>Try the guided workspace with limited access for 7 days.</span>
+        <span>Your selected ${escapeHtml(label)} plan stays saved while Trial Mode is active.</span>
       </button>
       <button class="choice-card" type="button" data-product-action="choose-access" data-access-mode="paid_plan">
         <strong>Start ${escapeHtml(label)} now</strong>
@@ -1587,10 +1668,11 @@ function render() {
     return;
   }
   const lifecyclePlan = productPlan(state.productLifecycle?.selectedPlanId);
-  const plan = lifecyclePlan || accountSnapshot?.quota?.plan || state.saas?.quotas?.defaultPlan || runtimeConfig.saas?.quotas?.defaultPlan || { label: "Starter" };
+  const accountPlan = productPlan(accountSnapshot?.planAccess?.plan?.selected?.planKey || accountSnapshot?.quota?.plan?.selected?.planKey);
+  const plan = lifecyclePlan || accountPlan || pendingPlanSummary();
   els.studentName.textContent = state.studentProfile.displayName || "Student";
   els.creditBalance.textContent = state.creditBalance || 0;
-  els.planBadge.textContent = plan.label || "Starter";
+  els.planBadge.textContent = plan.displayName || plan.label || "Plan setup pending";
   els.studyRhythm.textContent = humanize(state.studentProfile.studyRhythm || "steady");
   els.creditEligibility.textContent = humanize(state.studentProfile.convenienceEligibility || "learning first");
   const backendPersistence = runtimeConfig.persistence || {};
@@ -2110,11 +2192,12 @@ function accountVisibilityLabel(value) {
 }
 
 function subscriptionLabel(status) {
-  const value = String(status || "active").toLowerCase();
-  if (value === "free") return "Legacy access";
+  const value = String(status || "unselected").toLowerCase();
+  if (["free", "unselected", "selected", "cancelled", "canceled"].includes(value)) return "Plan setup pending";
+  if (value === "trialing") return "Trial Mode";
   if (value === "active") return "Active plan";
   if (value === "past_due") return "Payment review needed";
-  return humanize(status || "Active plan");
+  return "Plan setup pending";
 }
 
 function usageLimitText(value, label) {
@@ -2136,20 +2219,6 @@ function quotaBar(label, used, total, formatter = (value) => value) {
       </div>
     </div>
   `;
-}
-
-function planValueStatement(plan) {
-  const copy = {
-    starter: "Build a focused academic workspace and know what to do today.",
-    essential: "Bring coursework and syllabus context into one study plan.",
-    plus: "Create deeper revision plans for a heavier semester.",
-    pro: "Get priority workspace preparation for demanding academic work.",
-  };
-  return copy[plan.id] || "A StudentOS plan for calm academic planning.";
-}
-
-function planFeatureBullets(plan) {
-  return (plan.highlights || ["Build your academic workspace", "Prepare from your syllabus", "Know what to do today"]).slice(0, 6);
 }
 
 function billingPreviewCopy(result, action = "checkout") {
@@ -2216,7 +2285,7 @@ function familyAccessLabel(status) {
 
 function localAccountSnapshot() {
   const selectedPlan = productPlan(state?.productLifecycle?.selectedPlanId);
-  const plan = selectedPlan || runtimeConfig.saas?.quotas?.defaultPlan || { id: "starter", label: "Starter", quotas: {}, features: {} };
+  const plan = selectedPlan || pendingPlanSummary();
   const activeSources = (state?.sourceMaterials || []).filter((source) => !source.deletedAt);
   return {
     user: {
@@ -2240,7 +2309,7 @@ function localAccountSnapshot() {
     quota: {
       plan,
       subscription: {
-        status: "active",
+        status: selectedPlan ? (state?.productLifecycle?.accessMode === "trial" ? "trialing" : "active") : "unselected",
         renewalAt: null,
         cancelAtPeriodEnd: false,
       },
@@ -2287,7 +2356,8 @@ function renderAccount() {
   const consent = account.profile?.consent || {};
   const quota = account.quota || localAccountSnapshot().quota;
   const selectedPlan = productPlan(state.productLifecycle?.selectedPlanId);
-  const plan = selectedPlan || quota.plan || { label: "Starter", features: {} };
+  const accountSelectedPlan = productPlan(quota.plan?.selected?.planKey || quota.subscription?.planId);
+  const plan = selectedPlan || accountSelectedPlan || pendingPlanSummary();
   if (els.accountResetEmail && !els.accountResetEmail.value) {
     els.accountResetEmail.value = account.user?.email || "";
   }
@@ -2308,7 +2378,7 @@ function renderAccount() {
       </div>
     </div>
     <div class="account-summary-list">
-      <span><strong>${escapeHtml(plan.label || "Starter")}</strong> current plan</span>
+      <span><strong>${escapeHtml(plan.displayName || plan.label || "Plan setup pending")}</strong> current plan</span>
       <span><strong>${escapeHtml(account.user?.emailVerified ? "Verified" : "Verification ready")}</strong> email status</span>
       <span><strong>${escapeHtml(accountVisibilityLabel(account.profile?.visibility?.defaultAudience || "student_only"))}</strong> visibility</span>
       <span><strong>${escapeHtml(subscriptionLabel(quota.subscription?.status))}</strong>${quota.subscription?.renewalAt ? ` renews ${escapeHtml(formatDate(quota.subscription.renewalAt))}` : ""}</span>
@@ -2319,7 +2389,7 @@ function renderAccount() {
     <div class="plan-card account-current-plan-card">
       <div>
         <span class="workspace-label">Current plan</span>
-        <strong>${escapeHtml(plan.label || "Starter")}</strong>
+        <strong>${escapeHtml(plan.displayName || plan.label || "Plan setup pending")}</strong>
         <p>${escapeHtml(planValueStatement(plan))}</p>
       </div>
       <div class="account-plan-state">
@@ -2330,7 +2400,7 @@ function renderAccount() {
     <ul class="pricing-feature-list">${planFeatureBullets(plan).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
   `;
   renderLifecycle(account.lifecycle || {});
-  renderPricing(plan.id);
+  renderPricing(publicPlanKey(plan));
 }
 
 function renderLifecycle(lifecycle = {}) {
@@ -2373,9 +2443,9 @@ function renderLifecycle(lifecycle = {}) {
   }
 }
 
-function renderPricing(activePlanId = "starter") {
+function renderPricing(activePlanId = null) {
   if (!els.pricingPanel) return;
-  const plans = runtimeConfig.billing?.plans || runtimeConfig.saas?.billing?.plans || [];
+  const plans = publicPlanSummaries();
   if (!plans.length) {
     els.pricingPanel.innerHTML = `
       <article class="pricing-card pricing-empty-card">
@@ -2385,22 +2455,9 @@ function renderPricing(activePlanId = "starter") {
     `;
     return;
   }
-  els.pricingPanel.innerHTML = plans.map((plan) => `
-    <article class="pricing-card ${plan.id === activePlanId ? "active" : ""}">
-      <div class="pricing-card-head">
-        <span>${plan.id === activePlanId ? "Current plan" : "Plan option"}</span>
-        <strong>${escapeHtml(plan.label)}</strong>
-        <h4>₹${escapeHtml(plan.priceMonthlyInr)}<small>/month</small></h4>
-        <p>${escapeHtml(planValueStatement(plan))}</p>
-      </div>
-      <ul class="pricing-feature-list">
-        ${planFeatureBullets(plan).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
-      </ul>
-      <button class="${plan.id === activePlanId ? "secondary-button" : "primary-button"} wide pricing-cta" type="button" data-plan-preview="${escapeHtml(plan.id)}">
-        ${plan.id === activePlanId ? "Current plan" : `Choose ${escapeHtml(plan.label)}`}
-      </button>
-    </article>
-  `).join("");
+  els.pricingPanel.innerHTML = plans
+    .map((plan) => planSummaryCardMarkup(plan, { context: "account", activePlanId }))
+    .join("");
 }
 
 function setView(viewName) {
@@ -2475,8 +2532,8 @@ async function loadAccountSnapshot() {
   }
   renderAccount();
   const selectedPlan = productPlan(state?.productLifecycle?.selectedPlanId);
-  if (selectedPlan?.label) {
-    els.planBadge.textContent = selectedPlan.label;
+  if (selectedPlan) {
+    els.planBadge.textContent = selectedPlan.displayName || selectedPlan.label;
   }
 }
 
@@ -3427,7 +3484,11 @@ async function handleProductFlowClick(event) {
   const action = button.dataset.productAction;
   try {
     await withButtonLoading(button, "Saving...", async () => {
-      if (action === "select-plan") await transitionProductFlow("select_plan", { planId: button.dataset.planId });
+      if (action === "select-plan") {
+        const planId = normalizedProductPlanKey(button.dataset.planId);
+        if (!planId) throw new Error("Choose a current StudentOS plan to continue.");
+        await transitionProductFlow("select_plan", { planId });
+      }
       else if (action === "choose-access") await transitionProductFlow("choose_access", { accessMode: button.dataset.accessMode });
       else if (action === "verify-payment") await transitionProductFlow("verify_payment_method_placeholder");
       else if (action === "choose-path") {
@@ -3760,7 +3821,12 @@ function wireEvents() {
   els.pricingPanel.addEventListener("click", (event) => {
     const button = event.target.closest("[data-plan-preview]");
     if (!button || button.textContent.trim() === "Current plan") return;
-    withButtonLoading(button, "Preparing...", () => previewPlanUpgrade(button.dataset.planPreview), {
+    const planId = normalizedProductPlanKey(button.dataset.planPreview);
+    if (!planId) {
+      setResult(els.accountActionResult, "<p>Choose a current StudentOS plan to continue.</p>");
+      return;
+    }
+    withButtonLoading(button, "Preparing...", () => previewPlanUpgrade(planId), {
       timeoutTarget: els.accountActionResult,
       timeoutCopy: "Preparing the plan preview is taking longer than expected. You can try again.",
     }).catch((error) => {
