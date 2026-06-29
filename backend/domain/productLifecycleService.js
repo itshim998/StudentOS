@@ -84,13 +84,6 @@ function productError(message, status = 400) {
   return error;
 }
 
-function hasExistingWorkspace(state = {}) {
-  const profileId = String(state.studentProfile?.id || "");
-  if (profileId === "student_demo_001") return true;
-  return ["courses", "assignments", "sourceMaterials", "roadmap"]
-    .some((key) => Array.isArray(state[key]) && state[key].length > 0);
-}
-
 export function getProductFlowConfig(env = process.env, deployment = "development") {
   const nonProduction = String(deployment || "development").toLowerCase() !== "production";
   return {
@@ -184,7 +177,7 @@ export function createInitialProductLifecycle({ ready = false, now = new Date() 
 export function normalizeProductLifecycle(state = {}, now = new Date()) {
   state.studentProfile = state.studentProfile || { id: "student_unknown", displayName: "Student", preferences: {} };
   const existing = state.studentProfile.productLifecycle;
-  const base = createInitialProductLifecycle({ ready: !existing && hasExistingWorkspace(state), now });
+  const base = createInitialProductLifecycle({ ready: state.studentProfile.id === "student_demo_001", now });
   const lifecycle = {
     ...base,
     ...(existing && typeof existing === "object" ? existing : {}),
@@ -216,14 +209,43 @@ export function normalizeProductLifecycle(state = {}, now = new Date()) {
   lifecycle.selectedMaterialLabels = Array.isArray(lifecycle.selectedMaterialLabels) ? lifecycle.selectedMaterialLabels : [];
   if (!PRODUCT_LIFECYCLE_STATES.includes(lifecycle.state)) lifecycle.state = base.state;
   if (lifecycle.selectedPlanId && !PRODUCT_PLAN_IDS.includes(lifecycle.selectedPlanId)) lifecycle.selectedPlanId = null;
+  if (lifecycle.accessMode && !["trial", "paid_plan"].includes(lifecycle.accessMode)) lifecycle.accessMode = null;
+  if (!isProductDashboardReady(lifecycle)) {
+    lifecycle.dashboardActivatedAt = null;
+    if (lifecycle.state === "dashboard_active") {
+      lifecycle.state = lifecycle.onboarding.completedSteps.length ? "onboarding_progress_saved" : "signed_up";
+    }
+  }
   state.studentProfile.productLifecycle = lifecycle;
   return lifecycle;
+}
+
+export function isProductDashboardReady(lifecycle = {}) {
+  const completed = lifecycle.onboarding?.completedSteps || [];
+  const classroomReady = lifecycle.classroomChoice === "manual"
+    ? Boolean(lifecycle.manualSetupSelectedAt)
+    : lifecycle.classroomChoice === "classroom"
+      ? Boolean(lifecycle.classroomConnectedAt)
+      : false;
+  return lifecycle.state === "dashboard_active" &&
+    PRODUCT_PLAN_IDS.includes(lifecycle.selectedPlanId) &&
+    ["trial", "paid_plan"].includes(lifecycle.accessMode) &&
+    Boolean(lifecycle.paymentMethodVerifiedAt) &&
+    Boolean(lifecycle.legalConsentCompleteAt) &&
+    ONBOARDING_STEPS.every((step) => completed.includes(step)) &&
+    classroomReady &&
+    Boolean(lifecycle.materialsSelectedAt) &&
+    Boolean(lifecycle.setupSummaryReadyAt) &&
+    Boolean(lifecycle.workspaceReadyAt) &&
+    ["show", "skip"].includes(lifecycle.tutorialChoice) &&
+    Boolean(lifecycle.dashboardActivatedAt) &&
+    !lifecycle.deletionPendingAt;
 }
 
 function nextStepFor(lifecycle) {
   if (lifecycle.deletionPendingAt) return "deletion_pending";
   if (lifecycle.paymentFailedAt && !lifecycle.paymentMethodVerifiedAt) return "payment_failed_locked";
-  if (lifecycle.dashboardActivatedAt) return "dashboard";
+  if (isProductDashboardReady(lifecycle)) return "dashboard";
   const completed = lifecycle.onboarding.completedSteps || [];
   if (!completed.includes("about_you")) return "about_you";
   if (!completed.includes("education_system")) return "education_system";
@@ -271,7 +293,7 @@ export function getProductLifecycleSnapshot(state = {}, now = new Date()) {
     paymentMethodVerified: Boolean(lifecycle.paymentMethodVerifiedAt),
     legalConsentComplete: Boolean(lifecycle.legalConsentCompleteAt),
     workspaceReady: Boolean(lifecycle.workspaceReadyAt),
-    dashboardActive: Boolean(lifecycle.dashboardActivatedAt),
+    dashboardActive: isProductDashboardReady(lifecycle),
     realPaymentCompleted: false,
     secretsExposed: false,
   };

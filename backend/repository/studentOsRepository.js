@@ -1,7 +1,7 @@
 import { confidenceLabel, createDeterministicEmbedding } from "../embeddings/embeddingService.js";
 import { createSeedState, retrieveGroundedSources } from "../domain/studentosDomain.js";
 import { publicShardRoute, routeUserToShard } from "../supabase/shardRouter.js";
-import { createInitialProductLifecycle } from "../domain/productLifecycleService.js";
+import { createInitialProductLifecycle, normalizeProductLifecycle } from "../domain/productLifecycleService.js";
 
 const COLLECTIONS = [
   ["courses", "courses"],
@@ -39,6 +39,14 @@ const COLLECTIONS = [
   ["roleInvitations", "role_invitations"],
 ];
 
+const DEMO_SEED_STATE = createSeedState(new Date(0));
+const DEMO_SEED_IDS = new Map(
+  COLLECTIONS.map(([key]) => [
+    key,
+    new Set((DEMO_SEED_STATE[key] || []).map((item) => String(item?.id || "")).filter(Boolean)),
+  ]),
+);
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -73,6 +81,16 @@ export function seedStateForUser(user) {
   return seed;
 }
 
+export function removeDemoSeedRowsForRealUser(state = {}) {
+  if (state.studentProfile?.id === "student_demo_001") return state;
+  for (const [key] of COLLECTIONS) {
+    const demoIds = DEMO_SEED_IDS.get(key);
+    if (!demoIds?.size || !Array.isArray(state[key])) continue;
+    state[key] = state[key].filter((item) => !demoIds.has(String(item?.id || "")));
+  }
+  return state;
+}
+
 function ensureStateShape(state) {
   const shaped = {
     ...state,
@@ -91,6 +109,8 @@ function ensureStateShape(state) {
   for (const [key] of COLLECTIONS) {
     shaped[key] = shaped[key] || [];
   }
+  removeDemoSeedRowsForRealUser(shaped);
+  normalizeProductLifecycle(shaped);
   return shaped;
 }
 
@@ -1156,8 +1176,10 @@ class SupabaseStudentOsRepository {
       return seed;
     }
 
+    const storedProfile = fromPayload(profileRows[0]);
+    const storedLifecycle = JSON.stringify(storedProfile?.productLifecycle ?? null);
     const state = {
-      studentProfile: fromPayload(profileRows[0]),
+      studentProfile: storedProfile,
     };
     for (const [key, table] of COLLECTIONS) {
       const rows = await route.client.select(table, {
@@ -1167,7 +1189,14 @@ class SupabaseStudentOsRepository {
       });
       state[key] = rows.map(fromPayload).filter(Boolean);
     }
-    return ensureStateShape(state);
+    const shaped = ensureStateShape(state);
+    if (JSON.stringify(shaped.studentProfile.productLifecycle) !== storedLifecycle) {
+      await route.client.upsert("student_profiles", profileRow(shaped.studentProfile, user.id), {
+        onConflict: "user_id",
+        returning: "minimal",
+      });
+    }
+    return shaped;
   }
 
   async saveState(session, state) {

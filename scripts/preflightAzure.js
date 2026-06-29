@@ -91,7 +91,7 @@ addCheck("frontend API config reads runtime config", read("frontend/scripts/conf
 addCheck("frontend detects Cloudflare API base misconfiguration", read("frontend/scripts/app.js").includes("API base URL misconfigured") && read("frontend/scripts/app.js").includes("text/html"));
 const redirects = exists("frontend/_redirects") ? read("frontend/_redirects") : "";
 const authCompleteHtml = read("frontend/auth-complete.html");
-addCheck("Cloudflare auth completion rewrite exists", redirects.includes("/auth/complete /auth-complete 200") && redirects.includes("/auth/complete/ /auth-complete 200"));
+addCheck("Cloudflare auth routes exist", redirects.includes("/auth/complete /auth-complete 200") && redirects.includes("/auth/complete/ /auth-complete 200") && redirects.includes("/auth/callback /index.html 200") && redirects.includes("/auth/callback/ /index.html 200"));
 addCheck("auth completion assets are root absolute", authCompleteHtml.includes('href="/styles/main.css"') && authCompleteHtml.includes('src="/runtime-config.js"') && authCompleteHtml.includes('src="/scripts/config.js"') && authCompleteHtml.includes('src="/scripts/auth-complete.js"'));
 
 const healthBlock = server.slice(server.indexOf('url.pathname === "/api/health"'), server.indexOf('url.pathname === "/api/status"'));

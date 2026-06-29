@@ -34,6 +34,10 @@ function containsLocalhost(value = "") {
   return /(?:localhost|127\.0\.0\.1|0\.0\.0\.0)/i.test(String(value || ""));
 }
 
+function containsWrongStudentOsAuthPort(value = "") {
+  return /(?:localhost|127\.0\.0\.1):3000(?:\b|\/)/i.test(String(value || ""));
+}
+
 export function runProductionPreflight(env = process.env) {
   const supabaseConfig = getSupabaseEnvironment(env);
   const aiConfig = getAiProviderConfig(env);
@@ -56,6 +60,14 @@ export function runProductionPreflight(env = process.env) {
   });
   const productFlowConfig = getProductFlowConfig(env, saasConfig.deployment);
   const readiness = validateProductionReadiness({ env, supabaseConfig, saasConfig });
+  const authRedirectUsesWrongLocalPort = [
+    env.STUDENTOS_AUTH_REDIRECT_URL,
+    env.STUDENTOS_PUBLIC_FRONTEND_URL,
+  ].some(containsWrongStudentOsAuthPort);
+  if (authRedirectUsesWrongLocalPort) {
+    readiness.errors.push("studentos_auth_redirect_uses_wrong_local_port");
+    readiness.ok = false;
+  }
   if (saasConfig.deployment === "production" &&
       classroomConfig.mode === "oauth" &&
       !classroomConfig.tokenEncryptionSecret) {
@@ -99,6 +111,10 @@ export function runProductionPreflight(env = process.env) {
     monitoringAlerts: getSafeMonitoringAlertStatus(monitoringAlertConfig),
     googleClassroom: getSafeGoogleClassroomStatus(classroomConfig),
     productFlow: productFlowConfig,
+    authRedirects: {
+      signupCallbackPath: "/auth/callback",
+      wrongLocalPortDetected: authRedirectUsesWrongLocalPort,
+    },
     secretsPrinted: false,
   });
 }

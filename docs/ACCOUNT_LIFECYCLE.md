@@ -4,8 +4,8 @@ Pass 17 adds production-shaped account lifecycle records while keeping irreversi
 
 ## Auth Completion
 
-- Configure the Supabase Auth redirect URL as `https://<studentos-host>/auth/complete`.
-- Email verification links complete on the account completion page.
+- Configure email verification for `https://<studentos-host>/auth/callback` and password recovery for `https://<studentos-host>/auth/complete`.
+- Email verification sessions are captured by the main app, scrubbed from the URL, and resumed at the lifecycle setup gate.
 - Password recovery links use the temporary Auth access token in the URL fragment to update the Auth project password.
 - The completion page receives only the Auth project URL and anon key. Data shard keys remain backend-only.
 

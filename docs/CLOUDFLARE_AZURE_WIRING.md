@@ -27,14 +27,16 @@ That command writes `frontend/runtime-config.js` with only the public API origin
 
 ## Required Cloudflare Pages Routes
 
-The checked-in `frontend/_redirects` file rewrites the Supabase Auth completion URL:
+The checked-in `frontend/_redirects` file rewrites the Supabase Auth routes:
 
 ```text
 /auth/complete /auth-complete 200
 /auth/complete/ /auth-complete 200
+/auth/callback /index.html 200
+/auth/callback/ /index.html 200
 ```
 
-Keep the Supabase Auth redirect URL as `https://studentos.sentiqlabs.com/auth/complete`. Cloudflare Pages should serve the styled `auth-complete` page from that route after a normal Pages redeploy; no dashboard redirect rule or secret change is required.
+Allow `https://studentos.sentiqlabs.com/auth/callback` for sign-up verification. Keep `https://studentos.sentiqlabs.com/auth/complete` for password recovery. See `docs/AUTH_REDIRECTS.md` for the local and preview allowlist entries. Cloudflare Pages serves the main app at the callback route and the styled recovery page at the completion route.
 
 ## Required Azure CORS Config
 
@@ -102,6 +104,7 @@ npm.cmd run verify:cloudflare-azure
 The verifier checks:
 
 - `https://studentos.sentiqlabs.com` loads.
+- `/auth/callback` loads the main app shell.
 - Azure `/api/health` returns JSON.
 - Azure `/api/config` returns JSON with `deploymentTarget: azure-container-apps`.
 - CORS allows `https://studentos.sentiqlabs.com`.

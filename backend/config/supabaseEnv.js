@@ -155,5 +155,6 @@ export function getPublicAuthConfig(config) {
     mode: "studentos_sign_in",
     url: config.auth.url,
     anonKey: config.auth.anonKey,
+    signupRedirectPath: "/auth/callback",
   };
 }

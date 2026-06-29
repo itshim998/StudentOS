@@ -129,6 +129,7 @@ for (const secret of [
   assert.equal(uiConfigJson.includes(secret), false);
 }
 assert.equal(publicAuth.anonKey, "anon_public_value");
+assert.equal(publicAuth.signupRedirectPath, "/auth/callback");
 assert.equal(isDemoSeedAllowed({ env: fakeProdEnv, supabaseConfig: prodSupabase }), false);
 
 await assert.rejects(

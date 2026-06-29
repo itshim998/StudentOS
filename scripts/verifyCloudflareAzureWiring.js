@@ -43,10 +43,12 @@ async function main() {
   const aiUrl = new URL("/api/ai/verb", backend);
   const runtimeConfigUrl = new URL("/runtime-config.js", frontend);
   const authCompletionUrl = new URL("/auth/complete", frontend);
+  const authCallbackUrl = new URL("/auth/callback", frontend);
 
   const frontendPage = await fetchText(frontend);
   const runtimeConfig = await fetchText(runtimeConfigUrl);
   const authCompletion = await fetchText(authCompletionUrl);
+  const authCallback = await fetchText(authCallbackUrl);
   const health = await fetchJson(healthUrl, { headers: { Origin: origin } });
   const config = await fetchJson(configUrl, { headers: { Origin: origin } });
   const ai = await fetchJson(aiUrl, {
@@ -71,9 +73,13 @@ async function main() {
     authCompletion.text.includes("/scripts/auth-complete.js") &&
     !authCompletion.text.includes("scripts/app.js") &&
     !/["']\/auth\/(?:runtime-config\.js|styles\/main\.css|scripts\/)/.test(authCompletion.text);
+  const authCallbackLoadsApp = authCallback.response.ok &&
+    authCallback.text.includes("scripts/app.js") &&
+    authCallback.text.includes("public-auth-shell");
   const ok = frontendPage.response.ok &&
     runtimeConfig.response.ok &&
     authCompletionIsStyledRoute &&
+    authCallbackLoadsApp &&
     runtimeConfigReferenced &&
     runtimeConfigPointsToBackend &&
     health.response.ok &&
@@ -93,9 +99,11 @@ async function main() {
     frontendStatus: frontendPage.response.status,
     runtimeConfigStatus: runtimeConfig.response.status,
     authCompletionStatus: authCompletion.response.status,
+    authCallbackStatus: authCallback.response.status,
     runtimeConfigReferenced,
     runtimeConfigPointsToBackend,
     authCompletionIsStyledRoute,
+    authCallbackLoadsApp,
     healthStatus: health.response.status,
     configStatus: config.response.status,
     aiStatus: ai.response.status,

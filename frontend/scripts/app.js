@@ -9,6 +9,8 @@ let state = null;
 let activeVerb = "Ask";
 let runtimeConfig = { auth: { enabled: false } };
 let authSession = readStoredSession();
+let bootstrapLoaded = false;
+let authReturnMessage = "";
 let accountSnapshot = null;
 let classroomStatus = null;
 let classroomStatusLoaded = false;
@@ -126,12 +128,62 @@ function readStoredSession() {
 }
 
 function storeSession(session) {
+  const previousToken = authSession?.access_token || "";
   authSession = session?.access_token ? session : null;
+  if ((authSession?.access_token || "") !== previousToken) {
+    state = null;
+    accountSnapshot = null;
+    bootstrapLoaded = false;
+  }
   if (authSession) {
     sessionStorage.setItem("studentos.auth.session", JSON.stringify(authSession));
   } else {
     sessionStorage.removeItem("studentos.auth.session");
   }
+}
+
+function decodeAuthUser(accessToken) {
+  try {
+    const payload = accessToken.split(".")[1];
+    if (!payload) return null;
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(payload.length / 4) * 4, "=");
+    const claims = JSON.parse(atob(normalized));
+    return {
+      id: claims.sub || null,
+      email: claims.email || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function captureAuthReturnSession() {
+  const query = new URLSearchParams(window.location.search);
+  const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const accessToken = fragment.get("access_token") || query.get("access_token") || "";
+  const refreshToken = fragment.get("refresh_token") || query.get("refresh_token") || "";
+  const authError = fragment.get("error_description") || query.get("error_description") || fragment.get("error") || query.get("error") || "";
+  const hasAuthReturn = Boolean(accessToken || refreshToken || authError || fragment.get("expires_in") || query.get("expires_in"));
+  if (!hasAuthReturn) return false;
+
+  if (accessToken) {
+    const expiresIn = Number(fragment.get("expires_in") || query.get("expires_in") || 0);
+    const expiresAt = Number(fragment.get("expires_at") || query.get("expires_at") || 0);
+    storeSession({
+      access_token: accessToken,
+      refresh_token: refreshToken || undefined,
+      token_type: fragment.get("token_type") || query.get("token_type") || "bearer",
+      expires_in: expiresIn || undefined,
+      expires_at: expiresAt || (expiresIn ? Math.floor(Date.now() / 1000) + expiresIn : undefined),
+      user: decodeAuthUser(accessToken) || undefined,
+    });
+    authReturnMessage = "Email verified. Continue your StudentOS setup.";
+  } else {
+    storeSession(null);
+    authReturnMessage = "This sign-in link is incomplete or has expired. Request a fresh link and try again.";
+  }
+  history.replaceState(null, "", "/");
+  return true;
 }
 
 function setText(element, value) {
@@ -240,6 +292,9 @@ function renderWorkspaceLoading(copy = "Loading your workspace...") {
 
 function renderWorkspaceLoadError(error) {
   const fallback = "StudentOS could not load your workspace. Refresh and try again.";
+  if (productSetupActive() && els.productFlowContent) {
+    els.productFlowContent.innerHTML = messageCardMarkup("Setup unavailable", "StudentOS could not load your setup. Refresh and try again.");
+  }
   setAppLoading(false);
   setResult(els.dashboardSummary, `
     <article class="today-brief-card">
@@ -260,8 +315,23 @@ function authGateActive() {
   return Boolean(productionAuthUnavailable() || (runtimeConfig.auth?.enabled && !authSession?.access_token));
 }
 
+function lifecycleDashboardReady(lifecycle = state?.productLifecycle) {
+  return Boolean(
+    lifecycle?.dashboardActive === true &&
+    lifecycle.state === "dashboard_active" &&
+    productPlan(lifecycle.selectedPlanId) &&
+    lifecycle.paymentMethodVerified === true &&
+    lifecycle.legalConsentComplete === true &&
+    lifecycle.workspaceReady === true &&
+    lifecycle.nextStep === "dashboard"
+  );
+}
+
 function productSetupActive() {
-  return Boolean(state?.productLifecycle && state.productLifecycle.dashboardActive !== true);
+  const authenticated = Boolean(authSession?.access_token);
+  if (authenticated && !bootstrapLoaded) return true;
+  if (authenticated && !state?.productLifecycle) return true;
+  return Boolean(state?.productLifecycle && !lifecycleDashboardReady());
 }
 
 function updateShellVisibility() {
@@ -334,6 +404,18 @@ function syncAuthHash() {
     }
   }
   updateShellVisibility();
+}
+
+function handleAuthLocationChange() {
+  if (!captureAuthReturnSession()) {
+    syncAuthHash();
+    return;
+  }
+  renderAuth(authReturnMessage);
+  updateShellVisibility();
+  if (!authGateActive()) {
+    loadBootstrap().catch(renderWorkspaceLoadError);
+  }
 }
 
 function handleSessionExpiry() {
@@ -470,7 +552,7 @@ async function api(path, options = {}) {
 async function loadRuntimeConfig() {
   runtimeConfig = await api("/api/config");
   syncAuthHash();
-  renderAuth();
+  renderAuth(authReturnMessage);
   if (els.demoSeedBtn) {
     els.demoSeedBtn.hidden = runtimeConfig.onboarding?.demoSeedEnabled !== true;
   }
@@ -598,7 +680,9 @@ async function signInWithPassword(event) {
 
 async function signUpWithPassword() {
   renderAuth("Creating account...");
-  const session = await authRequest("/signup", {
+  const callbackPath = String(runtimeConfig.auth?.signupRedirectPath || "/auth/callback");
+  const callbackUrl = new URL(callbackPath.startsWith("/") ? callbackPath : "/auth/callback", window.location.origin).href;
+  const session = await authRequest(`/signup?redirect_to=${encodeURIComponent(callbackUrl)}`, {
     email: els.authEmail.value,
     password: els.authPassword.value,
   });
@@ -1462,7 +1546,11 @@ function tutorialStepMarkup(lifecycle) {
 
 function renderProductFlow() {
   const lifecycle = state?.productLifecycle;
-  if (!lifecycle || !els.productFlowContent) return;
+  if (!els.productFlowContent) return;
+  if (!lifecycle) {
+    els.productFlowContent.innerHTML = `${loadingMarkup("Loading your StudentOS setup...")}<p>Your workspace will stay closed until setup is ready.</p>`;
+    return;
+  }
   renderProductProgress(lifecycle);
   const step = lifecycle.nextStep;
   els.productFlowContent.dataset.productStep = step;
@@ -2386,12 +2474,15 @@ async function loadAccountSnapshot() {
     accountSnapshot = null;
   }
   renderAccount();
-  if (accountSnapshot?.quota?.plan?.label) {
-    els.planBadge.textContent = accountSnapshot.quota.plan.label;
+  const selectedPlan = productPlan(state?.productLifecycle?.selectedPlanId);
+  if (selectedPlan?.label) {
+    els.planBadge.textContent = selectedPlan.label;
   }
 }
 
 async function loadBootstrap(options = {}) {
+  bootstrapLoaded = false;
+  updateShellVisibility();
   if (options.showLoading) {
     renderWorkspaceLoading(options.copy || "Loading your workspace...");
   } else {
@@ -2399,14 +2490,15 @@ async function loadBootstrap(options = {}) {
   }
   try {
     state = await api("/api/bootstrap");
+    bootstrapLoaded = true;
     render();
-    if (authSession?.access_token || !runtimeConfig.auth?.enabled) {
+    if (lifecycleDashboardReady() && (authSession?.access_token || !runtimeConfig.auth?.enabled)) {
       await loadAccountSnapshot();
+      await loadClassroomStatus();
     } else {
       accountSnapshot = null;
       renderAccount();
     }
-    await loadClassroomStatus();
   } finally {
     setAppLoading(false);
   }
@@ -3218,7 +3310,7 @@ async function transitionProductFlow(action, payload = {}, { flushPending = true
     });
     state = result.state;
     render();
-    if (state.productLifecycle?.dashboardActive) {
+    if (lifecycleDashboardReady()) {
       await loadAccountSnapshot();
       await loadClassroomStatus();
     }
@@ -3449,7 +3541,7 @@ function wireEvents() {
       closeAiDrawer();
     }
   });
-  window.addEventListener("hashchange", syncAuthHash);
+  window.addEventListener("hashchange", handleAuthLocationChange);
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-ai-open]");
     if (button) {
@@ -3692,6 +3784,8 @@ function wireEvents() {
   });
 }
 
+captureAuthReturnSession();
+updateShellVisibility();
 wireEvents();
 loadRuntimeConfig()
   .then(() => {

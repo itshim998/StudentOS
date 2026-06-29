@@ -2499,6 +2499,7 @@ async function serveStatic(req, res, url) {
   let pathname = decodeURIComponent(url.pathname);
   if (pathname === "/") pathname = "/index.html";
   if (pathname === "/auth/complete") pathname = "/auth-complete.html";
+  if (pathname === "/auth/callback" || pathname === "/auth/callback/") pathname = "/index.html";
   if (pathname === "/operator" || pathname === "/operator.html") {
     if (!operatorRbacConfig.enabled) {
       notFound(res);

@@ -166,6 +166,8 @@ assert(completionJs.includes("scrubAuthFragment"));
 assert.equal(completionJs.includes("service_role"), false);
 assert(cloudflareRedirects.includes("/auth/complete /auth-complete 200"));
 assert(cloudflareRedirects.includes("/auth/complete/ /auth-complete 200"));
+assert(cloudflareRedirects.includes("/auth/callback /index.html 200"));
+assert(cloudflareRedirects.includes("/auth/callback/ /index.html 200"));
 
 const prodEnv = { STUDENTOS_ENV: "production", STUDENTOS_DEMO_SEED_ENABLED: "true" };
 assert.equal(isDemoSeedAllowed({ env: prodEnv, supabaseConfig: mockSupabaseConfig }), false);

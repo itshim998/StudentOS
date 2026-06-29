@@ -40,7 +40,7 @@
 
 ## Account Lifecycle
 
-- Supabase Auth redirect URL points to `/auth/complete`.
+- Supabase email verification redirects point to `/auth/callback`; password recovery points to `/auth/complete`.
 - Recovery fragments are removed after completion handling.
 - Consent preferences are versioned against privacy and terms versions.
 - Data export output excludes secrets, provider references, storage paths, extracted source text, and internal logs.

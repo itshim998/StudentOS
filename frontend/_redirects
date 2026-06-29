@@ -1,2 +1,4 @@
 /auth/complete /auth-complete 200
 /auth/complete/ /auth-complete 200
+/auth/callback /index.html 200
+/auth/callback/ /index.html 200

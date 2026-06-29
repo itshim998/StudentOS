@@ -68,7 +68,8 @@ async function init() {
   const query = new URLSearchParams(window.location.search);
   const fragment = fragmentParams();
   const type = fragment.get("type") || query.get("type") || query.get("auth") || "";
-  const accessToken = fragment.get("access_token") || "";
+  const accessToken = fragment.get("access_token") || query.get("access_token") || "";
+  const refreshToken = fragment.get("refresh_token") || query.get("refresh_token") || "";
   if (window.location.hash) scrubAuthFragment();
   if (type === "recovery" && accessToken) {
     copy.textContent = "Choose a new password for your StudentOS account.";
@@ -87,6 +88,16 @@ async function init() {
         show(error.message);
       }
     });
+    return;
+  }
+  if (["signup", "verified", "email_change"].includes(type) && accessToken) {
+    sessionStorage.setItem("studentos.auth.session", JSON.stringify({
+      access_token: accessToken,
+      refresh_token: refreshToken || undefined,
+      token_type: fragment.get("token_type") || query.get("token_type") || "bearer",
+    }));
+    history.replaceState(null, "", "/auth/complete?status=verified");
+    window.location.replace("/");
     return;
   }
   if (["signup", "verified", "email_change"].includes(type) || query.get("status") === "verified") {

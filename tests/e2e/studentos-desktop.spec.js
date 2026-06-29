@@ -774,6 +774,8 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
   await expect(page.locator("#product-flow-shell")).toBeHidden();
   await expect(page.locator("#app-shell")).toBeVisible();
   await expect(page.locator("#view-title")).toHaveText("Today");
+  await expect(page.locator("#plan-badge")).toHaveText("Plus");
+  await expect(page.locator("body")).not.toContainText("Plan Free");
   await expect(page.locator(".verb-tab")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Ask StudentOS" })).toHaveCount(1);
 });
@@ -1134,6 +1136,22 @@ test("public auth shell gates the app when auth is enabled", async ({ page }) =>
   await expect(page.locator("#auth-shell-title")).toHaveText("Create your StudentOS account");
   await expect(page.locator("#password-reset-btn")).toBeVisible();
 
+  let signupRedirect = "";
+  await page.route("https://example.supabase.co/auth/v1/signup**", async (route) => {
+    signupRedirect = new URL(route.request().url()).searchParams.get("redirect_to") || "";
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ user: { id: "signup-test-user", email: "qa@studentos.local" } }),
+    });
+  });
+  await page.locator("#auth-email").fill("qa@studentos.local");
+  await page.locator("#auth-password").fill("studentos-test-password");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.locator("#auth-session")).toContainText("Check your email");
+  expect(signupRedirect).toBe(`${baseUrl}/auth/callback`);
+  expect(signupRedirect).not.toContain("localhost:3000");
+  await page.unroute("https://example.supabase.co/auth/v1/signup**");
+
   await page.getByRole("button", { name: "Existing account" }).click();
   await expect(page.locator("#auth-shell-title")).toHaveText("Sign in to StudentOS");
   await page.locator("#auth-email").fill("qa@studentos.local");
@@ -1155,6 +1173,114 @@ test("public auth shell gates the app when auth is enabled", async ({ page }) =>
   await page.goto(baseUrl);
   await expect(page.locator("#public-auth-shell")).toBeHidden();
   await expect(page.locator("#app-shell")).toBeVisible();
+});
+
+test("verification callbacks capture the session and start new-user setup", async ({ page }) => {
+  const [config, bootstrap] = await Promise.all([
+    fetch(`${baseUrl}/api/config`).then((response) => response.json()),
+    fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json()),
+  ]);
+  const newUserState = {
+    ...bootstrap,
+    courses: [{ id: "stale_demo_course", title: "Stale demo course" }],
+    roadmap: [{ id: "stale_demo_roadmap", title: "Stale demo roadmap" }],
+    productLifecycle: {
+      version: 1,
+      state: "signed_up",
+      selectedPlanId: null,
+      onboarding: { currentStep: "about_you", completedSteps: [], answers: {}, completedStepCount: 0, progressPercent: 0 },
+      nextStep: "about_you",
+      derivedNextStep: "about_you",
+      canGoPrevious: false,
+      paymentMethodVerified: false,
+      legalConsentComplete: false,
+      workspaceReady: false,
+      dashboardActive: false,
+    },
+  };
+  const authorizationHeaders = [];
+  let accountCalls = 0;
+  await page.route("**/api/config", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      ...config,
+      auth: {
+        enabled: true,
+        url: "https://example.supabase.co",
+        anonKey: "public-anon-test-key",
+        signupRedirectPath: "/auth/callback",
+      },
+    }),
+  }));
+  await page.route("**/api/bootstrap", (route) => {
+    authorizationHeaders.push(route.request().headers().authorization || "");
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(newUserState) });
+  });
+  await page.route("**/api/account", (route) => {
+    accountCalls += 1;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({}) });
+  });
+
+  const variants = [
+    `/#access_token=callback-token-root&refresh_token=refresh-root&type=signup`,
+    `/auth/callback#access_token=callback-token-hash&refresh_token=refresh-hash&type=signup`,
+    `/auth/callback?access_token=callback-token-query&refresh_token=refresh-query&type=signup`,
+  ];
+  await page.goto(baseUrl);
+  await page.evaluate(() => sessionStorage.removeItem("studentos.auth.session"));
+  for (const [index, variant] of variants.entries()) {
+    await page.goto(`${baseUrl}${variant}`, { waitUntil: "domcontentloaded" });
+    await expect(page.locator("#product-flow-shell"), `callback variant ${variant}`).toBeVisible();
+    await expect(page.locator("#app-shell")).toBeHidden();
+    await expect(page.getByRole("heading", { name: "What is your name?" })).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("Stale demo course");
+    await expect(page.locator("body")).not.toContainText("Stale demo roadmap");
+    await expect(page.locator("body")).not.toContainText("Plan Free");
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/");
+    expect(page.url()).not.toContain("access_token");
+    if (index < variants.length - 1) {
+      await page.evaluate(() => sessionStorage.removeItem("studentos.auth.session"));
+    }
+  }
+  expect(authorizationHeaders).toHaveLength(3);
+  expect(authorizationHeaders.every((header) => header.startsWith("Bearer callback-token-"))).toBe(true);
+  expect(accountCalls).toBe(0);
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "What is your name?" })).toBeVisible();
+  await expect(page.locator("#app-shell")).toBeHidden();
+});
+
+test("authenticated bootstrap without lifecycle data fails closed", async ({ page }) => {
+  const [config, bootstrap] = await Promise.all([
+    fetch(`${baseUrl}/api/config`).then((response) => response.json()),
+    fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json()),
+  ]);
+  const { productLifecycle: ignoredLifecycle, ...missingLifecycleState } = bootstrap;
+  await page.addInitScript(() => {
+    sessionStorage.setItem("studentos.auth.session", JSON.stringify({
+      access_token: "missing-lifecycle-session",
+      user: { email: "new@student.example" },
+    }));
+  });
+  await page.route("**/api/config", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      ...config,
+      auth: { enabled: true, url: "https://example.supabase.co", anonKey: "public-anon-test-key" },
+    }),
+  }));
+  await page.route("**/api/bootstrap", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify(missingLifecycleState),
+  }));
+
+  await page.goto(baseUrl);
+  await expect(page.locator("#public-auth-shell")).toBeHidden();
+  await expect(page.locator("#product-flow-shell")).toBeVisible();
+  await expect(page.locator("#app-shell")).toBeHidden();
+  await expect(page.locator("#product-flow-content")).toContainText("workspace will stay closed");
+  await expect(page.locator("body")).not.toContainText("Plan Free");
 });
 
 test("production host does not fall back to demo when auth config is unavailable", async ({ page }) => {
