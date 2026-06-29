@@ -107,7 +107,7 @@ Production should run the worker as a separate service/process with restart poli
 
 ## Migrations
 
-Apply all shard migrations through `202605250019_studentos_pass22_mfa_billing_alerts.sql` to Projects 2, 3, and 4. Apply Auth migrations only to Project 1. Never run destructive migrations automatically from app startup.
+Apply all shard migrations through `202606290001_studentos_pass35_4_plan_entitlements.sql` to Projects 2, 3, and 4, including the Pass 24 Classroom token migration. Apply Auth migrations only to Project 1. Never run destructive migrations automatically from app startup.
 
 ## Supabase Dashboard Settings
 

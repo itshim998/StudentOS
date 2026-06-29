@@ -29,6 +29,12 @@ import {
   requireProductMaterialAccess,
   requireDashboardActive,
 } from "./domain/productLifecycleService.js";
+import {
+  PLAN_KEYS,
+  getPublicEntitlementSummary,
+  getPublicPlanSummary,
+  normalizePlanKey,
+} from "./domain/planEntitlementService.js";
 import { getRequestSession } from "./auth/session.js";
 import {
   getPublicAuthConfig,
@@ -164,6 +170,7 @@ import {
   getBillingSnapshot,
   normalizeProviderWebhook,
   processBillingWebhook,
+  resolveEntitlements,
 } from "./billing/billingService.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -411,6 +418,10 @@ async function ensureIndexedChunkEmbeddings(session, state) {
 function publicState(state, persistence) {
   const creditBalance = getCreditBalance(state);
   const lifecycle = getLifecycleSnapshot(state, lifecycleConfig);
+  const productLifecycle = getProductLifecycleSnapshot(state);
+  const resolvedPlan = resolveEntitlements(state);
+  const selectedPlanKey = normalizePlanKey(productLifecycle.selectedPlanId) || resolvedPlan.selectedPlanKey;
+  const activePlanKey = resolvedPlan.activePlanKey;
   return {
     ...state,
     studentProfile: getSafeStudentProfile(state.studentProfile, creditBalance),
@@ -457,7 +468,15 @@ function publicState(state, persistence) {
     todayNextActions: getTodayNextActions(state),
     queueHealth: buildQueueHealth(state.backgroundJobs || []),
     persistence: publicRetrievalStatus(persistence),
-    productLifecycle: getProductLifecycleSnapshot(state),
+    productLifecycle,
+    planAccess: {
+      selectedPlanKey,
+      activePlanKey,
+      accessMode: productLifecycle.accessMode || null,
+      selectedPlan: getPublicPlanSummary(selectedPlanKey),
+      entitlements: getPublicEntitlementSummary(activePlanKey),
+      dashboardAccess: productLifecycle.dashboardActive === true && Boolean(activePlanKey),
+    },
     saas: getPublicSaasStatus(saasConfig),
     storagePlan: getSourceStoragePlan(supabaseConfig),
     internalMetricsHidden: true,
@@ -953,6 +972,7 @@ async function handleApi(req, res, url) {
         ...getPublicBillingProviderStatus(billingProviderConfig),
         cancellationSafety: getSafeBillingCancellationStatus(billingCancellationConfig),
         plans: saasConfig.billing.plans,
+        trialMode: getPublicPlanSummary(PLAN_KEYS.TRIAL),
         realChargesActive: false,
       },
       monitoringAlerts: getSafeMonitoringAlertStatus(monitoringAlertConfig),

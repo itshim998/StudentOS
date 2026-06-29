@@ -1,6 +1,13 @@
 import { getPlan, getPublicPlanCatalog } from "../saas/plans.js";
+import {
+  PLAN_KEYS,
+  getPlanEntitlements,
+  getPublicEntitlementSummary,
+  getPublicPlanSummary,
+  normalizePlanKey,
+} from "../domain/planEntitlementService.js";
 
-const ACTIVE_SUBSCRIPTION_STATUSES = new Set(["free", "active", "trialing", "past_due"]);
+const ACTIVE_SUBSCRIPTION_STATUSES = new Set(["active", "trialing", "past_due"]);
 const WEBHOOK_TYPES = new Set([
   "subscription_created",
   "subscription_updated",
@@ -35,12 +42,12 @@ export function ensureBillingState(state) {
   return state;
 }
 
-export function createFreeSubscription(userId, now = new Date()) {
+export function createUnselectedSubscription(userId, now = new Date()) {
   return {
     id: `billing_subscription_${userId}`,
     userId,
-    planId: "free",
-    status: "free",
+    planId: null,
+    status: "unselected",
     provider: "none",
     providerCustomerId: null,
     providerSubscriptionId: null,
@@ -51,25 +58,47 @@ export function createFreeSubscription(userId, now = new Date()) {
   };
 }
 
-export function getCurrentSubscription(state, fallbackPlan = "free") {
+export function getCurrentSubscription(state, fallbackPlan = null) {
   ensureBillingState(state);
   const latest = [...state.billingSubscriptions]
     .sort((left, right) => Date.parse(right.updatedAt || right.createdAt || "") - Date.parse(left.updatedAt || left.createdAt || ""))[0];
   if (latest) return latest;
-  const fallback = createFreeSubscription(state.studentProfile.id);
-  fallback.planId = getPlan(state.studentProfile?.preferences?.billingPlan || fallbackPlan).id;
-  fallback.status = fallback.planId === "free" ? "free" : "active";
+  const lifecycle = state.studentProfile?.productLifecycle || {};
+  const legacyReady = state.studentProfile?.id === "student_demo_001" || lifecycle.state === "dashboard_active";
+  const planId = normalizePlanKey(lifecycle.selectedPlanId) ||
+    normalizePlanKey(state.studentProfile?.preferences?.billingPlan) ||
+    (legacyReady ? normalizePlanKey(fallbackPlan) : null);
+  const fallback = createUnselectedSubscription(state.studentProfile.id);
+  fallback.planId = planId;
+  if (planId && lifecycle.accessMode === "trial" && lifecycle.paymentMethodVerifiedAt) {
+    fallback.status = "trialing";
+  } else if (planId && (lifecycle.paymentMethodVerifiedAt || legacyReady)) {
+    fallback.status = "active";
+  } else if (planId) {
+    fallback.status = "selected";
+  }
   return fallback;
 }
 
-export function resolveEntitlements(state, fallbackPlan = "free") {
+export function resolveEntitlements(state, fallbackPlan = null) {
   const subscription = getCurrentSubscription(state, fallbackPlan);
-  const subscriptionPlan = ACTIVE_SUBSCRIPTION_STATUSES.has(subscription.status) ? subscription.planId : "free";
-  const plan = getPlan(subscriptionPlan || fallbackPlan);
+  const lifecycle = state.studentProfile?.productLifecycle || {};
+  const selectedPlanKey = normalizePlanKey(lifecycle.selectedPlanId) || normalizePlanKey(subscription.planId);
+  const hasPersistedSubscription = (state.billingSubscriptions || []).length > 0;
+  const trialAccess = subscription.status === "trialing" ||
+    (!hasPersistedSubscription && lifecycle.accessMode === "trial" && Boolean(lifecycle.paymentMethodVerifiedAt));
+  const paidAccess = ACTIVE_SUBSCRIPTION_STATUSES.has(subscription.status) && subscription.status !== "trialing";
+  const activePlanKey = trialAccess
+    ? PLAN_KEYS.TRIAL
+    : paidAccess && selectedPlanKey !== PLAN_KEYS.TRIAL
+      ? selectedPlanKey
+      : null;
+  const plan = getPlan(activePlanKey);
+  const policy = getPlanEntitlements(activePlanKey);
   return {
     subscription: {
       id: subscription.id,
-      planId: plan.id,
+      planId: selectedPlanKey,
       status: subscription.status,
       provider: subscription.provider || "none",
       renewalAt: subscription.renewalAt || null,
@@ -79,8 +108,11 @@ export function resolveEntitlements(state, fallbackPlan = "free") {
       id: plan.id,
       label: plan.label,
     },
+    activePlanKey,
+    selectedPlanKey,
     quotas: plan.quotas,
     features: plan.features,
+    policy,
   };
 }
 
@@ -108,7 +140,7 @@ export function normalizeProviderWebhook({ provider, payload = {} }) {
     provider,
     type,
     userId: safeText(payload.userId || payload.user_id || metadata.userId || metadata.user_id || object.userId || object.user_id),
-    planId: rawPlanId ? getPlan(rawPlanId).id : "",
+    planId: normalizePlanKey(rawPlanId) || "",
     status: safeText(payload.status || object.status || ""),
     renewalAt: payload.renewalAt || payload.renewal_at || object.renewalAt || object.current_period_end || null,
     providerCustomerId: safeText(payload.providerCustomerId || payload.customerId || payload.customer_id || object.customer || object.customer_id),
@@ -120,8 +152,8 @@ export function normalizeProviderWebhook({ provider, payload = {} }) {
 function subscriptionStatusForEvent(event) {
   if (event.type === "subscription_cancelled") return "cancelled";
   if (event.type === "payment_failed") return "past_due";
-  if (["active", "trialing", "past_due", "cancelled", "free"].includes(event.status)) return event.status;
-  return event.planId === "free" ? "free" : "active";
+  if (["active", "trialing", "past_due", "cancelled"].includes(event.status)) return event.status;
+  return event.planId ? "active" : "unselected";
 }
 
 function upsertSubscription(state, event, now = new Date()) {
@@ -130,7 +162,7 @@ function upsertSubscription(state, event, now = new Date()) {
     ...existing,
     id: existing.id || `billing_subscription_${event.userId}`,
     userId: event.userId,
-    planId: event.planId || existing.planId || "free",
+    planId: event.planId || existing.planId || null,
     status: subscriptionStatusForEvent(event),
     provider: event.provider,
     providerCustomerId: event.providerCustomerId || existing.providerCustomerId || null,
@@ -144,7 +176,10 @@ function upsertSubscription(state, event, now = new Date()) {
   if (index >= 0) state.billingSubscriptions[index] = subscription;
   else state.billingSubscriptions.push(subscription);
   state.studentProfile.preferences = state.studentProfile.preferences || {};
-  state.studentProfile.preferences.billingPlan = resolveEntitlements(state).plan.id;
+  const normalizedPlanKey = normalizePlanKey(subscription.planId);
+  if (normalizedPlanKey && normalizedPlanKey !== PLAN_KEYS.TRIAL) {
+    state.studentProfile.preferences.billingPlan = normalizedPlanKey;
+  }
   return subscription;
 }
 
@@ -202,13 +237,13 @@ export function processBillingWebhook({ state, event, now = new Date() }) {
 }
 
 export function getBillingSnapshot({ state, saasConfig, providerStatus }) {
-  const entitlements = resolveEntitlements(state, saasConfig?.billing?.defaultPlan || "free");
+  const entitlements = resolveEntitlements(state, saasConfig?.billing?.defaultPlan || null);
   return {
     subscription: entitlements.subscription,
     entitlements: {
       plan: entitlements.plan,
-      quotas: entitlements.quotas,
-      features: entitlements.features,
+      selectedPlan: getPublicPlanSummary(entitlements.selectedPlanKey),
+      access: getPublicEntitlementSummary(entitlements.activePlanKey),
     },
     provider: providerStatus,
     plans: getPublicPlanCatalog(),

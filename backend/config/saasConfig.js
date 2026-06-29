@@ -2,6 +2,7 @@ import { getSafeAiProviderStatus } from "../ai/providerConfig.js";
 import { getSafeEmbeddingStatus } from "../embeddings/embeddingService.js";
 import { getPlan, getPublicPlanCatalog, USER_ROLES } from "../saas/plans.js";
 import { getSafeBillingProviderStatus, getPublicBillingProviderStatus } from "../billing/providerConfig.js";
+import { normalizePlanKey } from "../domain/planEntitlementService.js";
 
 const DEFAULT_CORS_ORIGINS = [
   "https://studentos.sentiqlabs.com",
@@ -51,7 +52,7 @@ export function getSaasConfig({
   billingConfig,
 } = {}) {
   const deployment = getDeploymentEnvironment(env);
-  const defaultPlan = readValue(env, "STUDENTOS_DEFAULT_PLAN", "starter").toLowerCase();
+  const defaultPlan = normalizePlanKey(readValue(env, "STUDENTOS_DEFAULT_PLAN", "starter"));
   return {
     product: {
       name: "StudentOS",
@@ -229,8 +230,6 @@ export function getPublicSaasStatus(config) {
       defaultPlan: {
         id: config.quotas.defaultPlan.id,
         label: config.quotas.defaultPlan.label,
-        quotas: config.quotas.defaultPlan.quotas,
-        features: config.quotas.defaultPlan.features,
       },
     },
     rateLimit: config.rateLimit,

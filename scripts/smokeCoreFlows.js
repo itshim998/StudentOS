@@ -111,10 +111,20 @@ async function main() {
     assert.equal(config.classroom.writeScopesEnabled, false);
     assertNoClassroomInternals("/api/config classroom", config.classroom);
     assert.equal(config.realSubmissionEnabled, false);
+    assert.deepEqual(config.billing.plans.map((plan) => plan.priceMonthlyInr), [99, 159, 259, 549]);
+    assert.equal(config.billing.plans.find((plan) => plan.planKey === "essential")?.recommended, true);
+    assert.equal(config.billing.trialMode.planKey, "trial");
+    assert.doesNotMatch(
+      JSON.stringify(config.billing.plans),
+      /storage|tokens?|models?|providers?|backend|supabase|groq|gemini|pollinations|vectors?|embeddings?|chunks?/i,
+    );
 
     const account = await request(baseUrl, "/api/account");
     assert.equal(account.user.authMode, "local_demo");
     assert.equal(account.secretsPrinted, false);
+    assert.equal(account.planAccess.plan.access.assignmentWritebackEnabled, false);
+    assert.equal("usage" in account.planAccess, false);
+    assert.equal("quotas" in account.planAccess, false);
 
     const reset = await request(baseUrl, "/api/auth/password-reset", {
       method: "POST",
@@ -142,6 +152,9 @@ async function main() {
     assert(onboarding.state.courses.length >= 2);
 
     let bootstrap = await request(baseUrl, "/api/bootstrap");
+    assert.equal(bootstrap.planAccess.selectedPlanKey, "starter");
+    assert.equal(bootstrap.planAccess.activePlanKey, "starter");
+    assert.equal(bootstrap.planAccess.entitlements.assignmentWritebackEnabled, false);
     const courseId = bootstrap.courses[0].id;
     const topicId = bootstrap.topics[0].id;
     const assignmentId = bootstrap.assignments[0].id;
@@ -220,6 +233,9 @@ async function main() {
 
     const billing = await request(baseUrl, "/api/billing/status");
     assert(billing.plan || billing.subscription || billing.quota);
+    assert.equal(billing.entitlements.access.assignmentWritebackEnabled, false);
+    assert.equal("quotas" in billing.entitlements, false);
+    assert.equal("features" in billing.entitlements, false);
 
     const status = await request(baseUrl, "/api/status");
     assert.equal(status.secretsPrinted, false);

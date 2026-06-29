@@ -76,7 +76,8 @@ const updatedEvent = normalizeProviderWebhook({
   },
 });
 processBillingWebhook({ state, event: updatedEvent, now });
-assert.equal(resolveEntitlements(state).plan.id, "group");
+assert.equal(updatedEvent.planId, "", "retired plans must not enter the launch entitlement catalog");
+assert.equal(resolveEntitlements(state).plan.id, "pro");
 
 const paymentFailedEvent = normalizeProviderWebhook({
   provider: "mock",
@@ -88,7 +89,7 @@ const paymentFailedEvent = normalizeProviderWebhook({
   },
 });
 processBillingWebhook({ state, event: paymentFailedEvent, now });
-assert.equal(resolveEntitlements(state).plan.id, "group");
+assert.equal(resolveEntitlements(state).plan.id, "pro");
 assert.equal(resolveEntitlements(state).subscription.status, "past_due");
 
 const cancelledEvent = normalizeProviderWebhook({
@@ -101,13 +102,13 @@ const cancelledEvent = normalizeProviderWebhook({
   },
 });
 processBillingWebhook({ state, event: cancelledEvent, now });
-assert.equal(resolveEntitlements(state).plan.id, "free");
+assert.equal(resolveEntitlements(state).plan.id, "unselected");
 assert.equal(resolveEntitlements(state).subscription.status, "cancelled");
 
 const enforcedConfig = getSaasConfig({
   env: {
     STUDENTOS_QUOTA_ENFORCEMENT: "true",
-    STUDENTOS_DEFAULT_PLAN: "free",
+    STUDENTOS_DEFAULT_PLAN: "starter",
   },
   supabaseConfig: getSupabaseEnvironment({ STUDENTOS_MODE: "mock" }),
   billingConfig,

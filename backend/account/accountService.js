@@ -1,5 +1,9 @@
 import { resolveEntitlements } from "../billing/billingService.js";
 import {
+  getPublicEntitlementSummary,
+  getPublicPlanSummary,
+} from "../domain/planEntitlementService.js";
+import {
   createDataExportWorkflow,
   createDeletionWorkflow,
   getAccountLifecycleConfig,
@@ -19,18 +23,6 @@ function activeSources(state) {
   return (state.sourceMaterials || []).filter((source) => !source.deletedAt);
 }
 
-function storageBytesUsed(state) {
-  return activeSources(state).reduce((total, source) => total + Number(source.sizeBytes || 0), 0);
-}
-
-function aiRequestCount(state) {
-  return (state.aiMessages || []).filter((message) => message.role === "user").length;
-}
-
-function workerJobCount(state) {
-  return (state.backgroundJobs || []).length;
-}
-
 function accountPreferences(state) {
   state.studentProfile.preferences = state.studentProfile.preferences || {};
   state.studentProfile.preferences.accountManagement = state.studentProfile.preferences.accountManagement || {};
@@ -44,29 +36,40 @@ function accountPreferences(state) {
   return state.studentProfile.preferences;
 }
 
-export function getAccountPlan(state, saasConfig) {
-  return resolveEntitlements(state, saasConfig?.billing?.defaultPlan || "free");
+export function getAccountPlan(state) {
+  return resolveEntitlements(state);
 }
 
 export function getQuotaUsage(state, saasConfig) {
   const entitlements = getAccountPlan(state, saasConfig);
+  const activeSourceCount = activeSources(state).length;
+  const contextLimit = Number(entitlements.policy.hiddenLimits.maxSources || 0);
+  const contextRatio = contextLimit > 0 ? activeSourceCount / contextLimit : 1;
+  const contextStatus = !entitlements.activePlanKey
+    ? "unavailable"
+    : contextRatio >= 1
+      ? "full"
+      : contextRatio >= 0.9
+        ? "almost_full"
+        : "available";
   return {
     plan: {
       id: entitlements.plan.id,
       label: entitlements.plan.label,
-      features: entitlements.features,
+      selected: getPublicPlanSummary(entitlements.selectedPlanKey),
+      access: getPublicEntitlementSummary(entitlements.activePlanKey),
     },
     subscription: entitlements.subscription,
-    usage: {
-      aiRequestsToday: aiRequestCount(state),
-      uploadsToday: activeSources(state).length,
-      sourceCount: activeSources(state).length,
-      courses: (state.courses || []).length,
-      workerJobsToday: workerJobCount(state),
-      reindexJobsToday: (state.backgroundJobs || []).filter((job) => job.jobType === "source_reindex").length,
-      storageBytes: storageBytesUsed(state),
+    academicContext: {
+      status: contextStatus,
+      message: contextStatus === "unavailable"
+        ? "Complete setup to open your academic workspace."
+        : contextStatus === "full"
+          ? "Your academic context is full. Remove older material or choose fewer items."
+          : contextStatus === "almost_full"
+            ? "Your academic context is almost full."
+            : "You have room for more academic material.",
     },
-    quotas: entitlements.quotas,
     enforcementEnabled: saasConfig?.quotas?.enforcementEnabled === true,
     upgradeAvailable: true,
     paymentsEnabled: saasConfig?.billing?.paymentIntegrationEnabled === true,
@@ -77,6 +80,7 @@ export function getAccountSnapshot({ session, state, saasConfig, lifecycleConfig
   const preferences = accountPreferences(state);
   const accountManagement = preferences.accountManagement;
   const lifecycle = getLifecycleSnapshot(state, lifecycleConfig);
+  const planAccess = getQuotaUsage(state, saasConfig);
   return {
     user: {
       id: session?.user?.id || state.studentProfile.id,
@@ -92,7 +96,8 @@ export function getAccountSnapshot({ session, state, saasConfig, lifecycleConfig
       visibility: state.studentProfile.visibility,
       consent: preferences.consent,
     },
-    quota: getQuotaUsage(state, saasConfig),
+    quota: planAccess,
+    planAccess,
     requests: {
       exportRequests: lifecycle.exportRequests.length ? lifecycle.exportRequests : accountManagement.exportRequests || [],
       deletionRequests: lifecycle.deletionRequests.length ? lifecycle.deletionRequests : accountManagement.deletionRequests || [],

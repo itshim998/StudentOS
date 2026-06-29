@@ -37,6 +37,8 @@ PADDLE_WEBHOOK_SECRET
 
 Apply `202605250013_studentos_pass16_billing_entitlements.sql` identically to data shard Projects 2, 3, and 4.
 
+Then apply `202606290001_studentos_pass35_4_plan_entitlements.sql` to the same three shards to align persisted plan and status constraints with the current launch catalog.
+
 - `billing_subscriptions`: current plan, lifecycle status, renewal date, and provider references.
 - `billing_webhook_events`: idempotency records for processed provider events.
 
@@ -44,7 +46,7 @@ Rows are user-owned, RLS-ready, and contain provider references only. They never
 
 ## Entitlement Resolution
 
-The existing usage policy now resolves the active subscription before applying plan quotas:
+PASS 35.4 moves launch plan policy to `backend/domain/planEntitlementService.js`. The billing service resolves the active access policy before applying hidden internal limits:
 
 - AI calls
 - Upload file size
@@ -52,11 +54,11 @@ The existing usage policy now resolves the active subscription before applying p
 - Course count
 - Reindex jobs
 - Worker retries
-- Storage display
 - Advanced automation feature eligibility
-- Group spaces feature eligibility
 
-Cancelled subscriptions fall back to Free entitlements. `past_due` remains entitlement-visible for future grace-period policy work.
+StudentOS has no authenticated Free plan. Missing, unknown, retired, or cancelled plan access fails closed to an unselected state. Trial Mode resolves to its own fixed restricted policy rather than inheriting the selected paid plan. `past_due` remains entitlement-visible for future grace-period policy work.
+
+Normal API responses return safe plan summaries and consumer-facing capability labels. Hidden numeric limits remain backend-only.
 
 ## API Scaffold
 

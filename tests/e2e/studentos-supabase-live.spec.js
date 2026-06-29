@@ -601,8 +601,9 @@ test.describe("StudentOS live Supabase E2E", () => {
     await expect(page.locator("#flow-result")).toContainText("No submission");
 
     await clickNav(page, "Account");
-    await expect(page.locator("#pricing-panel")).toContainText(/Free|Pro|Institution/i, { timeout: 15_000 });
-    await expect(page.locator("#quota-panel")).toContainText(/sources|AI|storage/i);
+    await expect(page.locator("#pricing-panel")).toContainText(/Starter|Essential|Plus|Pro/i, { timeout: 15_000 });
+    await expect(page.locator("#quota-panel")).toContainText(/academic context|semester/i);
+    await expect(page.locator("#quota-panel")).not.toContainText(/MB|GB|storage|tokens/i);
     await page.getByRole("button", { name: "Request data export" }).click();
     const exportResultText = await waitForExportSettled(page);
     if (!exportResultText.includes("Export request created")) {

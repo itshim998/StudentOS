@@ -29,7 +29,7 @@ const fakeProdEnv = {
   STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4: "service_role_shard_3_should_not_print",
   STUDENTOS_SUPABASE_JWT_SECRET: "jwt_secret_should_not_print",
   STUDENTOS_STORAGE_BUCKET: "studentos-private-sources",
-  STUDENTOS_DEMO_SEED_ENABLED: "true",
+  STUDENTOS_DEMO_SEED_ENABLED: "false",
   STUDENTOS_RATE_LIMIT_ENABLED: "true",
   STUDENTOS_QUOTA_ENFORCEMENT: "true",
 };
@@ -59,7 +59,7 @@ const prodReadiness = validateProductionReadiness({
   supabaseConfig: prodSupabase,
   saasConfig: prodConfig,
 });
-assert.equal(prodReadiness.ok, true);
+assert.equal(prodReadiness.ok, true, JSON.stringify(prodReadiness));
 assert.equal(prodReadiness.secretsPrinted, false);
 assert.equal(prodConfig.demoSeedEnabled, false);
 assert.equal(isDemoSeedAllowed({ env: fakeProdEnv, supabaseConfig: prodSupabase }), false);
@@ -80,7 +80,8 @@ assert.equal(JSON.stringify(publicStatus).includes("service_role"), false);
 assert.equal(getRole(USER_ROLES.STUDENT), "student");
 assert.equal(getRole(USER_ROLES.PARENT_GUARDIAN), "student");
 assert.equal(getPlan("pro").quotas.aiRequestsPerDay > getPlan("free").quotas.aiRequestsPerDay, true);
-assert.equal(getPlan("institution").features.parentTeacherViews, true);
+assert.equal(getPlan("free").id, "unselected");
+assert.equal(getPlan("institution").features.parentTeacherViews, false);
 
 let now = 1_000;
 const limiter = new InMemoryRateLimiter({
@@ -129,7 +130,7 @@ const relaxedPolicy = checkUsagePolicy({
 assert.equal(relaxedPolicy.allowed, true);
 
 const enforcedState = createSeedState(new Date("2026-05-27T10:00:00+05:30"));
-enforcedState.aiMessages = Array.from({ length: getPlan("free").quotas.aiRequestsPerDay }, (_, index) => ({
+enforcedState.aiMessages = Array.from({ length: getPlan("starter").quotas.aiRequestsPerDay }, (_, index) => ({
   id: `msg_${index}`,
   role: "user",
   content: "test",

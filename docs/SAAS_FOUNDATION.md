@@ -27,12 +27,15 @@ Future roles must use explicit consent, scoped permissions, and separate audit e
 
 ## Plan Model
 
-Payments are not integrated in Pass 14. Plans are configuration scaffolds:
+Payments remain disabled. PASS 35.4 defines the launch plan policy centrally:
 
-- Free: safe default, limited AI, uploads, courses, sources, and worker jobs.
-- Pro: higher personal limits and advanced automation eligibility.
-- Group: group spaces and higher collaborative quotas later.
-- Institution: institution-scale quotas and future parent/teacher views.
+- Trial Mode: fixed restricted optional access.
+- Starter: daily structure and guided academic support.
+- Essential: recommended regular-use plan with weekly Classroom metadata checks.
+- Plus: adaptive Learning Level behavior and stronger preparation support.
+- Pro: Consistency Points, advanced assignment review, and the strongest capped support.
+
+StudentOS has no authenticated Free plan. Unknown or missing plans fail closed to an unselected lifecycle state. Group and institution products are not part of the launch catalog.
 
 Quota enforcement is off by default for local demos and should be enabled in production with `STUDENTOS_QUOTA_ENFORCEMENT=true`.
 

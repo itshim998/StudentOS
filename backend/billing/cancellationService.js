@@ -57,6 +57,7 @@ export function normalizeProviderCancellationState(subscription = {}, config = g
     "ended",
     "expired",
     "free",
+    "unselected",
   ]);
   const activeStatuses = new Set([
     "active",
@@ -67,7 +68,7 @@ export function normalizeProviderCancellationState(subscription = {}, config = g
     "halted",
     "paused",
   ]);
-  if (!provider || provider === "none" || status === "free") {
+  if (!provider || provider === "none" || status === "free" || status === "unselected") {
     return {
       provider,
       status: "not_required",

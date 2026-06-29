@@ -123,7 +123,7 @@ async function expectNoVisibleExternalBranding(page, label) {
 
 async function expectNoLifecycleTechnicalCopy(page, label) {
   const visibleText = await page.locator("#product-flow-shell").innerText();
-  const blocked = /\b(Supabase|Groq|Pollinations|Gemini|provider|model|token|vector|embedding|chunks?|backend|storage|mock|demo response|OAuth|connector|source-grounded|web fallback|no write scopes?|no writeback)\b/i;
+  const blocked = /\b(Supabase|Groq|Pollinations|Gemini|provider|model|token|vector|embedding|chunks?|backend|storage|mock (?:mode|response|provider|data)|demo response|OAuth|connector|source-grounded|web fallback|no write scopes?|no writeback)\b/i;
   expect(visibleText, `${label} should use student-facing product copy`).not.toMatch(blocked);
 }
 

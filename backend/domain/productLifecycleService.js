@@ -1,3 +1,5 @@
+import { PAID_PLAN_KEYS } from "./planEntitlementService.js";
+
 export const PRODUCT_LIFECYCLE_STATES = Object.freeze([
   "signed_out",
   "signed_up",
@@ -22,7 +24,7 @@ export const PRODUCT_LIFECYCLE_STATES = Object.freeze([
   "deletion_pending",
 ]);
 
-export const PRODUCT_PLAN_IDS = Object.freeze(["starter", "essential", "plus", "pro"]);
+export const PRODUCT_PLAN_IDS = PAID_PLAN_KEYS;
 
 export const ONBOARDING_STEPS = Object.freeze([
   "about_you",

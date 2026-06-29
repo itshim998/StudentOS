@@ -424,8 +424,8 @@ function rowForCollection(key, item, userId) {
   if (key === "billingSubscriptions") {
     return {
       ...base,
-      plan_id: item.planId || "free",
-      status: item.status || "free",
+      plan_id: item.planId || "unselected",
+      status: item.status || "unselected",
       provider: item.provider || "none",
       provider_customer_id: item.providerCustomerId || null,
       provider_subscription_id: item.providerSubscriptionId || null,

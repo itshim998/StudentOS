@@ -18,7 +18,7 @@ export function checkUsagePolicy({
   action,
   context = {},
 } = {}) {
-  const entitlements = resolveEntitlements(state, saasConfig?.billing?.defaultPlan || "free");
+  const entitlements = resolveEntitlements(state, saasConfig?.billing?.defaultPlan || null);
   const quotas = entitlements.quotas;
   const enforcementEnabled = saasConfig?.quotas?.enforcementEnabled === true;
   const violations = [];
