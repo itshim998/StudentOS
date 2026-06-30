@@ -941,9 +941,9 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page).toHaveTitle(/StudentOS/);
   await expect(page.getByRole("heading", { name: "StudentOS" })).toBeVisible();
   await expect(page.locator("#public-auth-shell")).toBeHidden();
-  await expect(page.locator("#auth-session")).toContainText("Local demo");
-  await expect(page.locator("#rail-session-status")).toContainText("Demo session");
-  await expect(page.locator("#connector-status")).toContainText("Demo mode");
+  await expect(page.locator("#auth-session")).toContainText("Local preview");
+  await expect(page.locator("#rail-session-status")).toContainText("Local preview");
+  await expect(page.locator("#connector-status")).toContainText("Local preview");
   await expect(page.locator("#dashboard-summary")).toContainText("Do now");
   await expect(page.locator("#dashboard-summary")).toContainText("Goal");
   await expectNoVisibleExternalBranding(page, "initial local workspace");
@@ -991,7 +991,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await page.getByRole("button", { name: "Upload private source" }).click();
   await expect(page.locator("#source-result")).toContainText("Uploading to private source library");
   await expect(page.locator("#source-result")).toContainText("E2E quadratics note", { timeout: 15_000 });
-  await expect(page.locator("#source-result")).toContainText(/source section/i);
+  await expect(page.locator("#source-result")).toContainText(/academic context/i);
   await expect(page.locator("#source-result")).toContainText("Private");
   await page.unroute("**/api/sources/upload");
   await expect(page.locator("#source-list")).toContainText("Sources ready");

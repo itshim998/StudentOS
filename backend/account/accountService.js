@@ -4,6 +4,10 @@ import {
   getPublicPlanSummary,
 } from "../domain/planEntitlementService.js";
 import {
+  getPublicAcademicContextCapacity,
+  getPublicProductCapabilities,
+} from "../domain/productFeatureAccessService.js";
+import {
   createDataExportWorkflow,
   createDeletionWorkflow,
   getAccountLifecycleConfig,
@@ -17,10 +21,6 @@ function nowIso(now = new Date()) {
 
 function requestId(prefix = "acct") {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function activeSources(state) {
-  return (state.sourceMaterials || []).filter((source) => !source.deletedAt);
 }
 
 function accountPreferences(state) {
@@ -42,16 +42,7 @@ export function getAccountPlan(state) {
 
 export function getQuotaUsage(state, saasConfig) {
   const entitlements = getAccountPlan(state, saasConfig);
-  const activeSourceCount = activeSources(state).length;
-  const contextLimit = Number(entitlements.policy.hiddenLimits.maxSources || 0);
-  const contextRatio = contextLimit > 0 ? activeSourceCount / contextLimit : 1;
-  const contextStatus = !entitlements.activePlanKey
-    ? "unavailable"
-    : contextRatio >= 1
-      ? "full"
-      : contextRatio >= 0.9
-        ? "almost_full"
-        : "available";
+  const { provider, ...publicSubscription } = entitlements.subscription;
   return {
     plan: {
       id: entitlements.plan.id,
@@ -59,17 +50,9 @@ export function getQuotaUsage(state, saasConfig) {
       selected: getPublicPlanSummary(entitlements.selectedPlanKey),
       access: getPublicEntitlementSummary(entitlements.activePlanKey),
     },
-    subscription: entitlements.subscription,
-    academicContext: {
-      status: contextStatus,
-      message: contextStatus === "unavailable"
-        ? "Complete setup to open your academic workspace."
-        : contextStatus === "full"
-          ? "Your academic context is full. Remove older material or choose fewer items."
-          : contextStatus === "almost_full"
-            ? "Your academic context is almost full."
-            : "You have room for more academic material.",
-    },
+    subscription: publicSubscription,
+    capabilities: getPublicProductCapabilities(state),
+    academicContext: getPublicAcademicContextCapacity(state),
     enforcementEnabled: saasConfig?.quotas?.enforcementEnabled === true,
     upgradeAvailable: true,
     paymentsEnabled: saasConfig?.billing?.paymentIntegrationEnabled === true,
@@ -84,7 +67,7 @@ export function getAccountSnapshot({ session, state, saasConfig, lifecycleConfig
   return {
     user: {
       id: session?.user?.id || state.studentProfile.id,
-      email: session?.user?.email || "demo@studentos.local",
+      email: session?.user?.email || "student@studentos.local",
       authenticated: Boolean(session?.authenticated),
       authMode: session?.mode || "local_demo",
       emailVerificationReady: true,

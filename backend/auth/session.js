@@ -15,7 +15,7 @@ export async function getRequestSession(req, { config, authClient }) {
       tokenPresent: false,
       user: {
         id: "student_demo_001",
-        email: "demo@studentos.local",
+        email: "student@studentos.local",
       },
     };
   }

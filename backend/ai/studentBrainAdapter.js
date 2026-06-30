@@ -8,13 +8,13 @@ class LocalStudentBrainProvider {
     this.name = "studentos_local_policy_adapter";
   }
 
-  async run({ verb, message, state, retrievalOverride }) {
+  async run({ verb, message, state, retrievalOverride, assistantPolicy }) {
     return {
       mode: "mock_studentos_brain",
       poweredBy: this.name,
       provider: "mock",
       modelUsed: "local_studentos_policy",
-      ...answerFromStudentMaterials({ verb, message, state, retrievalOverride }),
+      ...answerFromStudentMaterials({ verb, message, state, retrievalOverride, assistantPolicy }),
     };
   }
 }
@@ -29,7 +29,7 @@ class SentIQPatternBridgeProvider {
     return Boolean(this.baseUrl);
   }
 
-  async run({ verb, message, state, retrievalOverride }) {
+  async run({ verb, message, state, retrievalOverride, assistantPolicy }) {
     // Pass 2 keeps provider integration behind this server-side boundary.
     // A later pass can call a copied/adapted StudentOS brain service here.
     return {
@@ -37,7 +37,7 @@ class SentIQPatternBridgeProvider {
       poweredBy: this.name,
       provider: "bridge",
       modelUsed: "local_studentos_policy",
-      ...answerFromStudentMaterials({ verb, message, state, retrievalOverride }),
+      ...answerFromStudentMaterials({ verb, message, state, retrievalOverride, assistantPolicy }),
     };
   }
 }
@@ -73,15 +73,32 @@ export function validateGeneratedCitations(text, snippets = []) {
   };
 }
 
-export async function runStudentOsVerb({ verb, message, state, retrievalOverride = null, fetchImpl = globalThis.fetch }) {
+function applyAssistantPolicy(result, assistantPolicy = {}) {
+  if (!result || assistantPolicy.depth !== "guided") return result;
+  return {
+    ...result,
+    nextActions: Array.isArray(result.nextActions) ? result.nextActions.slice(0, 2) : result.nextActions,
+    studyPlan: result.studyPlan ? {
+      ...result.studyPlan,
+      blocks: Array.isArray(result.studyPlan.blocks) ? result.studyPlan.blocks.slice(0, 3) : result.studyPlan.blocks,
+    } : result.studyPlan,
+    artifacts: result.artifacts ? {
+      ...result.artifacts,
+      notes: Array.isArray(result.artifacts.notes) ? result.artifacts.notes.slice(0, 3) : result.artifacts.notes,
+      quiz: Array.isArray(result.artifacts.quiz) ? result.artifacts.quiz.slice(0, 3) : result.artifacts.quiz,
+    } : result.artifacts,
+  };
+}
+
+export async function runStudentOsVerb({ verb, message, state, retrievalOverride = null, assistantPolicy = {}, fetchImpl = globalThis.fetch }) {
   const config = getAiProviderConfig();
-  const baseAnswer = answerFromStudentMaterials({ verb, message, state, retrievalOverride });
+  const baseAnswer = answerFromStudentMaterials({ verb, message, state, retrievalOverride, assistantPolicy });
   const insufficientContext = buildInsufficientContextNote(baseAnswer);
 
   if (config.requestedMode === "mock" || config.requestedMode === "bridge") {
     const provider = selectProvider(config);
-    const result = await provider.run({ verb, message, state, retrievalOverride });
-    return {
+    const result = await provider.run({ verb, message, state, retrievalOverride, assistantPolicy });
+    return applyAssistantPolicy({
       ...result,
       answer: insufficientContext || result.answer,
       grounding: {
@@ -89,10 +106,10 @@ export async function runStudentOsVerb({ verb, message, state, retrievalOverride
         insufficientContext: Boolean(insufficientContext),
         insufficiencyReason: insufficientContext,
       },
-    };
+    }, assistantPolicy);
   }
 
-  const messages = buildGroundedMessages({ verb, message, state, baseAnswer });
+  const messages = buildGroundedMessages({ verb, message, state, baseAnswer, assistantPolicy });
   const providerResult = await runProviderFallback({ messages, config, fetchImpl });
   const usedRealProvider = providerResult.provider !== "mock" && providerResult.text;
   const citationValidation = validateGeneratedCitations(providerResult.text || "", baseAnswer.grounding?.snippets || []);
@@ -101,7 +118,7 @@ export async function runStudentOsVerb({ verb, message, state, retrievalOverride
       ? insufficientContext
       : citationValidation.text
     : insufficientContext || baseAnswer.answer;
-  return {
+  return applyAssistantPolicy({
     ...baseAnswer,
     mode: usedRealProvider ? "real_grounded_ai" : "mock_studentos_brain",
     poweredBy: usedRealProvider ? providerResult.provider : "studentos_local_policy_adapter",
@@ -118,5 +135,5 @@ export async function runStudentOsVerb({ verb, message, state, retrievalOverride
       insufficiencyReason: insufficientContext,
       authoritativeCitationsOnly: true,
     },
-  };
+  }, assistantPolicy);
 }

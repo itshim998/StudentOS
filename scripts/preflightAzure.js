@@ -88,7 +88,12 @@ addCheck("config exposes safe deployment target", server.includes("deploymentTar
 addCheck("Azure disables backend frontend serving", server.includes("const SERVE_FRONTEND") && server.includes("DEPLOYMENT_TARGET !== \"azure-container-apps\"") && server.includes("frontendServedByBackend: SERVE_FRONTEND"));
 addCheck("Cloudflare runtime config scaffold exists", exists("frontend/runtime-config.js") && exists("scripts/writeCloudflareFrontendConfig.js"));
 addCheck("frontend API config reads runtime config", read("frontend/scripts/config.js").includes("StudentOSRuntimeConfig") && read("frontend/index.html").includes("runtime-config.js"));
-addCheck("frontend detects Cloudflare API base misconfiguration", read("frontend/scripts/app.js").includes("API base URL misconfigured") && read("frontend/scripts/app.js").includes("text/html"));
+addCheck(
+  "frontend detects Cloudflare API base misconfiguration",
+  read("frontend/scripts/app.js").includes("API_BASE_MISCONFIGURED_MESSAGE") &&
+    read("frontend/scripts/app.js").includes("apiBaseMisconfiguredError") &&
+    read("frontend/scripts/app.js").includes("text/html"),
+);
 const redirects = exists("frontend/_redirects") ? read("frontend/_redirects") : "";
 const authCompleteHtml = read("frontend/auth-complete.html");
 addCheck("Cloudflare auth routes exist", redirects.includes("/auth/complete /auth-complete 200") && redirects.includes("/auth/complete/ /auth-complete 200") && redirects.includes("/auth/callback /index.html 200") && redirects.includes("/auth/callback/ /index.html 200"));

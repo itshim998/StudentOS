@@ -54,7 +54,7 @@ function formatStudyState(state, baseAnswer) {
   ].join("\n");
 }
 
-export function buildGroundedMessages({ verb, message, state, baseAnswer }) {
+export function buildGroundedMessages({ verb, message, state, baseAnswer, assistantPolicy = {} }) {
   const normalizedVerb = baseAnswer.verb || verb || "Ask";
   const snippets = baseAnswer.grounding?.snippets || [];
   const lowConfidence = baseAnswer.grounding?.confidence?.lowConfidence === true;
@@ -79,6 +79,7 @@ export function buildGroundedMessages({ verb, message, state, baseAnswer }) {
         "Never claim a citation unless it appears in the supplied source snippets.",
         "Never imply StudentOS submitted, emailed, posted, or completed school work for the student.",
         "Essential learning help is always allowed; convenience automation remains review-first.",
+        assistantPolicy.responseGuidance || "Keep the response clear, concise, and focused on one useful next step.",
         fallbackInstruction,
       ].join(" "),
     },
@@ -104,12 +105,12 @@ export function buildGroundedMessages({ verb, message, state, baseAnswer }) {
 export function buildInsufficientContextNote(baseAnswer) {
   const labels = baseAnswer.sourceLabels || [];
   if (baseAnswer.grounding?.confidence?.lowConfidence) {
-    return "Not enough material yet. Add or index a more relevant source, then ask again.";
+    return "Not enough material yet. Add or choose more relevant material, then ask again.";
   }
   if (baseAnswer.grounding?.uploadedMaterialUsed && baseAnswer.grounding?.snippets?.length) {
     return null;
   }
   return labels.length
-    ? "Not enough material yet. The saved material did not provide enough indexed text for this request."
+    ? "Not enough material yet. The selected material did not cover this request clearly enough."
     : "Not enough material yet. Add a source for this topic, then ask again.";
 }

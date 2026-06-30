@@ -126,13 +126,13 @@
       </nav>
       <section class="rail-session-card" aria-label="StudentOS session">
         <p class="eyebrow">Session</p>
-        <strong id="rail-session-status">Demo session</strong>
+        <strong id="rail-session-status">Local preview</strong>
         <p id="rail-session-help">No sign in needed for local preview.</p>
         <button id="logout-btn" class="secondary-button wide auth-logout" type="button" hidden>Sign out</button>
       </section>
       <div class="rail-footer">
         <span class="status-dot" aria-hidden="true"></span>
-        <span id="connector-status">Demo mode</span>
+        <span id="connector-status">Workspace status pending</span>
       </div>
     </aside>
 
@@ -278,7 +278,7 @@
                 <p class="eyebrow">Academic Profile</p>
                 <h3>StudentOS Setup</h3>
               </div>
-              <button class="text-button" id="demo-seed-btn" type="button">Load demo</button>
+              <button class="text-button" id="demo-seed-btn" type="button">Load sample profile</button>
             </div>
             <form id="onboarding-form" class="form-grid onboarding-form">
               <fieldset class="setup-section">
@@ -441,6 +441,7 @@ Thu|19:00|English writing sprint|English</textarea>
                 </div>
               </div>
               <p class="surface-intro">Files stay private to StudentOS and help AI answer from your materials, cite sources, support review, and show course coverage.</p>
+              <p id="source-capacity-message" class="muted-copy" aria-live="polite"></p>
               <form id="source-form" class="form-grid source-upload-form">
                 <label>
                   Title

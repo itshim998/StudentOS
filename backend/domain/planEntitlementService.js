@@ -565,10 +565,22 @@ export function getPublicEntitlementSummary(planKey) {
     academicContext: {
       level: entitlements.academicContext.tierLabel,
     },
+    features: {
+      adaptiveRoadmap: canUseFeature(planKey, FEATURE_KEYS.ROADMAP_ADAPTIVE),
+      expandedAssessments: canUseFeature(planKey, FEATURE_KEYS.ASSESSMENT_EXPANDED),
+      notes: canUseFeature(planKey, FEATURE_KEYS.NOTES_GENERATION),
+      visualNotes: canUseFeature(planKey, FEATURE_KEYS.NOTES_VISUALS),
+      flashcards: canUseFeature(planKey, FEATURE_KEYS.FLASHCARDS),
+      learningLevel: canUseFeature(planKey, FEATURE_KEYS.LEARNING_LEVEL),
+      consistencyPoints: canUseFeature(planKey, FEATURE_KEYS.CONSISTENCY_POINTS),
+      assignmentCoach: canUseFeature(planKey, FEATURE_KEYS.ASSIGNMENT_COACH),
+      assignmentReview: canUseFeature(planKey, FEATURE_KEYS.ASSIGNMENT_REVIEW),
+    },
     learningLevelEnabled: canUseFeature(planKey, FEATURE_KEYS.LEARNING_LEVEL),
     consistencyPointsEnabled: canUseFeature(planKey, FEATURE_KEYS.CONSISTENCY_POINTS),
     assignmentCoachEnabled: canUseFeature(planKey, FEATURE_KEYS.ASSIGNMENT_COACH),
     assignmentReviewEnabled: canUseFeature(planKey, FEATURE_KEYS.ASSIGNMENT_REVIEW),
+    studentReviewRequired: true,
     assignmentWritebackEnabled: false,
   };
 }

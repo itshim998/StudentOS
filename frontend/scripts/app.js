@@ -3,7 +3,7 @@ const PUBLIC_FRONTEND_HOSTS = new Set([
   "studentos.sentiqlabs.com",
   "studentos-39s.pages.dev",
 ]);
-const API_BASE_MISCONFIGURED_MESSAGE = "API base URL misconfigured. Cloudflare Pages must set STUDENTOS_PUBLIC_API_BASE_URL to the Azure backend URL.";
+const API_BASE_MISCONFIGURED_MESSAGE = "StudentOS is not connected for this site yet. Please try again later.";
 
 let state = null;
 let activeVerb = "Ask";
@@ -60,6 +60,7 @@ const els = {
   sourceList: document.getElementById("source-list"),
   sourceCourseSelect: document.getElementById("source-course-select"),
   sourceFile: document.getElementById("source-file"),
+  sourceCapacityMessage: document.getElementById("source-capacity-message"),
   sourceResult: document.getElementById("source-result"),
   scoreTopicSelect: document.getElementById("score-topic-select"),
   extensionAssignmentSelect: document.getElementById("extension-assignment-select"),
@@ -622,7 +623,7 @@ function renderAuth(message = "") {
     els.logoutBtn.hidden = true;
     setText(els.authModeLabel, "Configuration");
     setText(els.authShellTitle, "StudentOS sign-in is not available yet");
-    setText(els.authShellCopy, "StudentOS sign-in is temporarily unavailable. StudentOS will not open a demo session on this domain.");
+    setText(els.authShellCopy, "StudentOS sign-in is temporarily unavailable. A local preview will not open on this site.");
     setText(els.authSession, "Configuration required");
     setText(els.authHelp, "Please try again after the StudentOS deployment is updated.");
     setText(els.authMessage, message || "");
@@ -635,9 +636,9 @@ function renderAuth(message = "") {
   if (!runtimeConfig.auth?.enabled) {
     els.authForm.hidden = true;
     els.logoutBtn.hidden = true;
-    setText(els.authSession, "Local demo session");
-    setText(els.authHelp, "Local demo keeps account actions available without contacting live sign-in.");
-    setText(els.railSessionStatus, "Demo session");
+    setText(els.authSession, "Local preview");
+    setText(els.authHelp, "Local preview keeps account actions available without contacting live sign-in.");
+    setText(els.railSessionStatus, "Local preview");
     setText(els.railSessionHelp, "Local preview with private-account controls simulated.");
     updateShellVisibility();
     return;
@@ -841,15 +842,15 @@ function getCourseRoadmap(courseId) {
 }
 
 function sourceIsIndexed(source) {
-  return source.status === "indexed" || source.embeddingStatus === "embedded" || Number(source.chunkCount || 0) > 0;
+  return source.readyForStudy === true || source.status === "indexed" || source.status === "ready";
 }
 
 function sourceEmbeddedChunks(source) {
-  if (!source?.id) return Number(source?.chunkCount || 0);
+  if (!source?.id) return sourceIsIndexed(source) ? 1 : 0;
   const embedded = (state.sourceChunks || []).filter((chunk) =>
     chunk.sourceMaterialId === source.id && chunk.embeddingStatus === "embedded"
   ).length;
-  return embedded || Number(source.chunkCount || 0);
+  return embedded || (sourceIsIndexed(source) ? 1 : 0);
 }
 
 function latestSourceJob(source) {
@@ -863,7 +864,7 @@ function latestSourceJob(source) {
 }
 
 function sourceTypeLabel(source) {
-  return source.filename || source.mimeType || humanize(source.kind || source.storageMode || "source");
+  return source.filename || source.mimeType || humanize(source.kind || "Academic material");
 }
 
 function sourceHealthLabel(source, latestJob, embeddedCount) {
@@ -875,15 +876,15 @@ function sourceHealthLabel(source, latestJob, embeddedCount) {
 
 function backendModeLabel(mode) {
   if (mode === "private_cloud_sync") return "Cloud sync";
-  if (mode === "local_preview") return "Demo mode";
+  if (mode === "local_preview") return "Local preview";
   if (mode === "supabase") return "Cloud sync";
-  if (mode === "mock") return "Demo mode";
+  if (mode === "mock") return "Local preview";
   return humanize(mode || "unknown mode");
 }
 
 function classroomModeLabel(value) {
   const mode = String(value || "").toLowerCase();
-  if (mode === "mock") return "Demo Classroom ready";
+  if (mode === "mock" || mode === "preview") return "Classroom preview ready";
   if (mode === "oauth") return "Classroom connected";
   if (mode === "connected") return "Classroom connected";
   if (mode === "disabled") return "Classroom setup not active";
@@ -902,7 +903,7 @@ function normalizedClassroomState(connector = {}) {
     return stateName;
   }
   if (mode === "disabled") return "disabled";
-  if (mode === "mock") return "connected";
+  if (mode === "mock" || mode === "preview") return "connected";
   if (mode === "oauth") return connector.connected ? "connected" : "disconnected";
   return "status_pending";
 }
@@ -978,9 +979,9 @@ function classroomUi(connector = {}, summary = null, history = []) {
   const lastSync = connector.lastSyncAt || history[0]?.completedAt || "";
   if (stateName === "connected") {
     return {
-      title: connector.mode === "mock" ? "Demo Classroom ready" : "Classroom connected",
+      title: connector.mode === "mock" ? "Classroom preview ready" : "Classroom connected",
       message: connector.mode === "mock"
-        ? "Demo assignments can be synced into your study plan."
+        ? "Sample assignments can be added to your study plan."
         : "StudentOS can refresh coursework for your study plan. You stay in control of submissions.",
       badge: "planning import active",
       detail: lastSync ? `Last refreshed ${formatDate(lastSync)}` : summary ? "Classroom coursework has been added to your study plan." : "Ready to refresh assignments.",
@@ -1044,25 +1045,11 @@ function sourceVisibilityLabel(source) {
   return source?.isPrivate ? "Private" : "Private to your account";
 }
 
-function retrievalModeLabel(mode) {
-  const value = String(mode || "").toLowerCase();
-  if (!value) return "";
-  if (value.includes("uploaded") || value.includes("source") || value.includes("rag")) return "uses your materials";
-  if (value.includes("web")) return "reference check";
-  return "";
-}
-
-function retrievalModeTag(grounding = {}) {
-  const label = retrievalModeLabel(grounding.retrievalMode);
-  return label ? tag(label, "source") : "";
-}
-
-function buildSourceAiPrompt(source, course, embeddedCount) {
+function buildSourceAiPrompt(source, course) {
   return [
     `Explain this source for study use: ${source.title}.`,
     `Course: ${course?.title || "Course not set"}.`,
     `Type: ${sourceTypeLabel(source)}.`,
-    `Source sections: ${embeddedCount}.`,
     "Use my uploaded materials where available and call out anything not covered.",
   ].join(" ");
 }
@@ -1222,6 +1209,8 @@ const ONBOARDING_PAGE_COPY = Object.freeze({
 
 function academicContextUploadMarkup() {
   const uploads = [...productUploadResults.values()];
+  const capacity = currentAcademicContextCapacity();
+  const addBlocked = capacity.canAdd !== true;
   return `
     <section class="academic-file-upload" aria-labelledby="academic-file-upload-title">
       <div>
@@ -1229,9 +1218,10 @@ function academicContextUploadMarkup() {
         <p>Upload a syllabus, notes, routines, assignments, or files such as PDF, image, DOCX, PPTX, XLSX, or similar.</p>
       </div>
       <label class="academic-file-picker" for="product-academic-files">
-        <span>Choose files</span>
-        <input id="product-academic-files" type="file" multiple accept=".txt,.md,.markdown,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.jpg,.jpeg,.png,.webp,.heic,.heif,text/plain,text/markdown,application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif">
+        <span>${addBlocked ? "Academic context unavailable" : "Choose files"}</span>
+        <input id="product-academic-files" type="file" multiple ${addBlocked ? "disabled" : ""} accept=".txt,.md,.markdown,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.jpg,.jpeg,.png,.webp,.heic,.heif,text/plain,text/markdown,application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif">
       </label>
+      ${academicContextCapacityMarkup()}
       <div id="product-upload-status" class="academic-upload-status" aria-live="polite">
         ${uploads.map((item) => `<div class="academic-upload-item ${escapeHtml(item.status)}"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.copy)}</span></div>`).join("")}
       </div>
@@ -1297,6 +1287,60 @@ function pendingPlanSummary() {
     bestFor: "Completing plan selection.",
     recommended: false,
   };
+}
+
+function currentProductCapabilities() {
+  return state?.planAccess?.capabilities || accountSnapshot?.planAccess?.capabilities || accountSnapshot?.quota?.capabilities || null;
+}
+
+function currentAcademicContextCapacity() {
+  const capacity = state?.planAccess?.academicContext || accountSnapshot?.planAccess?.academicContext || accountSnapshot?.quota?.academicContext;
+  if (capacity && ["available", "almost_full", "full", "unavailable"].includes(capacity.status)) return capacity;
+  return {
+    status: "unavailable",
+    canAdd: false,
+    message: "Plan setup pending. Finish setup before adding academic material.",
+  };
+}
+
+function academicContextCapacityMarkup() {
+  const capacity = currentAcademicContextCapacity();
+  if (capacity.status === "available") return "";
+  const tone = capacity.status === "full" ? "warning-copy" : "muted-copy";
+  return `<p class="${tone}" data-academic-context-status="${escapeHtml(capacity.status)}">${escapeHtml(capacity.message)}</p>`;
+}
+
+function updateProductFeatureControls() {
+  const capacity = currentAcademicContextCapacity();
+  const blockMaterialAdd = capacity.canAdd !== true;
+  if (els.sourceFile) els.sourceFile.disabled = blockMaterialAdd;
+  const sourceSubmit = document.querySelector("#source-form button[type='submit']");
+  if (sourceSubmit) sourceSubmit.disabled = blockMaterialAdd;
+  if (els.sourceCapacityMessage) {
+    els.sourceCapacityMessage.textContent = capacity.status === "available" ? "" : capacity.message;
+    els.sourceCapacityMessage.classList.toggle("warning-copy", capacity.status === "full");
+  }
+
+  const capabilities = currentProductCapabilities();
+  const assignmentCoachEnabled = capabilities?.features?.assignmentCoach === true;
+  const assignmentCoachCopy = capabilities
+    ? "Assignment Coach is available with Plus or Pro. Student review is always required."
+    : "Plan setup pending. Finish setup to check assignment features.";
+  const contractButton = document.getElementById("contract-btn");
+  if (contractButton) {
+    contractButton.disabled = !assignmentCoachEnabled;
+    contractButton.title = assignmentCoachEnabled ? "" : assignmentCoachCopy;
+    if (!assignmentCoachEnabled && els.contractResult && !els.contractResult.textContent.trim()) {
+      setResult(els.contractResult, `<p>${escapeHtml(assignmentCoachCopy)}</p>`);
+    }
+  }
+  const extensionForm = document.getElementById("extension-form");
+  if (extensionForm) {
+    for (const control of extensionForm.querySelectorAll("input, select, button")) control.disabled = !assignmentCoachEnabled;
+    if (!assignmentCoachEnabled && els.extensionResult && !els.extensionResult.textContent.trim()) {
+      setResult(els.extensionResult, `<p>${escapeHtml(assignmentCoachCopy)}</p>`);
+    }
+  }
 }
 
 function planSummaryCardMarkup(plan, { context = "onboarding", activePlanId = null } = {}) {
@@ -1531,6 +1575,8 @@ function materialsStepMarkup(lifecycle) {
   const draft = lifecycle.materialsDraft || {};
   const draftIds = new Set((draft.materialIds || []).length ? draft.materialIds : lifecycle.selectedMaterialIds || []);
   const draftLabels = (draft.materialLabels || []).length ? draft.materialLabels : lifecycle.selectedMaterialLabels || [];
+  const capacity = currentAcademicContextCapacity();
+  const addBlocked = capacity.canAdd !== true;
   return `
     <p class="eyebrow">Select academic materials</p>
     <h2 id="product-flow-title">Choose what belongs in your first workspace</h2>
@@ -1538,11 +1584,12 @@ function materialsStepMarkup(lifecycle) {
     <form id="product-materials-form" class="product-flow-form">
       ${candidates.length ? `<div class="material-choice-list">${candidates.map((item) => `
         <label class="check-row material-choice-row">
-          <input name="materialIds" type="checkbox" value="${escapeHtml(item.id)}" data-material-label="${escapeHtml(item.title)}" ${draftIds.has(item.id) ? "checked" : ""}>
+          <input name="materialIds" type="checkbox" value="${escapeHtml(item.id)}" data-material-label="${escapeHtml(item.title)}" ${draftIds.has(item.id) ? "checked" : ""} ${addBlocked && !draftIds.has(item.id) ? "disabled" : ""}>
           <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.course)} · ${escapeHtml(item.type)}${item.date ? ` · ${escapeHtml(formatDate(item.date))}` : ""}</small></span>
         </label>
       `).join("")}</div>` : `<div class="product-empty-state"><strong>${classroom ? "No current Classroom coursework found" : "No materials are waiting yet"}</strong><p>${classroom ? "StudentOS did not find current Classroom coursework yet. You can continue and add material later." : "You can continue now and add material when your workspace is ready."}</p></div>`}
       ${classroom ? "" : `<label for="product-material-labels">Materials you may add<textarea id="product-material-labels" name="materialLabels" rows="4" placeholder="For example, Chemistry syllabus&#10;Statistics lecture notes">${escapeHtml(draftLabels.join("\n"))}</textarea></label>`}
+      ${academicContextCapacityMarkup()}
       <p class="form-help">You can add or remove materials later from Academic Context.</p>
       <button class="primary-button" type="submit">Continue to setup summary</button>
     </form>
@@ -1686,6 +1733,7 @@ function render() {
   renderSources();
   renderSelects();
   renderAccount();
+  updateProductFeatureControls();
 }
 
 function renderDashboardSummary() {
@@ -1842,6 +1890,20 @@ function renderClassroomPanel() {
   const stateName = normalizedClassroomState(connector);
   const emptyClassroom = summary?.emptyClassroom || history.some((run) => run.payload?.emptyClassroom);
   const showDetails = summary || history.length;
+  const policy = state?.planAccess?.entitlements?.classroom || classroomStatus?.policy || {};
+  const cadence = String(policy.cadence || "").toLowerCase();
+  const cadenceCopy = cadence.includes("weekly")
+    ? "weekly"
+    : cadence.includes("five days")
+      ? "every five days"
+      : cadence.includes("three days")
+        ? "every three days"
+        : cadence.includes("trial")
+          ? "once during Trial Mode"
+          : "from time to time";
+  const checkPolicyCopy = policy.automaticChecksEnabled
+    ? `StudentOS checks for new coursework ${cadenceCopy}. You choose what to include.`
+    : "Classroom coursework refreshes only when you ask. You choose what to include.";
   setResult(els.classroomPanel, `
     <div class="classroom-compact-head">
       <div>
@@ -1856,6 +1918,7 @@ function renderClassroomPanel() {
       ${providerEmail && stateName === "connected" ? tag("connected account", "source") : ""}
     </div>
     ${ui.detail ? `<p>${escapeHtml(ui.detail)}</p>` : actions.sync ? `<p>Use Sync Classroom when you want the latest assignments in StudentOS.</p>` : ""}
+    <p class="muted-copy">${escapeHtml(checkPolicyCopy)}</p>
     ${emptyClassroom ? `<p class="muted-copy">No active Classroom coursework was found. StudentOS is ready to refresh when new work appears.</p>` : ""}
     ${showDetails ? `
       <details class="classroom-details">
@@ -2085,9 +2148,8 @@ function renderSources() {
           <span><strong>${stuckCount}</strong> delayed</span>
           <span><strong>${health.counts?.completed || 0}</strong> ready</span>
         </div>
-        ${health.processingJobs?.length ? `<p>${health.processingJobs.map((job) => escapeHtml(humanize(job.jobType))).join(", ")}</p>` : ""}
-        ${health.failedJobs?.length ? `<p>${health.failedJobs.map((job) => escapeHtml(`${humanize(job.jobType)}: ${humanize(job.lastError || "failed")}`)).join(" / ")}</p>` : ""}
-        ${health.failedReasons && Object.keys(health.failedReasons).length ? `<p>${Object.entries(health.failedReasons).map(([reason, count]) => escapeHtml(`${humanize(reason)} (${count})`)).join(" / ")}</p>` : ""}
+        ${health.processingJobs?.length ? "<p>Some material is still being prepared.</p>" : ""}
+        ${health.failedJobs?.length ? "<p>One or more materials need another try.</p>" : ""}
       </details>
     </article>
   `;
@@ -2098,7 +2160,7 @@ function renderSources() {
     const healthLabel = sourceHealthLabel(source, latestJob, embeddedCount);
     const matchesSearch = !search || sourceSearchText(source, course, latestJob, embeddedCount).includes(search);
     if (!matchesSearch) return "";
-    const prompt = buildSourceAiPrompt(source, course, embeddedCount);
+    const prompt = buildSourceAiPrompt(source, course);
     const needsReview = /needs|ocr|failed/i.test(`${healthLabel} ${latestJob?.status || ""} ${source.status || ""}`);
     const readyLabel = needsReview ? "Needs review" : (sourceIsIndexed(source) || embeddedCount ? "Ready" : "Saved privately");
     return `
@@ -2120,12 +2182,10 @@ function renderSources() {
           <summary>Source details</summary>
           <div class="source-health-grid source-card-metrics">
             <span><strong>${escapeHtml(sourceStatusLabel(healthLabel))}</strong> status</span>
-            <span><strong>${embeddedCount}</strong> source sections</span>
-            <span><strong>${source.citationLabel ? "ready" : "pending"}</strong> citation</span>
-            <span><strong>${escapeHtml(source.webFallbackAllowed ? "outside references labeled" : "your materials only")}</strong> reference use</span>
+            <span><strong>${source.citationLabel ? "Ready" : "Preparing"}</strong> study reference</span>
+            <span><strong>Student controlled</strong> selected material</span>
           </div>
-          ${source.extractionSummary ? `<p>${escapeHtml(source.extractionSummary)}</p>` : ""}
-          ${source.extractionError || latestJob?.lastError ? `<p class="warning-copy">${escapeHtml(humanize(source.extractionError || latestJob.lastError))}</p>` : ""}
+          ${source.extractionError || latestJob?.lastError ? `<p class="warning-copy">This material needs another try before it is ready for study.</p>` : ""}
           ${source.extractedSnippet ? `<blockquote class="source-preview">${escapeHtml(source.extractedSnippet)}</blockquote>` : ""}
           <div class="source-action-row">
             <button class="mini-action" type="button" data-reindex-source-id="${source.id}">Retry source</button>
@@ -2286,10 +2346,14 @@ function familyAccessLabel(status) {
 function localAccountSnapshot() {
   const selectedPlan = productPlan(state?.productLifecycle?.selectedPlanId);
   const plan = selectedPlan || pendingPlanSummary();
-  const activeSources = (state?.sourceMaterials || []).filter((source) => !source.deletedAt);
+  const academicContext = state?.planAccess?.academicContext || {
+    status: "unavailable",
+    canAdd: false,
+    message: "Plan setup pending. Finish setup before adding academic material.",
+  };
   return {
     user: {
-      email: authSession?.user?.email || authSession?.email || "demo@studentos.local",
+      email: authSession?.user?.email || authSession?.email || "student@studentos.local",
       authenticated: Boolean(authSession?.access_token),
       authMode: authSession?.access_token ? "supabase_auth" : "local_demo",
       emailVerificationReady: true,
@@ -2313,16 +2377,8 @@ function localAccountSnapshot() {
         renewalAt: null,
         cancelAtPeriodEnd: false,
       },
-      usage: {
-        aiRequestsToday: (state?.aiMessages || []).filter((message) => message.role === "user").length,
-        sourceCount: activeSources.length,
-        uploadsToday: activeSources.length,
-        courses: (state?.courses || []).length,
-        workerJobsToday: (state?.backgroundJobs || []).length,
-        reindexJobsToday: (state?.backgroundJobs || []).filter((job) => job.jobType === "source_reindex").length,
-        storageBytes: activeSources.reduce((total, source) => total + Number(source.sizeBytes || 0), 0),
-      },
-      quotas: plan.quotas || {},
+      capabilities: state?.planAccess?.capabilities || null,
+      academicContext,
       enforcementEnabled: runtimeConfig.saas?.quotas?.enforcementEnabled === true,
       paymentsEnabled: false,
     },
@@ -2358,6 +2414,7 @@ function renderAccount() {
   const selectedPlan = productPlan(state.productLifecycle?.selectedPlanId);
   const accountSelectedPlan = productPlan(quota.plan?.selected?.planKey || quota.subscription?.planId);
   const plan = selectedPlan || accountSelectedPlan || pendingPlanSummary();
+  const contextCapacity = quota.academicContext || currentAcademicContextCapacity();
   if (els.accountResetEmail && !els.accountResetEmail.value) {
     els.accountResetEmail.value = account.user?.email || "";
   }
@@ -2393,14 +2450,15 @@ function renderAccount() {
         <p>${escapeHtml(planValueStatement(plan))}</p>
       </div>
       <div class="account-plan-state">
-        <span>Academic context ready</span>
-        <p>You can add courses and selected material as your semester changes.</p>
+        <span>${escapeHtml(contextCapacity.status === "full" ? "Academic context full" : contextCapacity.status === "almost_full" ? "Academic context almost full" : contextCapacity.status === "available" ? "Academic context ready" : "Plan setup pending")}</span>
+        <p>${escapeHtml(contextCapacity.message || "Finish plan setup to prepare your academic context.")}</p>
       </div>
     </div>
     <ul class="pricing-feature-list">${planFeatureBullets(plan).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
   `;
   renderLifecycle(account.lifecycle || {});
   renderPricing(publicPlanKey(plan));
+  updateProductFeatureControls();
 }
 
 function renderLifecycle(lifecycle = {}) {
@@ -2585,7 +2643,7 @@ function renderAiPayload(result) {
   }
   if (result.artifacts) {
     extra.push(`<strong>Notes</strong>${list(result.artifacts.notes)}`);
-    extra.push(`<strong>Flashcards</strong>${list(result.artifacts.flashcards.map((card) => `${card.front} / ${card.back}`))}`);
+    if (result.artifacts.flashcards?.length) extra.push(`<strong>Flashcards</strong>${list(result.artifacts.flashcards.map((card) => `${card.front} / ${card.back}`))}`);
     extra.push(`<strong>Quiz</strong>${list(result.artifacts.quiz.map((question) => question.prompt))}`);
   }
   if (result.review) {
@@ -2597,12 +2655,12 @@ function renderAiPayload(result) {
   }
   if (result.grounding?.snippets?.length) {
     extra.push(`
-      <strong>Cited snippets</strong>
+      <strong>Selected material</strong>
       <div class="source-snippets">
         ${result.grounding.snippets.map((item) => `
           <blockquote>
             <p>${escapeHtml(item.snippet)}</p>
-            <cite>${escapeHtml(item.citationLabel || item.sourceTitle || "Uploaded source")} ${item.confidenceLabel ? `/ ${escapeHtml(item.confidenceLabel)} confidence` : ""}</cite>
+            <cite>${escapeHtml(item.citationLabel || item.sourceTitle || "Selected material")}</cite>
           </blockquote>
         `).join("")}
       </div>
@@ -2610,14 +2668,12 @@ function renderAiPayload(result) {
   }
 
   setResult(els.aiResponse, `
-    <strong>${escapeHtml(result.verb)} result</strong>
+    <strong>StudentOS response</strong>
     <p>${escapeHtml(result.answer)}</p>
       <div class="tag-row">
         ${result.coverage?.status ? tag(humanize(result.coverage.status), toneForCoverage(result.coverage.status)) : ""}
-      ${retrievalModeTag(result.grounding)}
       ${result.grounding?.insufficientContext ? tag("not enough material yet", "urgent") : ""}
       ${(result.sourceLabels || []).map((source) => tag(source.label, "source")).join("")}
-      ${result.webFallback?.allowed ? tag("references labeled", "medium") : ""}
     </div>
     ${result.grounding?.insufficiencyReason ? `<p>${escapeHtml(result.grounding.insufficiencyReason)}</p>` : ""}
     ${extra.join("")}
@@ -2640,7 +2696,7 @@ async function runAi(event) {
         <p>${escapeHtml(error.message || "StudentOS could not finish this response. Try again after checking your sources.")}</p>
         <div class="tag-row">
           ${tag("try again", "medium")}
-          ${tag("citations not invented", "source")}
+          ${tag("selected material protected", "source")}
         </div>
       `);
     }
@@ -2801,6 +2857,11 @@ async function draftExtension(event) {
 
 async function addSource(event) {
   event.preventDefault();
+  const capacity = currentAcademicContextCapacity();
+  if (capacity.canAdd !== true) {
+    setResult(els.sourceResult, `<p>${escapeHtml(capacity.message)}</p>`);
+    return;
+  }
   const form = new FormData(event.currentTarget);
   if (!form.get("file") || !form.get("file").name) {
     setResult(els.sourceResult, `<p>Choose a file first.</p>`);
@@ -2815,9 +2876,8 @@ async function addSource(event) {
       });
       setResult(els.sourceResult, `
         <strong>${escapeHtml(result.material.title)}</strong>
-        <p>${escapeHtml(result.material.extractionSummary || result.extractionSummary || "Private source registered.")}</p>
-        ${result.material.extractionError ? `<p>${escapeHtml(humanize(result.material.extractionError))}</p>` : ""}
-        <div class="tag-row">${tag("Private", "source")}${tag(sourceStatusLabel(result.material.status || result.status))}${tag(indexedSectionsLabel(result.material.chunkCount || result.chunkCount || 0), "source")}${tag("Private to your account", "source")}</div>
+        <p>${result.material.extractionError ? "This material was added, but it needs another try before it is ready for study." : "Added to your academic context and ready for StudentOS to use."}</p>
+        <div class="tag-row">${tag("Private", "source")}${tag(sourceStatusLabel(result.material.status || result.status))}${tag("Private to your account", "source")}</div>
       `);
       await loadBootstrap();
     } catch (error) {
@@ -2907,7 +2967,7 @@ async function submitOnboarding(event) {
 }
 
 async function seedDemoProfile() {
-  setLoading(els.onboardingResult, "Loading demo student profile...");
+  setLoading(els.onboardingResult, "Loading a sample student profile...");
   const result = await api("/api/demo/seed", {
     method: "POST",
     body: JSON.stringify({}),
@@ -3068,12 +3128,10 @@ async function requestDeletionDryRun(requestId) {
       : "Affected counts match the previous preview.";
   setResult(els.accountActionResult, `
     <strong>Deletion safety preview ready</strong>
-    <p>No data has been deleted yet. This preview covers ${escapeHtml(summary.databaseRows || 0)} account record(s) and ${escapeHtml(summary.storageObjects || 0)} private file(s). ${escapeHtml(diffCopy)}</p>
+    <p>No data has been deleted yet. This preview covers your account information and private files. ${escapeHtml(diffCopy)}</p>
     <div class="tag-row">
-      ${tag(`${summary.sourceChunks || 0} source sections`, "source")}
-      ${tag(`${summary.memoryItems || 0} study records`, "source")}
-      ${tag(`${summary.embeddingMetadata || 0} search records`, "source")}
-      ${tag(`${summary.backgroundJobs || 0} study update records`, "source")}
+      ${tag("Academic material included", "source")}
+      ${tag("Study history included", "source")}
       ${tag("No data deleted yet", "urgent")}
     </div>
     ${requestReference(requestId)}
@@ -3152,7 +3210,7 @@ async function syncClassroom() {
     body: JSON.stringify({}),
   });
   state = result.state || state;
-  classroomStatus = { connector: result.connector, syncSummary: result.summary, syncHistory: result.connector?.syncHistory || [] };
+  classroomStatus = { connector: result.connector, syncSummary: result.summary, syncHistory: result.connector?.syncHistory || [], policy: result.policy || null };
   classroomStatusLoaded = true;
   render();
 }
@@ -3302,6 +3360,12 @@ function productFileKey(file) {
 }
 
 async function uploadAcademicContextFile(file) {
+  const capacity = currentAcademicContextCapacity();
+  if (capacity.canAdd !== true) {
+    productUploadResults.set(productFileKey(file), { name: file.name, status: "failed", copy: capacity.message });
+    renderProductUploadStatus();
+    return;
+  }
   const key = productFileKey(file);
   productUploadResults.set(key, { name: file.name, status: "adding", copy: "Adding to your academic context…" });
   productUploadsPending += 1;
@@ -3313,6 +3377,7 @@ async function uploadAcademicContextFile(file) {
     form.set("file", file);
     const result = await api("/api/sources/upload", { method: "POST", body: form });
     const material = result.material;
+    state = result.state || state;
     if (!state.sourceMaterials.some((item) => item.id === material.id)) {
       state.sourceMaterials.push({ ...material, sourceType: "uploaded_file", createdAt: new Date().toISOString() });
     }
@@ -3328,6 +3393,7 @@ async function uploadAcademicContextFile(file) {
       materialTitle: material.title,
     });
     if (lifecycle.nextStep === "materials") renderProductFlow();
+    updateProductFeatureControls();
   } catch (error) {
     productUploadResults.set(key, { name: file.name, status: "failed", copy: error.message || "This file could not be added. You can try again." });
   } finally {
@@ -3470,7 +3536,7 @@ async function refreshClassroomForProductFlow() {
       body: JSON.stringify({}),
     });
     state = result.state || state;
-    classroomStatus = { connector: result.connector, syncSummary: result.summary, syncHistory: result.connector?.syncHistory || [] };
+    classroomStatus = { connector: result.connector, syncSummary: result.summary, syncHistory: result.connector?.syncHistory || [], policy: result.policy || null };
     classroomStatusLoaded = true;
     render();
   } catch (error) {
@@ -3659,7 +3725,7 @@ function wireEvents() {
   els.demoSeedBtn.addEventListener("click", () => {
     withButtonLoading(els.demoSeedBtn, "Loading...", seedDemoProfile, {
       timeoutTarget: els.onboardingResult,
-      timeoutCopy: "Loading the demo profile is taking longer than expected. You can try again.",
+      timeoutCopy: "Loading the sample profile is taking longer than expected. You can try again.",
       timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
     }).catch((error) => {
       setResult(els.onboardingResult, `<p>${escapeHtml(error.message)}</p>`);

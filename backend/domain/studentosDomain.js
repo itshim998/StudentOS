@@ -1433,7 +1433,7 @@ export function buildStudyPlan(state, topic) {
   };
 }
 
-export function buildMakeArtifacts(state, topic) {
+export function buildMakeArtifacts(state, topic, { flashcardsEnabled = true } = {}) {
   const sources = sourcesForTopic(state, topic);
   return {
     notes: [
@@ -1442,11 +1442,11 @@ export function buildMakeArtifacts(state, topic) {
       "Example: keep one solved example from your teacher/source material.",
       "Mistake guard: add one trap from your correction sheet.",
     ],
-    flashcards: [
+    flashcards: flashcardsEnabled ? [
       { front: `What is the core idea of ${topic.title}?`, back: "Answer from source material in one sentence." },
       { front: "What is the most common mistake?", back: topic.weakSignals?.[0] || "Skipping the setup step." },
       { front: "What should you check before final answer?", back: "Units, labels, and whether the question was fully answered." },
-    ],
+    ] : [],
     quiz: buildMcqQuestionsForTopic(topic, 4),
     summaryScaffold: `Source: ${sources[0]?.citationLabel || "student material"}\nIdea:\nSteps:\nExample:\nMistake to avoid:\nOne-minute recall:`,
   };
@@ -1473,7 +1473,7 @@ export function buildReviewCheck(state, topic) {
   };
 }
 
-export function answerFromStudentMaterials({ verb, message, state, retrievalOverride = null }) {
+export function answerFromStudentMaterials({ verb, message, state, retrievalOverride = null, assistantPolicy = {} }) {
   const { topic, course } = getGroundingContext(state, message);
   const sources = sourcesForTopic(state, topic);
   const retrieved = retrievalOverride || retrieveGroundedSources({ state, message, topic, course });
@@ -1486,10 +1486,10 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
   const insufficientMaterial = retrieved.confidence?.lowConfidence ||
     (!retrieved.hasUploadedMaterial && !retrieved.chunks.length && !retrieved.memories.length);
   const groundingSummary = retrieved.confidence?.lowConfidence
-    ? "Not enough material yet. Add or index a more relevant source, then ask again."
+    ? "Not enough material yet. Add or choose more relevant material, then ask again."
     : retrieved.hasUploadedMaterial
-      ? "Grounding uses your saved study materials."
-      : "Use this as a study-plan draft until more source material is indexed.";
+      ? "I used your selected study material."
+      : "Use this as a study-plan draft until you add more relevant material.";
   const retrievedSnippet = retrieved.chunks[0]?.snippet || retrieved.memories[0]?.body || retrieved.sources[0]?.extractedText || "";
   const coverage = determineTopicCoverage(state, topic);
   const normalizedVerb = AI_VERBS.includes(verb) ? verb : "Ask";
@@ -1539,12 +1539,17 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
   }
 
   if (normalizedVerb === "Make") {
-    const artifacts = buildMakeArtifacts(state, topic);
+    const artifacts = buildMakeArtifacts(state, topic, {
+      flashcardsEnabled: assistantPolicy.flashcardsEnabled !== false,
+    });
+    const createdMaterials = artifacts.flashcards.length
+      ? "notes, flashcards, a short quiz, and a summary scaffold"
+      : "notes, a short quiz, and a summary scaffold";
     return {
       ...base,
       answer: insufficientMaterial
         ? `${groundingSummary} I can make a safe outline for ${topic.title}, but add a relevant source before using it as final study material.`
-        : `Created study materials for ${requestText || topic.title}: notes, flashcards, a short quiz, and a summary scaffold for ${topic.title}. ${groundingSummary}`,
+        : `Created study materials for ${requestText || topic.title}: ${createdMaterials} for ${topic.title}. ${groundingSummary}`,
       artifacts,
       nextActions: ["Save structured notes", "Try the quiz", "Review missed items before any convenience drafting"],
     };
@@ -1565,7 +1570,7 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
   return {
     ...base,
     answer: insufficientMaterial
-      ? `${groundingSummary} I do not have enough indexed material to answer "${requestText || topic.title}" from your sources yet.`
+      ? `${groundingSummary} I do not have enough relevant material to answer "${requestText || topic.title}" yet.`
       : `For "${requestText || topic.title}", start with ${topic.title} from your study context. ${groundingSummary} If a reference goes beyond your material, it must be labeled.`,
       explanation: {
       concept: retrieved.confidence?.lowConfidence

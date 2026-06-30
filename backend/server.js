@@ -30,11 +30,21 @@ import {
   requireDashboardActive,
 } from "./domain/productLifecycleService.js";
 import {
+  FEATURE_KEYS,
   PLAN_KEYS,
   getPublicEntitlementSummary,
   getPublicPlanSummary,
   normalizePlanKey,
 } from "./domain/planEntitlementService.js";
+import {
+  assertAcademicContextCanAdd,
+  assertAcademicContextSelection,
+  assertProductFeatureAccess,
+  getAssistantExecutionPolicy,
+  getProductClassroomPolicy,
+  getPublicAcademicContextCapacity,
+  getPublicProductCapabilities,
+} from "./domain/productFeatureAccessService.js";
 import { getRequestSession } from "./auth/session.js";
 import {
   getPublicAuthConfig,
@@ -430,6 +440,9 @@ function publicState(state, persistence) {
         storageBucket,
         storagePath,
         storageMode,
+        sizeBytes,
+        chunkCount,
+        embeddingStatus,
         extractedText,
         extractionProvider,
         ...safeSource
@@ -437,17 +450,12 @@ function publicState(state, persistence) {
       return {
         ...safeSource,
         isPrivate: Boolean(storageBucket || storagePath),
+        readyForStudy: source.status === "indexed" || source.status === "ready" || Number(chunkCount || 0) > 0,
         extractedSnippet: extractedText ? String(extractedText).slice(0, 180) : "",
       };
     }),
-    sourceChunks: (state.sourceChunks || []).map((chunk) => {
-      const { text, chunkText, embeddingVector, embeddingProvider, embeddingModel, ...safeChunk } = chunk;
-      return safeChunk;
-    }),
-    embeddingsMetadata: (state.embeddingsMetadata || []).map((embedding) => {
-      const { embeddingValues, vectorRef, provider, model, ...safeEmbedding } = embedding;
-      return safeEmbedding;
-    }),
+    sourceChunks: [],
+    embeddingsMetadata: [],
     backgroundJobs: (state.backgroundJobs || []).map((job) => {
       const { payload, ...safeJob } = job;
       return safeJob;
@@ -455,7 +463,7 @@ function publicState(state, persistence) {
     jobEvents: [],
     auditLog: [],
     billingSubscriptions: (state.billingSubscriptions || []).map((subscription) => {
-      const { providerCustomerId, providerSubscriptionId, payload, ...safeSubscription } = subscription;
+      const { provider, providerCustomerId, providerSubscriptionId, payload, ...safeSubscription } = subscription;
       return safeSubscription;
     }),
     billingWebhookEvents: [],
@@ -475,6 +483,8 @@ function publicState(state, persistence) {
       accessMode: productLifecycle.accessMode || null,
       selectedPlan: getPublicPlanSummary(selectedPlanKey),
       entitlements: getPublicEntitlementSummary(activePlanKey),
+      capabilities: getPublicProductCapabilities(state),
+      academicContext: getPublicAcademicContextCapacity(state),
       dashboardAccess: productLifecycle.dashboardActive === true && Boolean(activePlanKey),
     },
     saas: getPublicSaasStatus(saasConfig),
@@ -504,16 +514,29 @@ function getPublicEmbeddingStatus(config) {
 
 function publicAiResult(result = {}) {
   const {
+    mode,
     poweredBy,
     provider,
     modelUsed,
     fallback,
+    citationValidation,
+    webFallback,
+    grounding = {},
     ...safeResult
   } = result;
   return {
     ...safeResult,
     engineLabel: "StudentOS AI",
-    fallback: { used: fallback?.used === true },
+    grounding: {
+      uploadedMaterialUsed: grounding.uploadedMaterialUsed === true,
+      insufficientContext: grounding.insufficientContext === true,
+      insufficiencyReason: grounding.insufficiencyReason || null,
+      snippets: (grounding.snippets || []).map((item) => ({
+        citationLabel: item.citationLabel || null,
+        sourceTitle: item.sourceTitle || null,
+        snippet: item.snippet || "",
+      })),
+    },
   };
 }
 
@@ -599,7 +622,7 @@ function publicClassroomConnector(connector = {}) {
     ? connector.syncHistory.map(publicClassroomSyncRun)
     : [];
   const publicMode = connector.mode === "mock"
-    ? "demo"
+    ? "preview"
     : ["disabled", "setup_required"].includes(connector.state || connector.status)
       ? "inactive"
       : "classroom_import";
@@ -942,11 +965,10 @@ async function handleApi(req, res, url) {
       saas: getPublicSaasStatus(saasConfig),
       storagePlan: getSourceStoragePlan(supabaseConfig),
       classroom: publicClassroomConnector(classroomConfigStatus),
-      essentialLearningUngated: true,
+      featuresRequireWorkspaceReadiness: true,
       convenienceCreditsEnabled: true,
       realSubmissionEnabled: false,
-      learningAdaptivityVisible: false,
-      intelligenceLoop: ["ask", "plan", "make", "review", "coverage", "test_credit", "corrections", "tutor_lesson", "roadmap"],
+      assignmentStudentReviewRequired: true,
       onboarding: {
         enabled: true,
         demoSeedEnabled: saasConfig.demoSeedEnabled,
@@ -1653,6 +1675,9 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session, state, persistence } = await getStateContext(req);
     requireAccountSession(session);
+    if (body.action === "save_materials") {
+      assertAcademicContextSelection(state, body.payload?.materialIds || []);
+    }
     const lifecycle = applyProductLifecycleAction(state, body.action, body.payload || {}, {
       config: productFlowConfig,
     });
@@ -1735,6 +1760,7 @@ async function handleApi(req, res, url) {
     });
     sendJson(res, 200, {
       connector: publicClassroomConnector(connector),
+      policy: getPublicEntitlementSummary(resolveEntitlements(state).activePlanKey).classroom,
       readOnly: true,
       writebackEnabled: false,
       secretsPrinted: false,
@@ -1882,6 +1908,12 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/classroom/sync") {
     const { session, state, persistence } = await getStateContext(req);
     requireProductClassroomSyncAccess(state);
+    const classroomPolicy = getProductClassroomPolicy(state);
+    if (!classroomPolicy.planReady || classroomPolicy.manualImportEnabled !== true) {
+      const error = new Error("Plan setup pending. Finish setup before checking Classroom coursework.");
+      error.status = 403;
+      throw error;
+    }
     const connector = await getClassroomConnectorStatus({
       state,
       session,
@@ -1916,6 +1948,7 @@ async function handleApi(req, res, url) {
       state: publicState(state, persistence),
       assignmentInsights: getAssignmentInsights(state),
       todayNextActions: getTodayNextActions(state),
+      policy: getPublicEntitlementSummary(resolveEntitlements(state).activePlanKey).classroom,
       secretsPrinted: false,
     });
     return;
@@ -1945,6 +1978,21 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
     requireDashboardActive(state);
+    assertProductFeatureAccess(state, FEATURE_KEYS.ASSISTANT);
+    const requestedVerb = ["Ask", "Plan", "Make", "Review"].includes(body.verb) ? body.verb : "Ask";
+    const verbFeature = {
+      Plan: FEATURE_KEYS.ROADMAP_BASIC,
+      Make: FEATURE_KEYS.NOTES_GENERATION,
+      Review: FEATURE_KEYS.ASSESSMENT_BASIC,
+    }[requestedVerb];
+    if (verbFeature) {
+      assertProductFeatureAccess(state, verbFeature, {
+        message: requestedVerb === "Make"
+          ? "Study material creation is available with Starter or higher. You can still ask StudentOS for guided help."
+          : "This study workflow is available on a different StudentOS plan. Review plans to continue.",
+      });
+    }
+    const assistantPolicy = getAssistantExecutionPolicy(state);
     enforceRateLimit(req, session, "ai_call");
     enforceUsage(state, "ai_call");
     const groundingContext = getGroundingContext(state, body.message || "");
@@ -1953,13 +2001,14 @@ async function handleApi(req, res, url) {
       message: body.message || "",
       topic: groundingContext.topic,
       course: groundingContext.course,
-      limit: 5,
+      limit: assistantPolicy.retrievalLimit,
     });
     const result = await runStudentOsVerb({
-      verb: body.verb || "Ask",
+      verb: requestedVerb,
       message: body.message || "",
       state,
       retrievalOverride,
+      assistantPolicy,
     });
     const { conversation, messages } = createAiPersistencePayload({ session, body, result });
     await repository.saveAiConversation(session, conversation, messages);
@@ -2099,6 +2148,9 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
     requireDashboardActive(state);
+    assertProductFeatureAccess(state, FEATURE_KEYS.ASSIGNMENT_COACH, {
+      message: "Assignment Coach is available with Plus or Pro. Student review is always required.",
+    });
     const assignment = findAssignment(state, body.assignmentId);
     if (!assignment) {
       sendJson(res, 404, { error: "Assignment not found" });
@@ -2130,6 +2182,9 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
     requireDashboardActive(state);
+    assertProductFeatureAccess(state, FEATURE_KEYS.ASSIGNMENT_COACH, {
+      message: "Assignment preparation is available with Plus or Pro. Student review is always required.",
+    });
     const assignment = findAssignment(state, body.assignmentId) || state.assignments[0];
     const draft = buildExtensionDecisionDraft({
       profile: state.studentProfile,
@@ -2231,6 +2286,7 @@ async function handleApi(req, res, url) {
         timeoutMs: 10000,
       });
       requireProductMaterialAccess(state);
+      assertAcademicContextCanAdd(state);
       requireUploadSession(session);
       enforceRateLimit(req, session, "upload");
 
@@ -2419,6 +2475,7 @@ async function handleApi(req, res, url) {
           public: false,
         },
         state: publicState(state, persistence),
+        academicContext: getPublicAcademicContextCapacity(state),
         secretsPrinted: false,
       });
     } catch (error) {

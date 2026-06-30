@@ -1,8 +1,5 @@
 import { resolveEntitlements } from "../billing/billingService.js";
-
-function activeSources(state) {
-  return (state.sourceMaterials || []).filter((source) => !source.deletedAt);
-}
+import { countAcademicContextMaterials } from "../domain/productFeatureAccessService.js";
 
 function activeJobs(state, type = null) {
   return (state.backgroundJobs || []).filter((job) => !type || job.jobType === type);
@@ -27,7 +24,7 @@ export function checkUsagePolicy({
   }
   if (action === "upload") {
     if (Number(context.fileSizeBytes || 0) > quotas.maxFileBytes) violations.push("file_size_quota_exceeded");
-    if (activeSources(state).length >= quotas.maxSources) violations.push("source_count_quota_exceeded");
+    if (countAcademicContextMaterials(state) >= quotas.maxSources) violations.push("source_count_quota_exceeded");
   }
   if (action === "course_create" && (state.courses || []).length >= quotas.maxCourses) {
     violations.push("course_quota_exceeded");

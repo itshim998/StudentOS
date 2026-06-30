@@ -94,9 +94,9 @@ function classroomActionsForState(stateName) {
 function classroomUiForState(stateName, { mode = "", lastSyncAt = "", summary = null } = {}) {
   if (stateName === "connected") {
     return {
-      title: mode === "mock" ? "Demo Classroom ready" : "Classroom connected",
+      title: mode === "mock" ? "Classroom preview ready" : "Classroom connected",
       message: mode === "mock"
-        ? "Demo assignments can be synced into your study plan."
+        ? "Sample assignments can be added to your study plan."
         : "StudentOS can refresh coursework for your study plan. You stay in control of submissions.",
       badge: "planning import active",
       detail: lastSyncAt

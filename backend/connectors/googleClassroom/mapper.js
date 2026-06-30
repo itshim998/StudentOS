@@ -116,13 +116,19 @@ function applyClassroomRetention(state, summary, retention = {}) {
   const maxAssignments = Number(retention.maxImportedAssignments || 200);
   const maxMaterials = Number(retention.maxImportedMaterials || 400);
   const classroomAssignments = (state.assignments || []).filter(classroomItem);
+  const selectedIds = new Set((state.studentProfile?.productLifecycle?.selectedMaterialIds || []).map(String));
+  const selectedWorkIds = new Set((state.sourceMaterials || [])
+    .filter((source) => classroomItem(source) && selectedIds.has(String(source.id)) && source.providerCourseWorkId)
+    .map((source) => source.providerCourseWorkId));
   const evictedWorkIds = new Set();
   const evictedSourceIds = new Set();
 
   if (Number.isFinite(maxAssignments) && maxAssignments > 0 && classroomAssignments.length > maxAssignments) {
+    const excess = classroomAssignments.length - maxAssignments;
     const overflow = classroomAssignments
+      .filter((item) => !selectedIds.has(String(item.id)) && !selectedWorkIds.has(item.providerCourseWorkId))
       .sort(oldestFirst)
-      .slice(0, classroomAssignments.length - maxAssignments);
+      .slice(0, excess);
     const evictedIds = new Set(overflow.map((item) => item.id));
     for (const item of overflow) {
       if (item.providerCourseWorkId) evictedWorkIds.add(item.providerCourseWorkId);
@@ -132,15 +138,17 @@ function applyClassroomRetention(state, summary, retention = {}) {
   }
 
   const assignmentEvictedMaterials = (state.sourceMaterials || [])
-    .filter((source) => classroomItem(source) && evictedWorkIds.has(source.providerCourseWorkId));
+    .filter((source) => classroomItem(source) && evictedWorkIds.has(source.providerCourseWorkId) && !selectedIds.has(String(source.id)));
   assignmentEvictedMaterials.forEach((source) => evictedSourceIds.add(source.id));
 
   const remainingClassroomMaterials = (state.sourceMaterials || [])
     .filter((source) => classroomItem(source) && !evictedSourceIds.has(source.id));
   if (Number.isFinite(maxMaterials) && maxMaterials > 0 && remainingClassroomMaterials.length > maxMaterials) {
+    const excess = remainingClassroomMaterials.length - maxMaterials;
     const overflow = remainingClassroomMaterials
+      .filter((source) => !selectedIds.has(String(source.id)))
       .sort(oldestFirst)
-      .slice(0, remainingClassroomMaterials.length - maxMaterials);
+      .slice(0, excess);
     overflow.forEach((source) => evictedSourceIds.add(source.id));
   }
 
