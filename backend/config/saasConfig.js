@@ -37,11 +37,8 @@ export function getDeploymentEnvironment(env = process.env) {
   return "development";
 }
 
-export function isDemoSeedAllowed({ env = process.env, supabaseConfig } = {}) {
-  const deployment = getDeploymentEnvironment(env);
-  if (deployment === "production") return false;
-  if (readBool(env, "STUDENTOS_DEMO_SEED_ENABLED", false)) return true;
-  return supabaseConfig?.mode === "mock" || ["mock", "demo", "dev"].includes(String(supabaseConfig?.requestedMode || "").toLowerCase());
+export function isDemoSeedAllowed() {
+  return false;
 }
 
 export function getSaasConfig({
@@ -209,7 +206,6 @@ export function getPublicSaasStatus(config) {
     product: config.product,
     deployment: config.deployment,
     environmentStrategy: config.environmentStrategy,
-    demoSeedEnabled: config.demoSeedEnabled,
     roles: config.roles,
     billing: {
       ...config.billing,

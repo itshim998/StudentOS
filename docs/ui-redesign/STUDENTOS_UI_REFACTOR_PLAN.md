@@ -453,7 +453,7 @@ API flows to preserve:
 - `/api/bootstrap`
 - `/api/ai/verb`
 - `/api/onboarding`
-- `/api/demo/seed`
+- Do not restore the removed sample-profile route; empty/setup states are the runtime fallback.
 - `/api/classroom/status`, `/api/classroom/oauth/start`, `/api/classroom/sync`, `/api/classroom/disconnect`
 - `/api/sources/upload`, source delete/reindex, `/api/jobs/retry-failed`
 - `/api/assignment-flow`, `/api/tests/score`, `/api/extension/draft`, `/api/assignment-contract`

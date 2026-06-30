@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { createSeedState, getTodayNextActions, answerFromStudentMaterials } from "./domain/studentosDomain.js";
+import { getTodayNextActions, answerFromStudentMaterials } from "./domain/studentosDomain.js";
+import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 import {
   applyStudentOnboarding,
-  buildDemoOnboardingPayload,
   generateAcademicRoadmap,
   normalizeOnboardingPayload,
 } from "./domain/onboardingService.js";
@@ -73,10 +73,10 @@ const session = {
   user: { id: "student_demo_001", email: "demo@studentos.local" },
 };
 const repoState = await repository.loadState(session);
-applyStudentOnboarding(repoState, buildDemoOnboardingPayload(now), { now, demo: true });
+applyStudentOnboarding(repoState, payload, { now });
 await repository.saveState(session, repoState);
 const loaded = await repository.loadState(session);
-assert.equal(loaded.studentProfile.preferences.academicGoal, "exam_prep");
+assert.equal(loaded.studentProfile.preferences.academicGoal, "concept_mastery");
 assert(loaded.roadmap.length >= 3);
 
 const supabaseFallbackRepository = new StudentOsRepository({

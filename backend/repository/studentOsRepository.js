@@ -1,7 +1,8 @@
 import { confidenceLabel, createDeterministicEmbedding } from "../embeddings/embeddingService.js";
-import { createSeedState, retrieveGroundedSources } from "../domain/studentosDomain.js";
+import { createEmptyStudentState, retrieveGroundedSources } from "../domain/studentosDomain.js";
 import { publicShardRoute, routeUserToShard } from "../supabase/shardRouter.js";
 import { createInitialProductLifecycle, normalizeProductLifecycle } from "../domain/productLifecycleService.js";
+import { removeLegacyDemoArtifacts } from "../migrations/legacyDemoDataCleanup.js";
 
 const COLLECTIONS = [
   ["courses", "courses"],
@@ -39,56 +40,27 @@ const COLLECTIONS = [
   ["roleInvitations", "role_invitations"],
 ];
 
-const DEMO_SEED_STATE = createSeedState(new Date(0));
-const DEMO_SEED_IDS = new Map(
-  COLLECTIONS.map(([key]) => [
-    key,
-    new Set((DEMO_SEED_STATE[key] || []).map((item) => String(item?.id || "")).filter(Boolean)),
-  ]),
-);
-
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function displayNameFromEmail(email) {
-  const prefix = String(email || "Student").split("@")[0] || "Student";
-  return prefix
-    .replace(/[._-]+/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+function accountDisplayName(user = {}) {
+  return String(user.user_metadata?.full_name || user.user_metadata?.name || "").trim();
 }
 
-export function seedStateForUser(user) {
-  const seed = createSeedState();
-  const userId = user?.id || "student_demo_001";
-  const isLocalDemo = userId === "student_demo_001";
-  const displayName = user?.email ? displayNameFromEmail(user.email) : seed.studentProfile.displayName;
-  seed.studentProfile = {
-    ...seed.studentProfile,
-    id: userId,
-    displayName,
-    email: user?.email || seed.studentProfile.email,
-    productLifecycle: createInitialProductLifecycle({ ready: isLocalDemo }),
-  };
-  if (!isLocalDemo) {
-    for (const [key, value] of Object.entries(seed)) {
-      if (Array.isArray(value)) seed[key] = [];
-    }
-  }
-  seed.testResults = seed.testResults.map((item) => ({ ...item, studentId: userId }));
-  seed.creditLedger = seed.creditLedger.map((item) => ({ ...item, studentId: userId }));
-  seed.auditLog = seed.auditLog.map((item) => ({ ...item, actorId: userId }));
-  return seed;
+export function initialStateForUser(user = {}) {
+  const userId = user.id || "student_local_001";
+  const state = createEmptyStudentState({
+    userId,
+    displayName: accountDisplayName(user),
+    email: user.email || null,
+  });
+  state.studentProfile.productLifecycle = createInitialProductLifecycle();
+  return state;
 }
 
 export function removeDemoSeedRowsForRealUser(state = {}) {
-  if (state.studentProfile?.id === "student_demo_001") return state;
-  for (const [key] of COLLECTIONS) {
-    const demoIds = DEMO_SEED_IDS.get(key);
-    if (!demoIds?.size || !Array.isArray(state[key])) continue;
-    state[key] = state[key].filter((item) => !demoIds.has(String(item?.id || "")));
-  }
-  return state;
+  return removeLegacyDemoArtifacts(state, COLLECTIONS.map(([key]) => key));
 }
 
 function ensureStateShape(state) {
@@ -829,9 +801,9 @@ class MockStudentOsRepository {
   }
 
   async loadState(session) {
-    const user = session?.user || { id: "student_demo_001" };
+    const user = session?.user || { id: "student_local_001" };
     if (!this.states.has(user.id)) {
-      this.states.set(user.id, ensureStateShape(seedStateForUser(user)));
+      this.states.set(user.id, ensureStateShape(initialStateForUser(user)));
     }
     return clone(this.states.get(user.id));
   }
@@ -1096,7 +1068,7 @@ class MockStudentOsRepository {
   }
 
   async saveBackgroundJobForUser(user, job, state = null) {
-    const session = { authenticated: false, mode: "local_demo", user };
+    const session = { authenticated: false, mode: "local_preview", user };
     const target = state || await this.loadState(session);
     const index = (target.backgroundJobs || []).findIndex((item) => item.id === job.id);
     if (index >= 0) target.backgroundJobs[index] = job;
@@ -1171,12 +1143,13 @@ class SupabaseStudentOsRepository {
     });
 
     if (!profileRows.length) {
-      const seed = ensureStateShape(seedStateForUser(user));
-      await this.saveState(session, seed);
-      return seed;
+      const initialState = ensureStateShape(initialStateForUser(user));
+      await this.saveState(session, initialState);
+      return initialState;
     }
 
     const storedProfile = fromPayload(profileRows[0]);
+    const storedProfilePayload = JSON.stringify(storedProfile ?? null);
     const storedLifecycle = JSON.stringify(storedProfile?.productLifecycle ?? null);
     const state = {
       studentProfile: storedProfile,
@@ -1190,7 +1163,7 @@ class SupabaseStudentOsRepository {
       state[key] = rows.map(fromPayload).filter(Boolean);
     }
     const shaped = ensureStateShape(state);
-    if (JSON.stringify(shaped.studentProfile.productLifecycle) !== storedLifecycle) {
+    if (JSON.stringify(shaped.studentProfile) !== storedProfilePayload || JSON.stringify(shaped.studentProfile.productLifecycle) !== storedLifecycle) {
       await route.client.upsert("student_profiles", profileRow(shaped.studentProfile, user.id), {
         onConflict: "user_id",
         returning: "minimal",

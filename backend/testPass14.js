@@ -12,7 +12,7 @@ import { InMemoryRateLimiter } from "./security/rateLimiter.js";
 import { checkUsagePolicy } from "./security/usagePolicy.js";
 import { redactSecrets } from "./observability/logger.js";
 import { runProductionPreflight } from "../scripts/preflightProduction.js";
-import { createSeedState } from "./domain/studentosDomain.js";
+import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 
 const fakeProdEnv = {
   STUDENTOS_ENV: "production",

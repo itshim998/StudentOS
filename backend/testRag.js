@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { answerFromStudentMaterials, retrieveGroundedSources } from "./domain/studentosDomain.js";
-import { createSeedState } from "./domain/studentosDomain.js";
+import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 import {
   chunkExtractedText,
   createEmbeddingMetadataForChunks,

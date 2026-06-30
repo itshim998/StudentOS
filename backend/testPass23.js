@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { createSeedState, handleAssignmentLearningFlow } from "./domain/studentosDomain.js";
+import { handleAssignmentLearningFlow } from "./domain/studentosDomain.js";
+import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 import {
   GOOGLE_CLASSROOM_READONLY_SCOPES,
   assertNoGoogleClassroomWriteScopes,

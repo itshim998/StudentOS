@@ -96,7 +96,7 @@ function classroomUiForState(stateName, { mode = "", lastSyncAt = "", summary = 
     return {
       title: mode === "mock" ? "Classroom preview ready" : "Classroom connected",
       message: mode === "mock"
-        ? "Sample assignments can be added to your study plan."
+        ? "Choose the coursework you want to include in your study plan."
         : "StudentOS can refresh coursework for your study plan. You stay in control of submissions.",
       badge: "planning import active",
       detail: lastSyncAt

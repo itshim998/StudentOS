@@ -278,7 +278,6 @@
                 <p class="eyebrow">Academic Profile</p>
                 <h3>StudentOS Setup</h3>
               </div>
-              <button class="text-button" id="demo-seed-btn" type="button">Load sample profile</button>
             </div>
             <form id="onboarding-form" class="form-grid onboarding-form">
               <fieldset class="setup-section">
@@ -287,11 +286,11 @@
                 <div class="form-row">
                   <label>
                     Student name
-                    <input name="displayName" type="text" value="Aarav" required>
+                    <input name="displayName" type="text" placeholder="Your name" autocomplete="name" required>
                   </label>
                   <label>
                     Stream
-                    <input name="stream" type="text" value="Science">
+                    <input name="stream" type="text" placeholder="Your stream or course">
                   </label>
                 </div>
               </fieldset>
@@ -302,11 +301,12 @@
                 <div class="form-row">
                   <label>
                     Class
-                    <input name="classLevel" type="text" value="Grade 10">
+                    <input name="classLevel" type="text" placeholder="Your class, year, or level">
                   </label>
                   <label>
                     Goal
                     <select name="academicGoal">
+                      <option value="">Choose a goal</option>
                       <option value="exam_prep">Exam prep</option>
                       <option value="assignment_control">Assignment control</option>
                       <option value="concept_mastery">Concept mastery</option>
@@ -322,11 +322,12 @@
                 <div class="form-row">
                   <label>
                     Daily study minutes
-                    <input name="dailyStudyAvailabilityMinutes" type="number" min="15" max="360" value="105">
+                    <input name="dailyStudyAvailabilityMinutes" type="number" min="15" max="360" placeholder="Minutes available">
                   </label>
                   <label>
                     Break cycle
                     <select name="studyBreakPattern">
+                      <option value="">Choose a focus cycle</option>
                       <option value="25/5">25 min focus / 5 min break</option>
                       <option value="50/10">50 min focus / 10 min break</option>
                       <option value="40/8">40 min focus / 8 min break</option>
@@ -340,9 +341,7 @@
                 <p>Add one subject per line with the course name, exam date, and main topics. The saved format stays compatible with StudentOS planning.</p>
                 <label>
                   Subjects and exam topics
-                  <textarea name="subjectsText" rows="4">Mathematics|2026-06-05|Quadratic equations, Trigonometry basics, Statistics
-Biology|2026-06-09|Cell cycle and mitosis, Ecology
-English|2026-06-12|Argument writing, Macbeth</textarea>
+                  <textarea name="subjectsText" rows="4" placeholder="Add one subject per line"></textarea>
                 </label>
               </fieldset>
 
@@ -351,8 +350,7 @@ English|2026-06-12|Argument writing, Macbeth</textarea>
                 <p>Topics that should create risk signals and recovery work.</p>
                 <label>
                   Weak topics
-                  <textarea name="weakTopicsText" rows="3">Mathematics: Trigonometry basics, Statistics
-Biology: Phase ordering</textarea>
+                  <textarea name="weakTopicsText" rows="3" placeholder="Add weak topics after a test or revision session"></textarea>
                 </label>
               </fieldset>
 
@@ -361,7 +359,7 @@ Biology: Phase ordering</textarea>
                 <p>Secure topics reduce noise and shape revision spacing.</p>
                 <label>
                   Completed topics
-                  <textarea name="completedTopicsText" rows="2">Mathematics: Quadratic equations</textarea>
+                  <textarea name="completedTopicsText" rows="2" placeholder="Add topics you have completed"></textarea>
                 </label>
               </fieldset>
 
@@ -370,9 +368,7 @@ Biology: Phase ordering</textarea>
                 <p>Add classes or study blocks by day, time, title, and course so Today can protect your focus time.</p>
                 <label>
                   Weekly classes and study blocks
-                  <textarea name="timetableText" rows="3">Mon|18:30|Math revision|Mathematics
-Tue|18:00|Biology diagrams|Biology
-Thu|19:00|English writing sprint|English</textarea>
+                  <textarea name="timetableText" rows="3" placeholder="Add classes or study blocks"></textarea>
                 </label>
               </fieldset>
 

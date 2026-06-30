@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createSeedState } from "./domain/studentosDomain.js";
+import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 import { createBackgroundJob, processBackgroundJob } from "./jobs/jobService.js";
 import { StudentOsRepository } from "./repository/studentOsRepository.js";
 import { getSupabaseEnvironment } from "./config/supabaseEnv.js";

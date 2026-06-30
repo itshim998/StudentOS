@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { seedStateForUser } from "./repository/studentOsRepository.js";
+import { initialStateForUser } from "./repository/studentOsRepository.js";
 import {
   createAccountDeletionRequest,
   createDataExportRequest,
@@ -12,7 +12,7 @@ import { getPublicAuthConfig, getSupabaseEnvironment } from "./config/supabaseEn
 import { getPublicSaasStatus, getSaasConfig, isDemoSeedAllowed } from "./config/saasConfig.js";
 
 const now = new Date("2026-05-27T10:00:00+05:30");
-const state = seedStateForUser({ id: "student_demo_001", email: "demo@studentos.local" });
+const state = initialStateForUser({ id: "student_account_test", email: "account@studentos.local" });
 state.aiMessages = [
   { id: "msg_1", role: "user", content: "help" },
   { id: "msg_2", role: "assistant", content: "ok" },
@@ -37,8 +37,8 @@ assert.equal(snapshot.user.emailVerificationReady, true);
 assert.equal(snapshot.actions.directDeletionEnabled, false);
 assert.equal(snapshot.actions.paymentsEnabled, false);
 assert.equal(snapshot.profile.role, "student");
-assert.equal(snapshot.quota.plan.id, "starter");
-assert.equal(snapshot.quota.plan.access.planKey, "starter");
+assert.equal(snapshot.quota.plan.id, "unselected");
+assert.equal(snapshot.quota.plan.access.planKey, null);
 assert.equal("usage" in snapshot.quota, false);
 assert.equal("quotas" in snapshot.quota, false);
 assert.equal(JSON.stringify(snapshot).includes("service_role"), false);
@@ -46,7 +46,7 @@ assert.equal(JSON.stringify(snapshot).includes("service_role"), false);
 const usage = getQuotaUsage(state, saasConfig);
 assert.equal(usage.paymentsEnabled, false);
 assert.equal(usage.upgradeAvailable, true);
-assert.equal(usage.academicContext.status, "available");
+assert.equal(usage.academicContext.status, "unavailable");
 assert.doesNotMatch(JSON.stringify(usage), /storageBytes|aiRequestsPerDay|maxSources/);
 
 const consent = updateConsentPreferences(state, {

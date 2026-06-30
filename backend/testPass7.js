@@ -1,5 +1,6 @@
 ﻿import assert from "node:assert/strict";
-import { answerFromStudentMaterials, createSeedState, retrieveGroundedSources } from "./domain/studentosDomain.js";
+import { answerFromStudentMaterials, retrieveGroundedSources } from "./domain/studentosDomain.js";
+import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 import { getAiProviderConfig } from "./ai/providerConfig.js";
 import { resetProviderRuntimeForTests, runProviderFallback } from "./ai/providers.js";
 import { runStudentOsVerb } from "./ai/studentBrainAdapter.js";

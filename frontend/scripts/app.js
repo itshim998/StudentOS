@@ -1,9 +1,12 @@
+import { purgeLegacyAcademicCache } from "./migrations/legacyAcademicCache.js";
+
 const API_BASE = window.StudentOSConfig?.apiBase || "";
 const PUBLIC_FRONTEND_HOSTS = new Set([
   "studentos.sentiqlabs.com",
   "studentos-39s.pages.dev",
 ]);
 const API_BASE_MISCONFIGURED_MESSAGE = "StudentOS is not connected for this site yet. Please try again later.";
+purgeLegacyAcademicCache();
 
 let state = null;
 let activeVerb = "Ask";
@@ -51,7 +54,6 @@ const els = {
   dashboardSummary: document.getElementById("dashboard-summary"),
   onboardingForm: document.getElementById("onboarding-form"),
   onboardingResult: document.getElementById("onboarding-result"),
-  demoSeedBtn: document.getElementById("demo-seed-btn"),
   roadmapList: document.getElementById("roadmap-list"),
   timetableList: document.getElementById("timetable-list"),
   assignmentList: document.getElementById("assignment-list"),
@@ -554,9 +556,6 @@ async function loadRuntimeConfig() {
   runtimeConfig = await api("/api/config");
   syncAuthHash();
   renderAuth(authReturnMessage);
-  if (els.demoSeedBtn) {
-    els.demoSeedBtn.hidden = runtimeConfig.onboarding?.demoSeedEnabled !== true;
-  }
 }
 
 async function loadClassroomStatus() {
@@ -592,7 +591,7 @@ async function loadClassroomStatus() {
 }
 
 function getAcademicGoalLabel() {
-  return humanize(state?.studentProfile?.preferences?.academicGoal || "exam_prep");
+  return humanize(state?.studentProfile?.preferences?.academicGoal || "Not set");
 }
 
 async function authRequest(path, body, token = "") {
@@ -981,7 +980,7 @@ function classroomUi(connector = {}, summary = null, history = []) {
     return {
       title: connector.mode === "mock" ? "Classroom preview ready" : "Classroom connected",
       message: connector.mode === "mock"
-        ? "Sample assignments can be added to your study plan."
+        ? "Choose the coursework you want to include in your study plan."
         : "StudentOS can refresh coursework for your study plan. You stay in control of submissions.",
       badge: "planning import active",
       detail: lastSync ? `Last refreshed ${formatDate(lastSync)}` : summary ? "Classroom coursework has been added to your study plan." : "Ready to refresh assignments.",
@@ -1030,7 +1029,7 @@ function studyBreakLabel(value) {
   const pattern = String(value || "").trim();
   const match = pattern.match(/^(\d+)\s*\/\s*(\d+)$/);
   if (match) return `${match[1]} min focus / ${match[2]} min break`;
-  return pattern || "25 min focus / 5 min break";
+  return pattern || "Not set";
 }
 
 function studentTaskTitle(title) {
@@ -1707,6 +1706,57 @@ function renderProductFlow() {
   }
 }
 
+function setupFieldValue(name, value) {
+  const field = els.onboardingForm?.elements?.namedItem(name);
+  if (field) field.value = value === null || value === undefined ? "" : String(value);
+}
+
+function derivedSubjectLines() {
+  return (state.courses || [])
+    .filter((course) => course.source !== "google_classroom")
+    .map((course) => {
+      const topics = (state.topics || []).filter((topic) => topic.courseId === course.id).map((topic) => topic.title);
+      const parts = [course.title || "", course.examDate ? String(course.examDate).slice(0, 10) : "", topics.join(", ")];
+      return parts.some((part, index) => index > 0 && part) ? parts.join("|") : parts[0];
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function derivedTopicLines(predicate) {
+  const grouped = new Map();
+  for (const topic of (state.topics || []).filter(predicate)) {
+    const courseTitle = courseById(topic.courseId)?.title || "";
+    if (!grouped.has(courseTitle)) grouped.set(courseTitle, []);
+    grouped.get(courseTitle).push(topic.title);
+  }
+  return [...grouped.entries()].map(([courseTitle, topics]) => `${courseTitle ? `${courseTitle}: ` : ""}${topics.join(", ")}`).join("\n");
+}
+
+function derivedTimetableLines() {
+  return (state.timetable || []).map((item) => {
+    const startsAt = new Date(item.startsAt);
+    const time = Number.isNaN(startsAt.getTime()) ? "" : startsAt.toTimeString().slice(0, 5);
+    return [item.location || "", time, item.title || "", courseById(item.courseId)?.title || ""].join("|");
+  }).join("\n");
+}
+
+function populateSetupFormFromState() {
+  if (!els.onboardingForm || els.onboardingForm.contains(document.activeElement)) return;
+  const profile = state.studentProfile || {};
+  const preferences = profile.preferences || {};
+  setupFieldValue("displayName", profile.displayName || "");
+  setupFieldValue("stream", preferences.stream || "");
+  setupFieldValue("classLevel", preferences.classLevel || profile.gradeBand || "");
+  setupFieldValue("academicGoal", preferences.academicGoal || "");
+  setupFieldValue("dailyStudyAvailabilityMinutes", preferences.dailyStudyAvailabilityMinutes || "");
+  setupFieldValue("studyBreakPattern", preferences.studyBreakPattern || "");
+  setupFieldValue("subjectsText", preferences.subjectsText || derivedSubjectLines());
+  setupFieldValue("weakTopicsText", preferences.weakTopicsText || derivedTopicLines((topic) => (topic.weakSignals || []).length > 0));
+  setupFieldValue("completedTopicsText", preferences.completedTopicsText || derivedTopicLines((topic) => topic.coverageState === "covered"));
+  setupFieldValue("timetableText", preferences.timetableText || preferences.scheduleText || derivedTimetableLines());
+}
+
 function render() {
   if (!state) return;
   updateShellVisibility();
@@ -1720,10 +1770,11 @@ function render() {
   els.studentName.textContent = state.studentProfile.displayName || "Student";
   els.creditBalance.textContent = state.creditBalance || 0;
   els.planBadge.textContent = plan.displayName || plan.label || "Plan setup pending";
-  els.studyRhythm.textContent = humanize(state.studentProfile.studyRhythm || "steady");
+  els.studyRhythm.textContent = humanize(state.studentProfile.studyRhythm || "not set");
   els.creditEligibility.textContent = humanize(state.studentProfile.convenienceEligibility || "learning first");
   const backendPersistence = runtimeConfig.persistence || {};
   els.connectorStatus.textContent = backendModeLabel(backendPersistence.mode || state.persistence?.mode || "unknown mode");
+  populateSetupFormFromState();
   renderClassroomPanel();
   renderDashboardSummary();
   renderRoadmap();
@@ -1756,12 +1807,28 @@ function renderDashboardSummary() {
   const nextCourse = courseById(nextAction?.courseId || dueSoon?.courseId);
   const nextTopic = topicById(nextAction?.topicId || dueSoon?.topicIds?.[0]);
   const nextExam = upcomingExams[0] || null;
-  const availability = preferences.dailyStudyAvailabilityMinutes || preferences.dailyStudyWindowMinutes || 90;
-  const doNowTitle = studentTaskTitle(nextAction?.title || dueSoon?.title || "Plan first study block");
+  if (!nextAction && !dueSoon) {
+    const guidance = [];
+    if (!(state.courses || []).length) guidance.push("Add your subjects in Setup so StudentOS can plan today.");
+    if (!(state.timetable || []).length) guidance.push("Add your timetable so Today can protect your study time.");
+    if (!(state.exams || []).length && !(state.assignments || []).length) guidance.push("Add upcoming exams or assignments to build your first plan.");
+    setResult(els.dashboardSummary, `
+      <article class="today-brief-card today-empty-card">
+        <div class="today-brief-copy">
+          <p class="eyebrow">Today Command Center</p>
+          <h3><span>Today</span>No study task yet.</h3>
+          ${list(guidance.length ? guidance : ["Your current study list is clear."])}
+        </div>
+      </article>
+    `);
+    return;
+  }
+  const availability = preferences.dailyStudyAvailabilityMinutes || preferences.dailyStudyWindowMinutes || null;
+  const doNowTitle = studentTaskTitle(nextAction?.title || dueSoon?.title);
   const doNowContext = [
     nextCourse?.title || nextAction?.courseTitle,
     nextTopic?.title || nextAction?.topicTitle,
-  ].filter(Boolean).join(" / ") || "Academic focus";
+  ].filter(Boolean).join(" / ") || "Your academic context";
   const riskCopy = weakTopics.map((topic) => topic.title).join(" / ") || "No weak topics yet";
   const planPrompt = buildTodayPlanPrompt(nextAction, dueSoon, nextBlock);
   setResult(els.dashboardSummary, `
@@ -1769,11 +1836,11 @@ function renderDashboardSummary() {
       <div class="today-brief-copy">
         <p class="eyebrow">Today Command Center</p>
         <h3><span>Do now</span>${escapeHtml(doNowTitle)}</h3>
-        <p>Goal: ${escapeHtml(getAcademicGoalLabel())} / ${escapeHtml(preferences.stream || state.studentProfile?.gradeBand || "Academic plan")}</p>
+        <p>Goal: ${escapeHtml(getAcademicGoalLabel())}${preferences.stream || state.studentProfile?.gradeBand ? ` / ${escapeHtml(preferences.stream || state.studentProfile?.gradeBand)}` : ""}</p>
         <div class="tag-row">
           ${tag(doNowContext, "source")}
-          ${tag(`${availability} min available`, "source")}
-          ${tag(studyBreakLabel(preferences.studyBreakPattern), "medium")}
+          ${availability ? tag(`${availability} min available`, "source") : ""}
+          ${preferences.studyBreakPattern ? tag(studyBreakLabel(preferences.studyBreakPattern), "medium") : ""}
         </div>
       </div>
       <div class="today-brief-actions">
@@ -1799,7 +1866,7 @@ function renderDashboardSummary() {
       <article class="today-status-item" role="listitem">
         <span>Next block</span>
         <strong>${escapeHtml(nextBlock ? formatTime(nextBlock.startsAt) : "Open")}</strong>
-        <p>${escapeHtml(nextBlock?.title || "Use the study window")}</p>
+        <p>${escapeHtml(nextBlock?.title || "Add your timetable so Today can protect your study time.")}</p>
       </article>
       <article class="today-status-item" role="listitem">
         <span>Materials</span>
@@ -1809,7 +1876,7 @@ function renderDashboardSummary() {
       <article class="today-status-item" role="listitem">
         <span>Roadmap</span>
         <strong>${openRoadmap.length ? `${openRoadmap.length} next` : "Clear"}</strong>
-        <p>${escapeHtml(completedRoadmap.length ? `${completedRoadmap.length} finished` : "Generate or sync work")}</p>
+        <p>${escapeHtml(completedRoadmap.length ? `${completedRoadmap.length} finished` : "Add upcoming work in Setup")}</p>
       </article>
     </div>
   `);
@@ -1820,12 +1887,8 @@ function renderRoadmap() {
   if (!actions.length) {
     setResult(els.roadmapList, `
       <article class="item-card roadmap-empty-card">
-        <strong>Queue is clear</strong>
-        <p>Generate a roadmap in Setup or sync Classroom to build today's study list.</p>
-        <div class="item-meta">
-          ${tag("Today ready", "source")}
-          ${tag("student controlled", "source")}
-        </div>
+        <strong>No study task yet.</strong>
+        <p>Add upcoming exams or assignments to build your first plan.</p>
       </article>
     `);
     return;
@@ -1860,7 +1923,7 @@ function renderTimetable() {
     setResult(els.timetableList, `
       <article class="item-card timetable-empty-card">
         <strong>No blocks listed</strong>
-        <p>Add classes or study blocks in Setup so Today can protect your time.</p>
+        <p>Add your timetable so Today can protect your study time.</p>
         <div class="item-meta">${tag("schedule open", "medium")}</div>
       </article>
     `);
@@ -1983,7 +2046,7 @@ function renderAssignments() {
     const actions = classroomActions(connector);
     const emptyCopy = actions.connect || actions.reconnect
       ? "Connect Classroom, or add work from your courses to start the learning loop."
-      : "Add work from your courses to start the learning loop.";
+      : "Add upcoming exams or assignments to build your first plan.";
     setResult(els.assignmentList, `
       <article class="item-card assignment-card">
         <strong>No assignments yet</strong>
@@ -2040,13 +2103,14 @@ function renderCourses() {
     const nextActionReadyLabel = nextAction ? "Ready" : "Add work";
     const isClassroom = course.source === "google_classroom";
     const prompt = buildCourseAiPrompt(course, weakTopics, assignments, sources, nextAction);
+    const courseDetails = [course.teacher, course.examDate ? `exam ${formatDate(course.examDate)}` : ""].filter(Boolean).join(" / ");
     return `
       <article class="course-card course-workspace-card" data-color="${escapeHtml(course.color || "mint")}">
         <header class="course-card-head">
           <div>
             <span class="workspace-label">Workspace preview</span>
             <strong>${escapeHtml(course.title)}</strong>
-            <p>${escapeHtml(course.teacher || "Teacher")} / exam ${formatDate(course.examDate)}</p>
+            ${courseDetails ? `<p>${escapeHtml(courseDetails)}</p>` : ""}
           </div>
           <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}">Ask about course</button>
         </header>
@@ -2055,7 +2119,7 @@ function renderCourses() {
           <div class="progress-track" aria-label="Mastery progress">
             <div class="progress-fill" style="width:${progress}%"></div>
           </div>
-          <span>${steadyTopics.length ? `${steadyTopics.length} topic${steadyTopics.length === 1 ? "" : "s"} on track` : "Revision starting"}</span>
+          <span>${topics.length ? (steadyTopics.length ? `${steadyTopics.length} topic${steadyTopics.length === 1 ? "" : "s"} on track` : "Topics ready for review") : "No topics added yet"}</span>
         </div>
 
         <div class="course-signal-grid">
@@ -2069,7 +2133,7 @@ function renderCourses() {
           ${isClassroom ? tag("Google Classroom", "source") : ""}
           ${course.readOnly ? tag("planning only", "source") : ""}
           ${isClassroom || course.readOnly ? tag("Student controlled", "source") : ""}
-          ${revisionCount ? tag("Needs revision", "medium") : tag("On track", "source")}
+          ${revisionCount ? tag("Needs revision", "medium") : topics.length ? tag("On track", "source") : tag("Add topics", "medium")}
         </div>
 
         <div class="course-workspace-sections">
@@ -2098,11 +2162,7 @@ function renderCourses() {
     <article class="course-card course-workspace-card" data-color="sky">
       <span class="workspace-label">Workspace preview</span>
       <strong>No courses yet</strong>
-      <p>Use Setup or sync Google Classroom to create your StudentOS course map.</p>
-      <div class="tag-row">
-        ${tag("Classroom ready", "source")}
-        ${tag("student-only", "source")}
-      </div>
+      <p>Add your subjects in Setup so StudentOS can plan today.</p>
     </article>
   `;
   els.coursesGrid.innerHTML = `${classroomStatusCard()}${courseCards || empty}`;
@@ -2240,6 +2300,7 @@ function accountAuthLabel(mode) {
   const value = String(mode || "").toLowerCase();
   if (value === "supabase_auth") return "Signed in with StudentOS Auth";
   if (value === "local_demo") return "Local preview";
+  if (value === "local_preview") return "Local preview";
   return humanize(mode || "StudentOS session");
 }
 
@@ -2355,7 +2416,7 @@ function localAccountSnapshot() {
     user: {
       email: authSession?.user?.email || authSession?.email || "student@studentos.local",
       authenticated: Boolean(authSession?.access_token),
-      authMode: authSession?.access_token ? "supabase_auth" : "local_demo",
+      authMode: authSession?.access_token ? "supabase_auth" : "local_preview",
       emailVerificationReady: true,
       emailVerified: false,
     },
@@ -2431,7 +2492,7 @@ function renderAccount() {
       <span class="avatar large-avatar" aria-hidden="true">${escapeHtml((account.profile?.displayName || "S").slice(0, 1).toUpperCase())}</span>
       <div>
         <strong>${escapeHtml(account.profile?.displayName || "Student")}</strong>
-        <p>${escapeHtml(account.user?.email || "No email session")} - ${escapeHtml(accountAuthLabel(account.user?.authMode || "local_demo"))}</p>
+        <p>${escapeHtml(account.user?.email || "No email session")} - ${escapeHtml(accountAuthLabel(account.user?.authMode || "local_preview"))}</p>
       </div>
     </div>
     <div class="account-summary-list">
@@ -2769,7 +2830,7 @@ async function submitAssignmentFlow(event) {
   });
 }
 
-function sampleAnswersForScore(topic, scorePercent) {
+function derivedAnswersForScore(topic, scorePercent) {
   if (scorePercent >= 90) {
     return [
       { question: `Core idea of ${topic.title}`, selected: "Correct", correct: "Correct", concept: topic.title, isCorrect: true },
@@ -2808,7 +2869,7 @@ async function recordScore(event) {
         courseId: topic?.courseId,
         scorePercent,
         type: "mcq",
-        answers: sampleAnswersForScore(topic, scorePercent),
+        answers: derivedAnswersForScore(topic, scorePercent),
       }),
     });
 
@@ -2964,18 +3025,6 @@ async function submitOnboarding(event) {
     render();
     setView("today");
   }, { timeoutTarget: els.onboardingResult, timeoutCopy: "Roadmap generation is taking longer than expected. You can try again.", timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS });
-}
-
-async function seedDemoProfile() {
-  setLoading(els.onboardingResult, "Loading a sample student profile...");
-  const result = await api("/api/demo/seed", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-  state = result.state;
-  renderOnboardingResult(result);
-  render();
-  setView("today");
 }
 
 function consentPayloadFromForm(form) {
@@ -3722,15 +3771,6 @@ function wireEvents() {
     renderSources();
   });
   els.onboardingForm.addEventListener("submit", submitOnboarding);
-  els.demoSeedBtn.addEventListener("click", () => {
-    withButtonLoading(els.demoSeedBtn, "Loading...", seedDemoProfile, {
-      timeoutTarget: els.onboardingResult,
-      timeoutCopy: "Loading the sample profile is taking longer than expected. You can try again.",
-      timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
-    }).catch((error) => {
-      setResult(els.onboardingResult, `<p>${escapeHtml(error.message)}</p>`);
-    });
-  });
   els.sourceList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-delete-source-id]");
     if (button) {

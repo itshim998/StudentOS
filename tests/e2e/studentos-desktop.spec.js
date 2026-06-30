@@ -224,6 +224,40 @@ async function routePublicHostToLocal(page, hostname = "studentos.sentiqlabs.com
 let serverProcess;
 let baseUrl;
 let serverLogs = [];
+let localWorkspaceReady = false;
+
+async function prepareLocalWorkspace() {
+  if (localWorkspaceReady) return;
+  const post = async (action, payload = {}) => {
+    const response = await fetch(`${baseUrl}/api/product-flow`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, payload }),
+    });
+    if (!response.ok) throw new Error(`E2E setup action ${action} failed: ${await response.text()}`);
+  };
+  await post("save_onboarding_step", { step: "about_you", answers: { displayName: "E2E Student" } });
+  await post("save_onboarding_step", { step: "education_system", answers: { level: "Undergraduate", stream: "Engineering", yearSemester: "Semester 2" } });
+  await post("select_plan", { planId: "plus" });
+  await post("choose_access", { accessMode: "trial" });
+  await post("verify_payment_method_placeholder");
+  await post("complete_legal", {
+    ageGate: "adult",
+    consents: Object.fromEntries([
+      "termsOfService", "privacyPolicy", "trialBilling", "trialLimits", "paymentMandate",
+      "cancellationWindow", "academicDataUse", "noOutcomeGuarantee", "responsibleUse", "aiAccuracy",
+    ].map((key) => [key, true])),
+  });
+  await post("save_onboarding_step", { step: "daily_schedule", answers: { schedule: "Weekdays after 6 PM" } });
+  await post("save_onboarding_step", { step: "exam_pattern", answers: { examPattern: "Monthly assessments and one semester exam" } });
+  await post("save_onboarding_step", { step: "academic_context", answers: { subjects: "Physics|2026-07-04|Motion graphs", syllabusNotes: "Mechanics and motion graphs" } });
+  await post("choose_classroom_path", { choice: "manual" });
+  await post("save_materials", { materialIds: [], materialLabels: [] });
+  await post("confirm_setup_summary");
+  await post("prepare_workspace");
+  await post("choose_tutorial", { choice: "skip" });
+  localWorkspaceReady = true;
+}
 
 test.describe.configure({ mode: "serial" });
 
@@ -265,6 +299,10 @@ test("initial workspace loading state appears and clears", async ({ page }) => {
     releaseBootstrap = resolve;
   });
   await page.setViewportSize({ width: 390, height: 820 });
+  await page.addInitScript(() => {
+    localStorage.setItem("studentos.profile", JSON.stringify({ displayName: "Aarav", stream: "Science", classLevel: "Grade 10" }));
+    localStorage.setItem("studentos.sample.workspace", JSON.stringify({ title: "Quadratics worksheet" }));
+  });
   await page.route("**/api/bootstrap", async (route) => {
     await bootstrapRelease;
     await route.continue();
@@ -279,8 +317,12 @@ test("initial workspace loading state appears and clears", async ({ page }) => {
   await expectNoHorizontalOverflow(page, "390px loading state");
 
   releaseBootstrap();
-  await expect(page.locator("#dashboard-summary")).toContainText("Do now");
-  await expect(page.locator("#dashboard-summary")).not.toContainText(/Preparing StudentOS|Loading your workspace/);
+  await expect(page.locator("#product-flow-shell")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What is your name?" })).toBeVisible();
+  await expect(page.locator("#app-shell")).toBeHidden();
+  await expect(page.locator("body")).not.toContainText(/Aarav|Grade 10|Quadratics worksheet|Load sample profile|Plan Free/);
+  expect(await page.evaluate(() => localStorage.getItem("studentos.profile"))).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem("studentos.sample.workspace"))).toBeNull();
   await expect(page.locator("#app-shell")).not.toHaveAttribute("aria-busy", "true");
   await page.unroute("**/api/bootstrap");
 });
@@ -497,6 +539,11 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
     } else if (request.action === "select_plan") {
       selectedPlanPayloads.push(payload.planId);
       lifecycle.selectedPlanId = payload.planId;
+      newUserState.planAccess = {
+        ...(newUserState.planAccess || {}),
+        selectedPlanKey: payload.planId,
+        academicContext: { status: "available", canAdd: true, message: "You can add academic material." },
+      };
       lifecycle.state = "plan_selected";
       lifecycle.accessMode = null;
       finishStep("pricing");
@@ -818,6 +865,7 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
 });
 
 test("Classroom status UI normalizes controls and copy", async ({ page }) => {
+  await prepareLocalWorkspace();
   function connectorFor(state, overrides = {}) {
     const connected = state === "connected";
     const actions = {
@@ -946,6 +994,15 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#connector-status")).toContainText("Local preview");
   await expect(page.locator("#dashboard-summary")).toContainText("Do now");
   await expect(page.locator("#dashboard-summary")).toContainText("Goal");
+  await expect(page.locator("#dashboard-summary")).toContainText(/Physics|Engineering/);
+  await clickNav(page, "Setup");
+  await expect(page.locator("#onboarding-form input[name='displayName']")).toHaveValue("E2E Student");
+  await expect(page.locator("#onboarding-form input[name='stream']")).toHaveValue("Engineering");
+  await expect(page.locator("#onboarding-form input[name='classLevel']")).toHaveValue("Undergraduate");
+  await expect(page.locator("#onboarding-form textarea[name='subjectsText']")).toHaveValue(/Physics/);
+  await page.reload();
+  await expect(page.locator("#dashboard-summary")).toContainText(/Physics|Engineering/);
+  await expect(page.locator("body")).not.toContainText(/Aarav|Grade 10|Quadratics worksheet|Load sample profile|Plan Free/);
   await expectNoVisibleExternalBranding(page, "initial local workspace");
   await page.getByRole("button", { name: "Plan today" }).click();
   await expect(page.locator("#ai-panel")).toBeVisible();
@@ -1028,25 +1085,59 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#ai-panel")).toBeVisible();
   await expect(page.locator("#ai-message")).toHaveValue(/current Studio workflow/i);
   await closeAiDrawer(page);
-  await page.getByRole("button", { name: "Check readiness" }).click();
-  await waitForNotLoading(page.locator("#flow-result"), "Checking coverage and next learning step");
-  await expect(page.locator("#flow-result")).toContainText("Topic coverage");
-  await expect(page.locator("#flow-result")).toContainText("Study queue update");
-  await expect(page.locator("#flow-result")).toContainText("No submission");
 
   await clickNav(page, "Today");
   await expect(page.locator("#classroom-panel")).toContainText(/planning import active|connected|demo/i);
   await expectClassroomControls(page, { sync: true, disconnect: true });
+  await page.route("**/api/classroom/sync", async (route) => {
+    const current = await fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json());
+    const course = current.courses[0];
+    const topic = current.topics[0];
+    current.assignments = [{
+      id: "assignment_e2e_classroom",
+      courseId: course.id,
+      topicIds: [topic.id],
+      title: "E2E Classroom assignment",
+      dueDate: "2026-07-02",
+      status: "open",
+      source: "google_classroom",
+      readOnly: true,
+    }];
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: current,
+        connector: { connected: true, state: "connected", actions: { sync: true, disconnect: true }, syncHistory: [] },
+        summary: { importedAssignments: 1, updatedAssignments: 0 },
+        policy: { automaticChecksEnabled: false },
+      }),
+    });
+  });
   await page.getByRole("button", { name: "Sync Classroom" }).click();
   await waitForNotLoading(page.locator("#classroom-panel"), "Syncing Classroom assignments");
   await expect(page.locator("#classroom-panel")).toContainText("planning import active");
   await expectNoClassroomDeveloperCopy(page, "mock Classroom sync");
   await expect(page.locator("#assignment-list")).toContainText("Google Classroom");
   await expect(page.locator("#assignment-list")).toContainText("Analyze assignment");
+  await page.route("**/api/assignment-flow", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      flow: {
+        action: "mastery_roadmap_before_test",
+        nextAction: "Review the selected topic before testing.",
+        coverage: { status: "uncovered", topicCoverages: [{ title: "Motion graphs", status: "uncovered", reasons: ["new assignment"] }] },
+        testSession: null,
+        roadmapItem: { title: "Review Motion graphs", priority: "high" },
+        lesson: { title: "Review Motion graphs", conceptExplanation: "Use your selected material first.", diagram: "Material -> review -> check", commonMistakes: [], practicePrompts: [], sourceLabels: [], examAdjustedStyle: "calm review" },
+      },
+    }),
+  }));
   await page.getByRole("button", { name: "Analyze assignment" }).first().click();
   await expect(page.locator("#view-title")).toHaveText("Studio");
   await waitForNotLoading(page.locator("#flow-result"), "Checking coverage and next learning step");
   await expect(page.locator("#flow-result")).toContainText(/Mastery|Practice|Revision|Roadmap|Topic coverage/i);
+  await page.unroute("**/api/classroom/sync");
+  await page.unroute("**/api/assignment-flow");
 
   await clickNav(page, "Account");
   await expect(page.locator("#account-summary")).toContainText(/Student|local preview/i);

@@ -3,7 +3,6 @@ import {
   applyTestScore,
   buildExtensionDecisionDraft,
   createAssignmentAutomationContractForState,
-  createSeedState,
   createTutorLesson,
   determineAssignmentCoverage,
   determineTopicCoverage,
@@ -13,6 +12,7 @@ import {
   scoreMcqAnswers,
   scoreToCredits,
 } from "./domain/studentosDomain.js";
+import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 
 assert.equal(scoreToCredits(95), 3);
 assert.equal(scoreToCredits(84), 2);

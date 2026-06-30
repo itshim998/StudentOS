@@ -69,7 +69,7 @@ export function getAccountSnapshot({ session, state, saasConfig, lifecycleConfig
       id: session?.user?.id || state.studentProfile.id,
       email: session?.user?.email || "student@studentos.local",
       authenticated: Boolean(session?.authenticated),
-      authMode: session?.mode || "local_demo",
+      authMode: session?.mode || "local_preview",
       emailVerificationReady: true,
       emailVerified: Boolean(session?.user?.emailConfirmedAt || session?.user?.email_confirmed_at),
     },

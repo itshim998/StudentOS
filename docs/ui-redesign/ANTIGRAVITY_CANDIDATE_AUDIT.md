@@ -67,7 +67,7 @@ However, the candidate `app.js` should still be rejected for production merge be
 - `/api/config`
 - `/api/bootstrap`
 - `/api/account`
-- `/api/demo/seed`
+- the former `/api/demo/seed` path (removed by the runtime demo-data purge)
 - `/api/onboarding`
 - `/api/sources/upload`
 - source delete and reindex routes

@@ -24,10 +24,10 @@ import {
 import { createInitialProductLifecycle } from "./domain/productLifecycleService.js";
 import { importClassroomSnapshotIntoState } from "./connectors/googleClassroom/mapper.js";
 import { getAccountSnapshot } from "./account/accountService.js";
-import { seedStateForUser } from "./repository/studentOsRepository.js";
+import { initialStateForUser } from "./repository/studentOsRepository.js";
 
 function readyState(planKey = "starter", accessMode = "paid_plan") {
-  const state = seedStateForUser({ id: `student_pass36_${planKey}_${accessMode}`, email: `${planKey}@student.example` });
+  const state = initialStateForUser({ id: `student_pass36_${planKey}_${accessMode}`, email: `${planKey}@student.example` });
   state.studentProfile.productLifecycle = {
     ...createInitialProductLifecycle({ ready: true }),
     selectedPlanId: planKey,
@@ -88,7 +88,7 @@ assert.equal(canUseFeature("pro", FEATURE_KEYS.LEARNING_LEVEL), true);
 assert.equal(canUseFeature("plus", FEATURE_KEYS.CONSISTENCY_POINTS), false);
 assert.equal(canUseFeature("pro", FEATURE_KEYS.CONSISTENCY_POINTS), true);
 
-const pendingState = seedStateForUser({ id: "student_pass36_pending", email: "pending@student.example" });
+const pendingState = initialStateForUser({ id: "student_pass36_pending", email: "pending@student.example" });
 assert.equal(getPublicProductCapabilities(pendingState).status, "plan_setup_pending");
 assert.equal(getPublicProductCapabilities(pendingState).assistant.enabled, false);
 assert.equal(getPublicAcademicContextCapacity(pendingState).status, "unavailable");

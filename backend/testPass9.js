@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { validateGeneratedCitations } from "./ai/studentBrainAdapter.js";
-import { createSeedState, getGroundingContext, answerFromStudentMaterials } from "./domain/studentosDomain.js";
+import { getGroundingContext, answerFromStudentMaterials } from "./domain/studentosDomain.js";
+import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 import { embedSourceChunks, reindexSourceChunkEmbeddings } from "./embeddings/embeddingService.js";
 import { StudentOsRepository } from "./repository/studentOsRepository.js";
 import { createSourceChunks } from "./storage/sourceMaterialService.js";

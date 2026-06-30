@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { runStudentOsVerb } from "./ai/studentBrainAdapter.js";
-import { createSeedState } from "./domain/studentosDomain.js";
+import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 import { importClassroomSnapshotIntoState } from "./connectors/googleClassroom/mapper.js";
 import { runProductionPreflight } from "../scripts/preflightProduction.js";
 

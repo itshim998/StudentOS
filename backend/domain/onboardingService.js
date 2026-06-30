@@ -20,6 +20,7 @@ function addDays(date, days) {
 }
 
 function toDate(value, fallback = null) {
+  if (value === null || value === undefined || String(value).trim() === "") return fallback;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? fallback : date;
 }
@@ -49,7 +50,7 @@ function parseSubjectLines(value, now = new Date()) {
     return {
       title: titleRaw || `Subject ${index + 1}`,
       teacher: "",
-      examDate: dateOnly(examRaw) || dateOnly(addDays(now, 14 + index * 3)),
+      examDate: dateOnly(examRaw) || null,
       topics: splitList(topicsRaw),
     };
   });
@@ -83,8 +84,9 @@ function parseTimetableLines(value, courses = [], now = new Date()) {
     .filter(Boolean);
   return lines.map((line, index) => {
     const [dayRaw, timeRaw, titleRaw, courseRaw] = line.split("|").map((part) => part?.trim());
+    if (!line.includes("|") || !timeRaw || (!titleRaw && !courseRaw)) return null;
     const startDate = addDays(now, index % 5);
-    const [startHour = "18", startMinute = "00"] = String(timeRaw || "18:00").split("-")[0].split(":");
+    const [startHour = "18", startMinute = "00"] = String(timeRaw).split("-")[0].split(":");
     startDate.setHours(Number(startHour) || 18, Number(startMinute) || 0, 0, 0);
     const endDate = addHours(startDate, 1);
     const courseTitle = courseRaw || titleRaw || courses[index % Math.max(1, courses.length)]?.title;
@@ -97,13 +99,14 @@ function parseTimetableLines(value, courses = [], now = new Date()) {
       endsAt: endDate.toISOString(),
       location: dayRaw || "Planned",
     };
-  });
+  }).filter(Boolean);
 }
 
 function normalizeBreakPattern(value) {
-  const raw = String(value || "25/5").trim();
+  const raw = String(value || "").trim();
+  if (!raw) return { label: "", focusMinutes: null, breakMinutes: null };
   const match = raw.match(/(\d+)\D+(\d+)/);
-  if (!match) return { label: "25/5", focusMinutes: 25, breakMinutes: 5 };
+  if (!match) return { label: raw, focusMinutes: null, breakMinutes: null };
   return {
     label: `${match[1]}/${match[2]}`,
     focusMinutes: Number(match[1]),
@@ -134,50 +137,32 @@ function buildTopic({ course, title, weak = false, completed = false, index = 0 
   };
 }
 
-export function buildDemoOnboardingPayload(now = new Date()) {
-  return {
-    displayName: "Aarav",
-    stream: "Science",
-    classLevel: "Grade 10",
-    degree: "High school",
-    schoolSystem: "CBSE-style demo",
-    academicGoal: "exam_prep",
-    dailyStudyAvailabilityMinutes: 105,
-    studyBreakPattern: "25/5",
-    completedTopicsText: "Mathematics: Quadratic equations",
-    subjectsText: [
-      `Mathematics|${dateOnly(addDays(now, 9))}|Quadratic equations, Trigonometry basics, Statistics`,
-      `Biology|${dateOnly(addDays(now, 13))}|Cell cycle and mitosis, Ecology`,
-      `English|${dateOnly(addDays(now, 16))}|Argument writing, Macbeth`,
-    ].join("\n"),
-    weakTopicsText: "Mathematics: Trigonometry basics, Statistics\nBiology: Phase ordering",
-    timetableText: "Mon|18:30|Math revision|Mathematics\nTue|18:00|Biology diagrams|Biology\nThu|19:00|English writing sprint|English",
-  };
-}
-
 export function normalizeOnboardingPayload(payload = {}, now = new Date()) {
   const breakPattern = normalizeBreakPattern(payload.studyBreakPattern);
   const coursesInput = parseSubjectLines(payload.courses || payload.subjects || payload.subjectsText, now);
-  const courses = coursesInput.length ? coursesInput : parseSubjectLines("Mathematics| |Algebra, Geometry", now);
-  const normalizedCourses = courses.map((course, index) => ({
+  const normalizedCourses = coursesInput.filter((course) => String(course?.title || "").trim()).map((course, index) => ({
     id: course.id || `course_${slug(course.title || `subject_${index + 1}`)}`,
     title: course.title || `Subject ${index + 1}`,
-    term: course.term || payload.term || "Current term",
+    term: course.term || payload.term || "",
     teacher: course.teacher || "",
-    examDate: dateOnly(course.examDate) || dateOnly(addDays(now, 14 + index * 3)),
+    examDate: dateOnly(course.examDate) || null,
     color: course.color || ["mint", "amber", "violet", "sky"][index % 4],
     topics: splitList(course.topics || course.topicsText),
   }));
   const weakTopics = parseWeakTopicLines(payload.weakTopics || payload.weakTopicsText);
   const completedTopics = parseTopicSignalLines(payload.completedTopics || payload.completedTopicsText);
   return {
-    displayName: payload.displayName || payload.name || "Student",
+    displayName: String(payload.displayName || payload.name || "").trim(),
     stream: payload.stream || "",
     degree: payload.degree || "",
-    classLevel: payload.classLevel || payload.gradeBand || "high_school",
+    yearSemester: payload.yearSemester || "",
+    classLevel: payload.classLevel || payload.gradeBand || "",
     schoolSystem: payload.schoolSystem || "",
-    academicGoal: payload.academicGoal || "exam_prep",
-    dailyStudyAvailabilityMinutes: Number(payload.dailyStudyAvailabilityMinutes || payload.dailyStudyMinutes || 90),
+    academicGoal: payload.academicGoal || "",
+    dailyStudyAvailabilityMinutes: Number(payload.dailyStudyAvailabilityMinutes || payload.dailyStudyMinutes) || null,
+    scheduleText: String(payload.scheduleText || payload.schedule || (!String(payload.timetableText || "").includes("|") ? payload.timetableText : "") || "").trim(),
+    examPattern: String(payload.examPattern || "").trim(),
+    syllabusNotes: String(payload.syllabusNotes || "").trim(),
     breakPattern,
     courses: normalizedCourses,
     weakTopics,
@@ -205,19 +190,21 @@ export function generateAcademicRoadmap(state, { now = new Date() } = {}) {
 
   for (const course of coursesByExam) {
     const courseTopics = (state.topics || []).filter((topic) => topic.courseId === course.id);
-    const firstWeak = courseTopics.find((topic) => weakTopicIds.has(topic.id)) || courseTopics[0];
+    const firstWeak = courseTopics.find((topic) => weakTopicIds.has(topic.id)) || courseTopics[0] || null;
     const priority = examPriority(course, now);
-    items.push({
-      id: `road_exam_${course.id}`,
-      courseId: course.id,
-      topicId: firstWeak?.id || null,
-      title: `Build ${course.title} exam roadmap`,
-      kind: "exam_roadmap",
-      priority,
-      dueAt: addDays(now, priority === "urgent" ? 0 : 1).toISOString(),
-      status: "open",
-      examPressure: priority,
-    });
+    if (course.examDate) {
+      items.push({
+        id: `road_exam_${course.id}`,
+        courseId: course.id,
+        topicId: firstWeak?.id || null,
+        title: `Build ${course.title} exam roadmap`,
+        kind: "exam_roadmap",
+        priority,
+        dueAt: addDays(now, priority === "urgent" ? 0 : 1).toISOString(),
+        status: "open",
+        examPressure: priority,
+      });
+    }
     for (const topic of courseTopics.filter((item) => weakTopicIds.has(item.id)).slice(0, 3)) {
       items.push({
         id: `road_weak_${topic.id}`,
@@ -271,7 +258,7 @@ export function generateAcademicRoadmap(state, { now = new Date() } = {}) {
   });
 }
 
-export function applyStudentOnboarding(state, payload = {}, { now = new Date(), demo = false } = {}) {
+export function applyStudentOnboarding(state, payload = {}, { now = new Date() } = {}) {
   const normalized = normalizeOnboardingPayload(payload, now);
   const timestamp = nowIso(now);
   const courses = normalized.courses.map((course) => ({
@@ -295,15 +282,13 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date(), 
       ...courseWeakTopics.map((weak) => weak.title),
       ...courseCompletedTopics.map((completed) => completed.title),
     ]);
-    const builtTopics = topicNames.length
-      ? topicNames.map((title, index) => buildTopic({
+    const builtTopics = topicNames.map((title, index) => buildTopic({
           course,
           title,
           weak: courseWeakTopics.some((weak) => String(weak.title).toLowerCase() === String(title).toLowerCase()),
           completed: courseCompletedTopics.some((completed) => String(completed.title).toLowerCase() === String(title).toLowerCase()),
           index,
-        }))
-      : [buildTopic({ course, title: `${course.title} foundations`, weak: false })];
+        }));
     topics.push(...builtTopics);
     weakTopicRecords.push(...builtTopics.filter((topic) => topic.weakSignals.length));
     const targetCourse = courses.find((item) => item.id === course.id);
@@ -312,19 +297,27 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date(), 
 
   state.studentProfile = {
     ...state.studentProfile,
-    displayName: normalized.displayName || state.studentProfile.displayName,
-    gradeBand: normalized.classLevel || state.studentProfile.gradeBand,
-    schoolSystem: normalized.schoolSystem || state.studentProfile.schoolSystem,
+    displayName: normalized.displayName || state.studentProfile.displayName || "",
+    gradeBand: normalized.classLevel || null,
+    schoolSystem: normalized.schoolSystem || null,
     preferences: {
       ...(state.studentProfile.preferences || {}),
       academicGoal: normalized.academicGoal,
       stream: normalized.stream,
       degree: normalized.degree,
+      yearSemester: normalized.yearSemester,
       classLevel: normalized.classLevel,
       dailyStudyAvailabilityMinutes: normalized.dailyStudyAvailabilityMinutes,
       studyBreakPattern: normalized.breakPattern.label,
       breakCycleMinutes: normalized.breakPattern.focusMinutes,
       breakMinutes: normalized.breakPattern.breakMinutes,
+      scheduleText: normalized.scheduleText,
+      examPattern: normalized.examPattern,
+      syllabusNotes: normalized.syllabusNotes,
+      subjectsText: String(payload.subjectsText || payload.subjects || "").trim(),
+      weakTopicsText: String(payload.weakTopicsText || "").trim(),
+      completedTopicsText: String(payload.completedTopicsText || "").trim(),
+      timetableText: String(payload.timetableText || "").trim(),
       weakTopicIds: weakTopicRecords.map((topic) => topic.id),
       onboardingCompletedAt: timestamp,
     },
@@ -339,8 +332,8 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date(), 
     units: topics.filter((topic) => topic.courseId === course.id).map((topic) => topic.title),
     sourceMaterialId: null,
     createdAt: timestamp,
-  }));
-  state.exams = courses.map((course) => ({
+  })).filter((syllabus) => syllabus.units.length > 0);
+  state.exams = courses.filter((course) => course.examDate).map((course) => ({
     id: `exam_${course.id}`,
     courseId: course.id,
     title: `${course.title} exam`,
@@ -348,16 +341,7 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date(), 
     weight: 1,
     createdAt: timestamp,
   }));
-  state.timetable = normalized.timetable.length
-    ? normalized.timetable
-    : courses.slice(0, 3).map((course, index) => ({
-        id: `study_${course.id}_${index + 1}`,
-        courseId: course.id,
-        title: `${course.title} study block`,
-        startsAt: addHours(now, 18 + index).toISOString(),
-        endsAt: addHours(now, 19 + index).toISOString(),
-        location: "Planned",
-      }));
+  state.timetable = normalized.timetable;
   state.roadmap = generateAcademicRoadmap(state, { now });
   state.revisionEvents = [
     ...(state.revisionEvents || []),
@@ -375,7 +359,7 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date(), 
   state.auditLog.push({
     id: `audit_onboarding_${Date.now()}`,
     actorId: state.studentProfile.id,
-    action: demo ? "demo_onboarding.seeded" : "student_onboarding.completed",
+    action: "student_onboarding.completed",
     targetType: "student_profile",
     targetId: state.studentProfile.id,
     riskLevel: "low",
@@ -398,4 +382,56 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date(), 
     academicGoal: normalized.academicGoal,
     studyBreakPattern: normalized.breakPattern,
   };
+}
+
+export function bindProductOnboardingStep(state, step, { now = new Date() } = {}) {
+  const answers = state.studentProfile?.productLifecycle?.onboarding?.answers || {};
+  const about = answers.about_you || {};
+  const education = answers.education_system || {};
+  const schedule = answers.daily_schedule || {};
+  const exams = answers.exam_pattern || {};
+  const academic = answers.academic_context || {};
+  const profile = state.studentProfile || { id: "student_unknown", preferences: {} };
+  profile.displayName = String(about.displayName || profile.displayName || "").trim();
+  profile.gradeBand = String(education.level || "").trim() || null;
+  profile.schoolSystem = String(education.institution || "").trim() || null;
+  profile.preferences = {
+    ...(profile.preferences || {}),
+    institution: String(education.institution || "").trim(),
+    classLevel: String(education.level || "").trim(),
+    stream: String(education.stream || "").trim(),
+    yearSemester: String(education.yearSemester || "").trim(),
+    scheduleText: String(schedule.schedule || "").trim(),
+    examPattern: String(exams.examPattern || "").trim(),
+    syllabusNotes: String(academic.syllabusNotes || "").trim(),
+  };
+  state.studentProfile = profile;
+  if (step !== "academic_context") return { profile };
+  return applyStudentOnboarding(state, {
+    displayName: profile.displayName,
+    stream: profile.preferences.stream,
+    degree: profile.preferences.yearSemester,
+    yearSemester: profile.preferences.yearSemester,
+    classLevel: profile.preferences.classLevel,
+    schoolSystem: profile.preferences.institution,
+    scheduleText: profile.preferences.scheduleText,
+    examPattern: profile.preferences.examPattern,
+    syllabusNotes: profile.preferences.syllabusNotes,
+    subjectsText: String(academic.subjects || "").trim(),
+  }, { now });
+}
+
+export function hydrateSavedProductOnboarding(state, { now = new Date() } = {}) {
+  const lifecycle = state.studentProfile?.productLifecycle;
+  const completedSteps = lifecycle?.onboarding?.completedSteps || [];
+  const answers = lifecycle?.onboarding?.answers || {};
+  if (!completedSteps.length || !Object.keys(answers).length) return false;
+  const preferences = state.studentProfile.preferences || {};
+  if (preferences.onboardingDataVersion === 1) return false;
+  const shouldBuildAcademicState = completedSteps.includes("academic_context") &&
+    !(state.courses || []).length &&
+    String(answers.academic_context?.subjects || "").trim();
+  bindProductOnboardingStep(state, shouldBuildAcademicState ? "academic_context" : "profile_only", { now });
+  state.studentProfile.preferences.onboardingDataVersion = 1;
+  return true;
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { removeDemoSeedRowsForRealUser, seedStateForUser } from "./repository/studentOsRepository.js";
+import { initialStateForUser, removeDemoSeedRowsForRealUser } from "./repository/studentOsRepository.js";
 import { getPublicPlanCatalog } from "./saas/plans.js";
 import { validateSourceUpload } from "./storage/sourceMaterialService.js";
 import { runProductionPreflight } from "../scripts/preflightProduction.js";
@@ -21,7 +21,7 @@ import {
 
 const fixedNow = new Date("2026-06-27T10:00:00.000Z");
 const config = getProductFlowConfig({}, "development");
-const state = seedStateForUser({ id: "student_pass35_new", email: "new@student.example" });
+const state = initialStateForUser({ id: "student_pass35_new", email: "new@student.example" });
 
 assert.equal(state.courses.length, 0, "new authenticated profiles must not inherit demo courses");
 assert.equal(state.assignments.length, 0, "new authenticated profiles must not inherit demo assignments");
@@ -30,7 +30,7 @@ assert.equal(getProductLifecycleSnapshot(state, fixedNow).canGoPrevious, false);
 assert.throws(() => requireDashboardActive(state), /Complete StudentOS setup/);
 assert.throws(() => requireProductMaterialAccess(state), /access and agreement/);
 
-const orphanedWorkspace = seedStateForUser({ id: "student_pass35_orphaned", email: "orphaned@student.example" });
+const orphanedWorkspace = initialStateForUser({ id: "student_pass35_orphaned", email: "orphaned@student.example" });
 delete orphanedWorkspace.studentProfile.productLifecycle;
 orphanedWorkspace.courses.push({ id: "course_demo_stale", title: "Stale demo course" });
 orphanedWorkspace.roadmap.push({ id: "roadmap_demo_stale", title: "Stale demo roadmap item" });
@@ -38,7 +38,7 @@ const orphanedLifecycle = getProductLifecycleSnapshot(orphanedWorkspace, fixedNo
 assert.equal(orphanedLifecycle.nextStep, "about_you", "workspace rows must not imply lifecycle completion");
 assert.equal(orphanedLifecycle.dashboardActive, false, "missing lifecycle must fail closed");
 
-const contaminatedState = seedStateForUser({ id: "student_pass35_contaminated", email: "contaminated@student.example" });
+const contaminatedState = initialStateForUser({ id: "student_pass35_contaminated", email: "contaminated@student.example" });
 contaminatedState.courses.push({ id: "course_alg2", title: "Seeded Mathematics" });
 contaminatedState.assignments.push({ id: "assign_quad_ws", title: "Seeded worksheet" });
 contaminatedState.roadmap.push({ id: "road_quad_revision", title: "Seeded roadmap item" });
@@ -47,7 +47,7 @@ assert.equal(contaminatedState.courses.length, 0);
 assert.equal(contaminatedState.assignments.length, 0);
 assert.equal(contaminatedState.roadmap.length, 0);
 
-const partialWorkspace = seedStateForUser({ id: "student_pass35_partial", email: "partial@student.example" });
+const partialWorkspace = initialStateForUser({ id: "student_pass35_partial", email: "partial@student.example" });
 partialWorkspace.studentProfile.productLifecycle = {
   state: "dashboard_active",
   dashboardActivatedAt: fixedNow.toISOString(),

@@ -64,7 +64,7 @@ export function getCurrentSubscription(state, fallbackPlan = null) {
     .sort((left, right) => Date.parse(right.updatedAt || right.createdAt || "") - Date.parse(left.updatedAt || left.createdAt || ""))[0];
   if (latest) return latest;
   const lifecycle = state.studentProfile?.productLifecycle || {};
-  const legacyReady = state.studentProfile?.id === "student_demo_001" || lifecycle.state === "dashboard_active";
+  const legacyReady = lifecycle.state === "dashboard_active";
   const planId = normalizePlanKey(lifecycle.selectedPlanId) ||
     normalizePlanKey(state.studentProfile?.preferences?.billingPlan) ||
     (legacyReady ? normalizePlanKey(fallbackPlan) : null);

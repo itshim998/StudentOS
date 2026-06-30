@@ -177,9 +177,9 @@ export function createInitialProductLifecycle({ ready = false, now = new Date() 
 }
 
 export function normalizeProductLifecycle(state = {}, now = new Date()) {
-  state.studentProfile = state.studentProfile || { id: "student_unknown", displayName: "Student", preferences: {} };
+  state.studentProfile = state.studentProfile || { id: "student_unknown", displayName: "", preferences: {} };
   const existing = state.studentProfile.productLifecycle;
-  const base = createInitialProductLifecycle({ ready: state.studentProfile.id === "student_demo_001", now });
+  const base = createInitialProductLifecycle({ now });
   const lifecycle = {
     ...base,
     ...(existing && typeof existing === "object" ? existing : {}),

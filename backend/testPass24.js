@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { createSeedState } from "./domain/studentosDomain.js";
+import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 import { StudentOsRepository } from "./repository/studentOsRepository.js";
 import { buildDataExportPackage } from "./account/exportService.js";
 import {

@@ -10,11 +10,11 @@ export async function getRequestSession(req, { config, authClient }) {
 
   if (!accessToken) {
     return {
-      mode: "local_demo",
+      mode: "local_preview",
       authenticated: false,
       tokenPresent: false,
       user: {
-        id: "student_demo_001",
+        id: "student_local_001",
         email: "student@studentos.local",
       },
     };

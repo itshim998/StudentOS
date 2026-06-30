@@ -27,7 +27,7 @@ import {
   getProductLifecycleSnapshot,
   normalizeProductLifecycle,
 } from "./domain/productLifecycleService.js";
-import { seedStateForUser } from "./repository/studentOsRepository.js";
+import { initialStateForUser } from "./repository/studentOsRepository.js";
 
 const validPlans = ["trial", "starter", "essential", "plus", "pro"];
 assert.deepEqual(ALL_PLAN_KEYS, validPlans);
@@ -116,7 +116,7 @@ assert.equal(publicSaas.billing.plans.length, 4);
 assert.equal("quotas" in publicSaas.quotas.defaultPlan, false);
 assert.equal("features" in publicSaas.quotas.defaultPlan, false);
 
-const newUserState = seedStateForUser({ id: "student_pass354_new", email: "new354@student.example" });
+const newUserState = initialStateForUser({ id: "student_pass354_new", email: "new354@student.example" });
 newUserState.studentProfile.productLifecycle.selectedPlanId = "free";
 newUserState.studentProfile.productLifecycle.state = "dashboard_active";
 newUserState.studentProfile.productLifecycle.dashboardActivatedAt = new Date().toISOString();
@@ -142,7 +142,7 @@ assert.equal("usage" in account.planAccess, false);
 assert.equal("quotas" in account.planAccess, false);
 assert.doesNotMatch(JSON.stringify(account.planAccess), /storageBytes|aiRequestsPerDay|maxSources|dailyBudget/i);
 
-const cancelledState = seedStateForUser({ id: "student_pass354_cancelled", email: "cancelled@student.example" });
+const cancelledState = initialStateForUser({ id: "student_pass354_cancelled", email: "cancelled@student.example" });
 cancelledState.studentProfile.productLifecycle = {
   ...cancelledState.studentProfile.productLifecycle,
   selectedPlanId: "pro",

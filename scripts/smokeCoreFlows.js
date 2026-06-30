@@ -120,7 +120,7 @@ async function main() {
     );
 
     const account = await request(baseUrl, "/api/account");
-    assert.equal(account.user.authMode, "local_demo");
+    assert.equal(account.user.authMode, "local_preview");
     assert.equal(account.secretsPrinted, false);
     assert.equal(account.planAccess.plan.access.assignmentWritebackEnabled, false);
     assert.equal("usage" in account.planAccess, false);
@@ -132,6 +132,32 @@ async function main() {
       body: JSON.stringify({ email: "smoke@studentos.local" }),
     });
     assert.equal(reset.mode, "local_preview");
+
+    const productAction = (action, payload = {}) => request(baseUrl, "/api/product-flow", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, payload }),
+    });
+    await productAction("save_onboarding_step", { step: "about_you", answers: { displayName: "Smoke Student" } });
+    await productAction("save_onboarding_step", { step: "education_system", answers: { level: "Grade 10", stream: "Science" } });
+    await productAction("select_plan", { planId: "starter" });
+    await productAction("choose_access", { accessMode: "paid_plan" });
+    await productAction("verify_payment_method_placeholder");
+    await productAction("complete_legal", {
+      ageGate: "adult",
+      consents: Object.fromEntries([
+        "termsOfService", "privacyPolicy", "trialBilling", "trialLimits", "paymentMandate",
+        "cancellationWindow", "academicDataUse", "noOutcomeGuarantee", "responsibleUse", "aiAccuracy",
+      ].map((key) => [key, true])),
+    });
+    await productAction("save_onboarding_step", { step: "daily_schedule", answers: { schedule: "Weekdays after 6 PM" } });
+    await productAction("save_onboarding_step", { step: "exam_pattern", answers: { examPattern: "Monthly tests and a semester exam" } });
+    await productAction("save_onboarding_step", { step: "academic_context", answers: { subjects: "Mathematics|2026-07-01|Quadratics, Trigonometry\nPhysics|2026-07-04|Motion graphs" } });
+    await productAction("choose_classroom_path", { choice: "manual" });
+    await productAction("save_materials", { materialIds: [], materialLabels: [] });
+    await productAction("confirm_setup_summary");
+    await productAction("prepare_workspace");
+    await productAction("choose_tutorial", { choice: "skip" });
 
     const onboarding = await request(baseUrl, "/api/onboarding", {
       method: "POST",
@@ -157,7 +183,7 @@ async function main() {
     assert.equal(bootstrap.planAccess.entitlements.assignmentWritebackEnabled, false);
     const courseId = bootstrap.courses[0].id;
     const topicId = bootstrap.topics[0].id;
-    const assignmentId = bootstrap.assignments[0].id;
+    assert.equal(bootstrap.assignments.length, 0, "fresh workspaces must not contain placeholder assignments");
 
     const form = new FormData();
     form.set("courseId", courseId);
@@ -191,14 +217,6 @@ async function main() {
     assert.equal(score.result.creditsAwarded, 2);
     assert.equal(score.creditEntry.amount, 2);
 
-    const flow = await request(baseUrl, "/api/assignment-flow", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ assignmentId }),
-    });
-    assert(flow.flow.action);
-    assert.equal(flow.flow.realSubmissionAllowed, false);
-
     const classroomStatus = await request(baseUrl, "/api/classroom/status");
     assert.equal(classroomStatus.readOnly, true);
     assert.equal(classroomStatus.writebackEnabled, false);
@@ -215,14 +233,7 @@ async function main() {
     assert.equal(Object.hasOwn(classroomSync.syncRun || {}, "payload"), false);
 
     bootstrap = await request(baseUrl, "/api/bootstrap");
-    const classroomAssignment = bootstrap.assignments.find((assignment) => assignment.source === "google_classroom") || bootstrap.assignments[0];
-    const classroomFlow = await request(baseUrl, "/api/assignment-flow", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ assignmentId: classroomAssignment.id }),
-    });
-    assert(classroomFlow.flow.action);
-    assert.equal(classroomFlow.flow.studentReviewRequired, true);
+    assert.equal(bootstrap.assignments.length, 0, "Classroom preview must not invent assignments");
 
     const exportRequest = await request(baseUrl, "/api/account/export-request", {
       method: "POST",

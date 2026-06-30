@@ -18,7 +18,8 @@ import {
 } from "./domain/studentosDomain.js";
 import {
   applyStudentOnboarding,
-  buildDemoOnboardingPayload,
+  bindProductOnboardingStep,
+  hydrateSavedProductOnboarding,
 } from "./domain/onboardingService.js";
 import {
   applyProductLifecycleAction,
@@ -391,6 +392,9 @@ async function getStateContext(req) {
     authClient: supabaseClients.authClient,
   });
   const state = await repository.loadState(session);
+  if (hydrateSavedProductOnboarding(state)) {
+    await repository.saveState(session, state);
+  }
   await ensureIndexedChunkEmbeddings(session, state);
   return {
     session,
@@ -971,7 +975,6 @@ async function handleApi(req, res, url) {
       assignmentStudentReviewRequired: true,
       onboarding: {
         enabled: true,
-        demoSeedEnabled: saasConfig.demoSeedEnabled,
       },
       productFlow: productFlowConfig,
       accountManagement: {
@@ -1681,6 +1684,10 @@ async function handleApi(req, res, url) {
     const lifecycle = applyProductLifecycleAction(state, body.action, body.payload || {}, {
       config: productFlowConfig,
     });
+    if (body.action === "save_onboarding_step") {
+      bindProductOnboardingStep(state, body.payload?.step);
+      state.studentProfile.preferences.onboardingDataVersion = 1;
+    }
     if (body.action === "complete_legal") {
       recordLegalAcceptance(state, {
         accepted: true,
@@ -1706,32 +1713,11 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
-    const onboarding = applyStudentOnboarding(state, body, { demo: false });
+    const onboarding = applyStudentOnboarding(state, body);
     await repository.saveState(session, state);
     sendJson(res, 200, {
       onboarding,
       state: publicState(state, persistence),
-      secretsPrinted: false,
-    });
-    return;
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/demo/seed") {
-    if (!saasConfig.demoSeedEnabled) {
-      sendJson(res, 403, {
-        error: "Demo seed is disabled in this environment",
-        demoSeedEnabled: false,
-        secretsPrinted: false,
-      });
-      return;
-    }
-    const { session, state, persistence } = await getStateContext(req);
-    const onboarding = applyStudentOnboarding(state, buildDemoOnboardingPayload(), { demo: true });
-    await repository.saveState(session, state);
-    sendJson(res, 200, {
-      onboarding,
-      state: publicState(state, persistence),
-      demoReady: true,
       secretsPrinted: false,
     });
     return;
@@ -2221,39 +2207,6 @@ async function handleApi(req, res, url) {
     state.tutorLessons.push(lesson);
     await repository.saveTutorLesson(session, state);
     sendJson(res, 200, { lesson });
-    return;
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/files/mock") {
-    const body = await readJsonBody(req);
-    const { session, state } = await getStateContext(req);
-    requireDashboardActive(state);
-    const material = {
-      id: `src_mock_${Date.now()}`,
-      courseId: body.courseId || state.courses[0].id,
-      title: body.title || "Demo source material",
-      kind: body.kind || "uploaded_file_metadata",
-      storageMode: "mock_metadata",
-      storageBucket: supabaseConfig.storage.bucket,
-      storagePath: null,
-      citationLabel: body.citationLabel || body.title || "Demo source material",
-      webFallbackAllowed: body.webFallbackAllowed !== false,
-      createdAt: new Date().toISOString(),
-    };
-    state.sourceMaterials.push(material);
-    await repository.saveSourceMaterial(session, state);
-    const { storageBucket, storagePath, storageMode, ...safeMaterial } = material;
-    sendJson(res, 200, {
-      material: {
-        ...safeMaterial,
-        storageMode: "local_preview",
-        isPrivate: true,
-      },
-      storagePrepared: true,
-      bytesStored: false,
-      plan: getSourceStoragePlan(supabaseConfig),
-      note: "StudentOS saved private source details for this preview. File bytes remain disabled.",
-    });
     return;
   }
 

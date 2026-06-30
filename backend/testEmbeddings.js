@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { answerFromStudentMaterials, createSeedState, retrieveGroundedSources } from "./domain/studentosDomain.js";
+import { answerFromStudentMaterials, retrieveGroundedSources } from "./domain/studentosDomain.js";
+import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 import {
   cosineSimilarity,
   createDeterministicEmbedding,
@@ -84,7 +85,7 @@ const lowAnswer = answerFromStudentMaterials({
   state,
 });
 assert.equal(lowAnswer.grounding.confidence.lowConfidence, true);
-assert.match(lowAnswer.explanation.concept, /low-confidence source context/);
+assert.match(lowAnswer.explanation.concept, /Not enough material yet/);
 
 const emptyState = createSeedState(new Date("2026-05-25T10:00:00+05:30"));
 emptyState.sourceMaterials = [];

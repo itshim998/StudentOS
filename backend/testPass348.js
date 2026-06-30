@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createSeedState } from "./domain/studentosDomain.js";
+import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 import {
   GOOGLE_CLASSROOM_READONLY_SCOPES,
   assertNoGoogleClassroomWriteScopes,
