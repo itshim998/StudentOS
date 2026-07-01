@@ -90,8 +90,30 @@ function applyAssistantPolicy(result, assistantPolicy = {}) {
   };
 }
 
-export async function runStudentOsVerb({ verb, message, state, retrievalOverride = null, assistantPolicy = {}, fetchImpl = globalThis.fetch }) {
-  const config = getAiProviderConfig();
+function applyMissingContextGuidance(answer, baseAnswer, message) {
+  let text = String(answer || "").trim();
+  const grounding = baseAnswer?.grounding || {};
+  const generalGuidance = "I can answer generally for now. Add your materials for more personalized help.";
+  if (grounding.contextUnavailable && !grounding.requiresSpecificMaterial && !text.includes(generalGuidance)) {
+    text = `${text}${text ? "\n\n" : ""}${generalGuidance}`;
+  }
+  const liveGuidance = "I may not have live information for that, but I can help with the study side.";
+  if (/\b(?:latest|current news|right now|today’s|today's|live information|live score|current price)\b/i.test(String(message || "")) && !text.includes(liveGuidance)) {
+    text = `${text}${text ? "\n\n" : ""}${liveGuidance}`;
+  }
+  return text;
+}
+
+export async function runStudentOsVerb({
+  verb,
+  message,
+  state,
+  retrievalOverride = null,
+  assistantPolicy = {},
+  fetchImpl = globalThis.fetch,
+  providerConfig = getAiProviderConfig(),
+}) {
+  const config = providerConfig;
   const baseAnswer = answerFromStudentMaterials({ verb, message, state, retrievalOverride, assistantPolicy });
   const insufficientContext = buildInsufficientContextNote(baseAnswer);
 
@@ -100,7 +122,8 @@ export async function runStudentOsVerb({ verb, message, state, retrievalOverride
     const result = await provider.run({ verb, message, state, retrievalOverride, assistantPolicy });
     return applyAssistantPolicy({
       ...result,
-      answer: insufficientContext || result.answer,
+      generationSucceeded: true,
+      answer: applyMissingContextGuidance(insufficientContext || result.answer, baseAnswer, message),
       grounding: {
         ...result.grounding,
         insufficientContext: Boolean(insufficientContext),
@@ -111,13 +134,30 @@ export async function runStudentOsVerb({ verb, message, state, retrievalOverride
 
   const messages = buildGroundedMessages({ verb, message, state, baseAnswer, assistantPolicy });
   const providerResult = await runProviderFallback({ messages, config, fetchImpl });
+  if (providerResult.providerFailure) {
+    return applyAssistantPolicy({
+      ...baseAnswer,
+      mode: "provider_unavailable",
+      provider: providerResult.provider,
+      modelUsed: providerResult.modelUsed,
+      generationSucceeded: false,
+      retryable: true,
+      answer: "I could not complete that answer right now. Please try again.",
+      grounding: {
+        ...baseAnswer.grounding,
+        insufficientContext: false,
+        insufficiencyReason: null,
+        authoritativeCitationsOnly: true,
+      },
+    }, assistantPolicy);
+  }
   const usedRealProvider = providerResult.provider !== "mock" && providerResult.text;
   const citationValidation = validateGeneratedCitations(providerResult.text || "", baseAnswer.grounding?.snippets || []);
-  const answer = usedRealProvider
+  const answer = applyMissingContextGuidance(usedRealProvider
     ? insufficientContext
       ? insufficientContext
       : citationValidation.text
-    : insufficientContext || baseAnswer.answer;
+    : insufficientContext || baseAnswer.answer, baseAnswer, message);
   return applyAssistantPolicy({
     ...baseAnswer,
     mode: usedRealProvider ? "real_grounded_ai" : "mock_studentos_brain",
@@ -127,6 +167,7 @@ export async function runStudentOsVerb({ verb, message, state, retrievalOverride
     fallback: providerResult.provider === "mock"
       ? { used: true, reason: providerResult.fallbackReason || "mock_provider_selected" }
       : { used: false },
+    generationSucceeded: true,
     answer,
     citationValidation,
     grounding: {

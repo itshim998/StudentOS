@@ -274,6 +274,7 @@ test.beforeAll(async () => {
       PORT: String(port),
       STUDENTOS_ENV: "development",
       NODE_ENV: "development",
+      STUDENTOS_AI_MODE: "mock",
       STUDENTOS_RATE_LIMIT_ENABLED: "false",
       STUDENTOS_QUOTA_ENFORCEMENT: "false",
     },
@@ -1099,10 +1100,16 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   });
   await openAiDrawer(page);
   await expect(page.locator(".verb-tab")).toHaveCount(0);
+  await page.locator("#ai-message").fill("Hello");
+  await page.locator("#ai-form").getByRole("button", { name: "Ask" }).click();
+  await expect(page.locator("#ai-response")).toContainText("Preparing your answer");
+  await waitForNotLoading(page.locator("#ai-response"), "Preparing your answer");
+  await expect(page.locator("#ai-response")).toContainText("I’m StudentOS");
+  await expect(page.locator("#ai-response")).not.toContainText(/provider|model|token|backend|storage|retrieval/i);
   await page.locator("#ai-message").fill("Use the uploaded quadratics material in one concise response.");
   await page.locator("#ai-form").getByRole("button", { name: "Ask" }).click();
-  await expect(page.locator("#ai-response")).toContainText("Checking your materials");
-  await waitForNotLoading(page.locator("#ai-response"), "Checking your materials");
+  await expect(page.locator("#ai-response")).toContainText("Preparing your answer");
+  await waitForNotLoading(page.locator("#ai-response"), "Preparing your answer");
   await expect(page.locator("#ai-response")).toContainText(/uploaded material|Cited snippets|source|reference/i, { timeout: 20_000 });
   await page.unroute("**/api/ai/verb");
   await closeAiDrawer(page);
@@ -1310,9 +1317,23 @@ test("Academic Context respects Classroom review eligibility and no-course guida
   };
   await page.goto(baseUrl);
   await clickNav(page, "Academic Context");
-  await expect(page.locator("#source-capacity-message")).toContainText("Add a course in Setup before uploading academic context.");
+  await expect(page.locator("#source-capacity-message")).toContainText("No courses found yet.");
+  await expect(page.locator("#academic-context-course-recovery")).toContainText("Refresh your Classroom course list or add a course in Setup before uploading academic context.");
+  await expect(page.locator("#academic-context-course-recovery")).toContainText("StudentOS will only refresh your course names. It will not import assignments or materials.");
+  await expect(page.locator("#academic-context-course-recovery").getByRole("button", { name: "Refresh course list" })).toBeVisible();
+  await expect(page.locator("#academic-context-course-recovery").getByRole("button", { name: "Open Setup" })).toBeVisible();
   await expect(page.locator("#source-course-error")).toContainText("Add a course in Setup before uploading academic context.");
   await expect(page.locator("#source-submit-button")).toBeDisabled();
+
+  bootstrapPayload = {
+    ...bootstrapPayload,
+    courses: [structuredClone(baseState.courses[0])],
+  };
+  await page.goto(baseUrl);
+  await clickNav(page, "Academic Context");
+  await expect(page.locator("#academic-context-course-recovery")).toBeHidden();
+  await expect(page.locator("#source-course-select")).toBeEnabled();
+  await expect(page.locator("#source-submit-button")).toBeEnabled();
   await page.unroute("**/api/bootstrap");
 });
 

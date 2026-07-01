@@ -64,6 +64,7 @@ const els = {
   academicContextSummary: document.getElementById("academic-context-summary"),
   academicContextAddButton: document.getElementById("academic-context-add-button"),
   academicContextUploadPanel: document.getElementById("academic-context-upload-panel"),
+  academicContextCourseRecovery: document.getElementById("academic-context-course-recovery"),
   academicContextClassroomGuidance: document.getElementById("academic-context-classroom-guidance"),
   academicContextRoomStatus: document.getElementById("academic-context-room-status"),
   sourceForm: document.getElementById("source-form"),
@@ -607,6 +608,11 @@ async function loadClassroomStatus() {
     classroomStatusLoaded = true;
   }
   renderClassroomPanel();
+  if (state) {
+    renderSources();
+    renderCourses();
+    updateProductFeatureControls();
+  }
 }
 
 function getAcademicGoalLabel() {
@@ -1408,6 +1414,33 @@ function syncAcademicContextUploadType() {
   if (els.sourceSubmitButton) els.sourceSubmitButton.textContent = assignment ? "Upload assignment" : "Upload material";
 }
 
+function renderAcademicContextCourseRecovery(noCourses) {
+  if (!els.academicContextCourseRecovery) return;
+  els.academicContextCourseRecovery.hidden = !noCourses;
+  if (!noCourses) {
+    els.academicContextCourseRecovery.innerHTML = "";
+    return;
+  }
+  const connector = activeClassroomConnector();
+  const stateName = normalizedClassroomState(connector);
+  const connected = stateName === "connected";
+  const reconnect = stateName === "reconnect_required";
+  const connectionAction = connected
+    ? `<button class="secondary-button" type="button" data-course-refresh>Refresh course list</button>`
+    : ["disconnected", "reconnect_required"].includes(stateName)
+      ? `<button class="secondary-button" type="button" data-course-connect>${reconnect ? "Reconnect Classroom" : "Connect Classroom"}</button>`
+      : "";
+  els.academicContextCourseRecovery.innerHTML = `
+    <strong>No courses found yet.</strong>
+    <p>Refresh your Classroom course list or add a course in Setup before uploading academic context.</p>
+    <p class="muted-copy">StudentOS will only refresh your course names. It will not import assignments or materials.</p>
+    <div class="inline-actions">
+      ${connectionAction}
+      <button class="text-button" type="button" data-open-setup>Open Setup</button>
+    </div>
+  `;
+}
+
 function updateProductFeatureControls() {
   const capacity = currentAcademicContextCapacity();
   const noCourses = !(state?.courses || []).length;
@@ -1425,13 +1458,14 @@ function updateProductFeatureControls() {
   if (els.sourceForm) els.sourceForm.setAttribute("aria-disabled", blockMaterialAdd ? "true" : "false");
   if (els.sourceCapacityMessage) {
     els.sourceCapacityMessage.textContent = noCourses
-      ? "Add a course in Setup before uploading academic context."
+      ? "No courses found yet. Refresh your Classroom course list or add a course in Setup before uploading academic context."
       : capacity.message;
     els.sourceCapacityMessage.classList.toggle("warning-copy", capacity.status === "full");
   }
   if (els.academicContextRoomStatus) els.academicContextRoomStatus.textContent = capacity.message;
   if (noCourses) setAcademicContextFieldMessage("course", "Add a course in Setup before uploading academic context.");
   else if (els.sourceCourseError?.textContent === "Add a course in Setup before uploading academic context.") clearAcademicContextFieldMessages("course");
+  renderAcademicContextCourseRecovery(noCourses);
   syncAcademicContextUploadType();
 
   const capabilities = currentProductCapabilities();
@@ -2164,6 +2198,10 @@ function classroomStatusCard() {
       </div>
       ${courseOnly ? `<p class="muted-copy">Classroom courses can help set up your course list. Upload PDFs manually on Starter.</p>` : emptyClassroom ? `<p class="muted-copy">No active Classroom coursework was found yet.</p>` : ""}
       ${stateName === "reconnect_required" ? `<p class="warning-copy">Reconnect Classroom to check for new work and refresh selected items.</p>` : ""}
+      <div class="inline-actions">
+        ${stateName === "connected" ? `<button class="mini-action" type="button" data-course-refresh>Refresh course list</button>` : ""}
+        ${["disconnected", "reconnect_required"].includes(stateName) ? `<button class="mini-action" type="button" data-course-connect>${stateName === "reconnect_required" ? "Reconnect Classroom" : "Connect Classroom"}</button>` : ""}
+      </div>
     </article>
   `;
 }
@@ -2946,6 +2984,9 @@ function renderAiPayload(result) {
       </div>
     `);
   }
+  if (result.weeklyAiHelp?.low && !result.weeklyAiHelp?.blocked) {
+    extra.push(`<p>You are close to this week’s AI help limit. AI help remaining this week: ${Number(result.weeklyAiHelp.remaining || 0)}.</p>`);
+  }
 
   setResult(els.aiResponse, `
     <strong>StudentOS response</strong>
@@ -2963,7 +3004,7 @@ function renderAiPayload(result) {
 async function runAi(event) {
   event.preventDefault();
   await withButtonLoading(event.submitter || els.aiForm.querySelector("button[type='submit']"), "Running...", async () => {
-    setLoading(els.aiResponse, "Checking your materials...");
+    setLoading(els.aiResponse, "Preparing your answer...");
     try {
       const result = await api("/api/ai/verb", {
         method: "POST",
@@ -2973,10 +3014,9 @@ async function runAi(event) {
     } catch (error) {
       setResult(els.aiResponse, `
         <strong>AI response unavailable</strong>
-        <p>${escapeHtml(error.message || "StudentOS could not finish this response. Try again after checking your sources.")}</p>
+        <p>I could not complete that answer right now. Please try again.</p>
         <div class="tag-row">
           ${tag("try again", "medium")}
-          ${tag("selected material protected", "source")}
         </div>
       `);
     }
@@ -3485,11 +3525,11 @@ async function previewBillingManagement() {
   `);
 }
 
-async function connectClassroom() {
+async function connectClassroom(purpose = "setup") {
   setLoading(els.classroomPanel, "Preparing Classroom connection...");
   const result = await api("/api/classroom/oauth/start", {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ purpose }),
   });
   if (result.authorizationUrl) {
     window.location.href = result.authorizationUrl;
@@ -3510,6 +3550,21 @@ async function syncClassroom() {
   classroomStatus = { connector: result.connector, syncSummary: result.summary, syncHistory: result.connector?.syncHistory || [], policy: result.policy || null };
   classroomStatusLoaded = true;
   render();
+}
+
+async function refreshClassroomCourses() {
+  if (els.sourceResult) setLoading(els.sourceResult, "Refreshing your course list...");
+  const result = await api("/api/classroom/courses/refresh", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  state = result.state || state;
+  classroomStatus = { connector: result.connector, syncSummary: result.summary, syncHistory: result.connector?.syncHistory || [], policy: result.policy || null };
+  classroomStatusLoaded = true;
+  render();
+  if (els.sourceResult) {
+    setResult(els.sourceResult, `<strong>Courses refreshed.</strong><p>StudentOS only refreshed your course names. It did not import assignments or materials.</p>`);
+  }
 }
 
 async function addClassroomItemToAcademicContext(itemId) {
@@ -3989,6 +4044,35 @@ function wireEvents() {
   });
   window.addEventListener("hashchange", handleAuthLocationChange);
   document.addEventListener("click", (event) => {
+    const courseRefreshButton = event.target.closest("[data-course-refresh]");
+    if (courseRefreshButton) {
+      withButtonLoading(courseRefreshButton, "Refreshing...", refreshClassroomCourses, {
+        timeoutTarget: els.sourceResult || els.classroomPanel,
+        timeoutCopy: "Refreshing your course list is taking longer than expected. Please try again.",
+        timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+      }).catch((error) => {
+        if (els.sourceResult) setResult(els.sourceResult, `<p>${escapeHtml(error.message)}</p>`);
+        else renderClassroomError(error);
+      });
+      return;
+    }
+    const courseConnectButton = event.target.closest("[data-course-connect]");
+    if (courseConnectButton) {
+      withButtonLoading(courseConnectButton, "Preparing...", () => connectClassroom("course_recovery"), {
+        timeoutTarget: els.sourceResult || els.classroomPanel,
+        timeoutCopy: "Classroom connection is taking longer than expected. Please try again.",
+        timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+      }).catch((error) => {
+        if (els.sourceResult) setResult(els.sourceResult, `<p>${escapeHtml(error.message)}</p>`);
+        else renderClassroomError(error);
+      });
+      return;
+    }
+    const openSetupButton = event.target.closest("[data-open-setup]");
+    if (openSetupButton) {
+      setView("setup");
+      return;
+    }
     const classroomItemButton = event.target.closest("[data-classroom-item-id]");
     if (classroomItemButton) {
       withButtonLoading(classroomItemButton, "Adding...", () => addClassroomItemToAcademicContext(classroomItemButton.dataset.classroomItemId), {

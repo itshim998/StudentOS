@@ -62,12 +62,15 @@ export function buildGroundedMessages({ verb, message, state, baseAnswer, assist
   const lowConfidence = baseAnswer.grounding?.confidence?.lowConfidence === true;
   const hasUploadedSnippets = Boolean(baseAnswer.grounding?.uploadedMaterialUsed && snippets.length && !lowConfidence);
   const contextBlock = formatSnippets(snippets);
+  const needsSpecificMaterial = /\b(?:this|my|the attached|the uploaded|selected)\b.{0,40}\b(?:pdf|file|material|notes?|assignment|rubric)\b/i.test(String(message || ""));
   const fallbackInstruction = hasUploadedSnippets
     ? "Use the uploaded source snippets as the primary evidence. Do not add citations beyond the supplied source labels."
-    : "The retrieved uploaded material is insufficient. Say 'Not enough material yet' clearly and give one safe next action.";
+    : needsSpecificMaterial
+      ? "The requested material is not available. Say what is missing and offer one clear next step."
+      : "Answer generally without pretending material is available. Include: 'I can answer generally for now. Add your materials for more personalized help.'";
 
   const verbInstructions = {
-    Ask: "Teach the concept clearly from the supplied source snippets. Keep it concrete and student-safe.",
+    Ask: "Answer the request directly. Use supplied source snippets when they are relevant and available.",
     Plan: "Create a compact study plan using exam pressure, due work, weak topics, and any supplied source snippets.",
     Make: "Generate structured notes, flashcards, quiz prompts, or a summary scaffold from the supplied source snippets.",
     Review: "Check understanding, identify weak points, and recommend the next test or revision action from the source context.",
@@ -77,10 +80,12 @@ export function buildGroundedMessages({ verb, message, state, baseAnswer, assist
     {
       role: "system",
       content: [
-        "You are StudentOS, a calm source-grounded academic tutor for high-school students.",
+        "You are StudentOS, a calm academic study assistant. Help the student understand, plan, revise, and manage academic work.",
+        "Use the student’s selected academic context when relevant, but answer general questions safely when context is missing or not needed.",
+        "Do not claim to have read material that is not available. Do not expose providers, models, tokens, storage, backend details, or implementation details.",
+        "Encourage responsible learning and do not submit work or impersonate the student.",
+        "If current facts are required and no current source is available, say: 'I may not have live information for that, but I can help with the study side.'",
         "Never claim a citation unless it appears in the supplied source snippets.",
-        "Never imply StudentOS submitted, emailed, posted, or completed school work for the student.",
-        "Essential learning help is always allowed; convenience automation remains review-first.",
         assistantPolicy.responseGuidance || "Keep the response clear, concise, and focused on one useful next step.",
         fallbackInstruction,
       ].join(" "),
@@ -106,6 +111,11 @@ export function buildGroundedMessages({ verb, message, state, baseAnswer, assist
 
 export function buildInsufficientContextNote(baseAnswer) {
   const labels = baseAnswer.sourceLabels || [];
+  if (baseAnswer.grounding?.contextUnavailable) {
+    return baseAnswer.grounding?.requiresSpecificMaterial
+      ? "Not enough material yet. I don’t have that material available. Add or select it in Academic Context, then ask again."
+      : null;
+  }
   if (baseAnswer.grounding?.confidence?.lowConfidence) {
     return "Not enough material yet. Add or choose more relevant material, then ask again.";
   }

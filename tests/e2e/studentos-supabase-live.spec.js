@@ -52,6 +52,7 @@ const USER_TABLES_FOR_CLEANUP = [
   "revision_events",
   "roadmap_items",
   "credit_ledger",
+  "ai_usage_ledger",
   "test_results",
   "test_sessions",
   "source_chunks",
@@ -74,6 +75,7 @@ const REQUIRED_ROW_TABLES = [
   "source_materials",
   "source_chunks",
   "ai_messages",
+  "ai_usage_ledger",
   "data_export_requests",
 ];
 
@@ -594,7 +596,7 @@ test.describe("StudentOS live Supabase E2E", () => {
       await page.locator(`.verb-tab[data-verb='${verb}']`).click();
       await page.locator("#ai-message").fill(`${verb}: answer from the uploaded quadratics note with citations.`);
       await page.locator("#ai-form").getByRole("button", { name: "Run" }).click();
-      await waitForNotLoading(page.locator("#ai-response"), "Checking your materials");
+      await waitForNotLoading(page.locator("#ai-response"), "Preparing your answer");
       await expect(page.locator("#ai-response")).toContainText(`${verb} result`, { timeout: 20_000 });
       await expect(page.locator("#ai-response")).toContainText(/Cited snippets|uploaded material|source|materials/i);
     }

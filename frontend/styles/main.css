@@ -3647,6 +3647,24 @@ textarea:focus-visible {
   font-size: var(--font-size-small);
 }
 
+.academic-context-course-recovery {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  padding: 0.9rem;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-medium);
+  background: var(--surface-soft);
+}
+
+.academic-context-course-recovery[hidden] {
+  display: none;
+}
+
+.academic-context-course-recovery p {
+  margin: 0;
+}
+
 .academic-context-content-panel,
 .academic-context-group {
   display: grid;

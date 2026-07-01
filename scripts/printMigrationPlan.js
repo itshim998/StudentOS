@@ -35,9 +35,11 @@ const additionalShardMigrations = [
   "supabase/migrations/202605250019_studentos_pass22_mfa_billing_alerts.sql",
   "supabase/migrations/202605250020_studentos_pass24_classroom_tokens_sync_history.sql",
   "supabase/migrations/202606290001_studentos_pass35_4_plan_entitlements.sql",
+  "supabase/migrations/202607010001_studentos_task2_classroom_selection_truth.sql",
+  "supabase/migrations/202607010002_studentos_task33_ai_weekly_allowance.sql",
 ];
 
-console.log("StudentOS migration plan through PASS 35.4");
+console.log("StudentOS migration plan through Task 3.3");
 for (const [index, step] of steps.entries()) {
   console.log(`${index + 1}. ${step.project}: ${step.migration}`);
 }

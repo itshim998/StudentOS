@@ -91,6 +91,14 @@ import { savePersistentClassroomToken } from "./connectors/googleClassroom/token
 import { runStudentOsVerb } from "./ai/studentBrainAdapter.js";
 import { getSafeAiProviderStatus, getAiProviderConfig } from "./ai/providerConfig.js";
 import {
+  AI_ALLOWANCE_COPY,
+  buildPublicAiAllowance,
+  classifyAiTask,
+  getAiWeeklyAllowance,
+  getAiWeeklyPeriod,
+  getDeterministicAiResponse,
+} from "./ai/aiWeeklyAllowanceService.js";
+import {
   contentHash,
   embedSourceChunks,
   getEmbeddingConfig,
@@ -745,6 +753,9 @@ function publicErrorMessage(error, fallback = "We couldn’t complete that reque
     return "Too many attempts. Please wait a minute and try again.";
   }
   if (/supabase|groq|pollinations|gemini|openai|gpt|gpt-oss|anthropic|claude|provider|model|pgvector|rpc|postgrest|postgres/i.test(message)) {
+    return fallback;
+  }
+  if (/cannot read properties|is not iterable|undefined is not|null is not|referenceerror|typeerror/i.test(message)) {
     return fallback;
   }
   return message || fallback;
@@ -1849,9 +1860,18 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/classroom/oauth/start") {
+    const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
     const productLifecycle = getProductLifecycleSnapshot(state);
-    if (!productLifecycle.paymentMethodVerified || !productLifecycle.legalConsentComplete || productLifecycle.classroomChoice !== "classroom") {
+    const courseRecovery = body.purpose === "course_recovery";
+    if (courseRecovery) {
+      requireDashboardActive(state);
+      if (!getProductClassroomPolicy(state).planReady) {
+        const error = new Error("Finish plan setup before connecting Classroom.");
+        error.status = 403;
+        throw error;
+      }
+    } else if (!productLifecycle.paymentMethodVerified || !productLifecycle.legalConsentComplete || productLifecycle.classroomChoice !== "classroom") {
       const error = new Error("Choose Classroom during setup after completing the access and agreement steps.");
       error.status = 403;
       throw error;
@@ -1880,6 +1900,7 @@ async function handleApi(req, res, url) {
     const stateToken = createClassroomOAuthState({
       userId: session.user.id,
       config: googleClassroomConfig,
+      purpose: courseRecovery ? "course_recovery" : "setup",
     });
     const authorizationUrl = buildClassroomOAuthUrl({
       config: googleClassroomConfig,
@@ -1922,14 +1943,15 @@ async function handleApi(req, res, url) {
         providerAccountEmail: profile.email || "",
       });
       markClassroomConnected(state, metadata, { mode: "oauth" });
-      markProductClassroomConnected(state);
+      const courseRecovery = claims.purpose === "course_recovery";
+      if (!courseRecovery) markProductClassroomConnected(state);
       const classroomPolicy = getProductClassroomPolicy(state);
       await syncGoogleClassroomIntoState({
         state,
         session,
         repository,
         config: googleClassroomConfig,
-        courseOnly: classroomPolicy.courseOnly === true,
+        courseOnly: courseRecovery || classroomPolicy.courseOnly === true,
       }).catch((error) => {
         logger.warn("classroom_onboarding_sync.failed", {
           requestId: req.requestId,
@@ -1942,9 +1964,11 @@ async function handleApi(req, res, url) {
         <title>StudentOS Classroom Connected</title>
         <body>
           <h1>Google Classroom connected</h1>
-          <p>${classroomPolicy.courseOnly === true
-            ? "Starter uses Classroom only to help set up your course list. Upload PDFs manually to add assignments or materials."
-            : "Classroom connection is ready. Choose the work you want to add to your academic context."}</p>
+          <p>${courseRecovery
+            ? "StudentOS refreshed your course names only. It did not import assignments or materials."
+            : classroomPolicy.courseOnly === true
+              ? "Starter uses Classroom only to help set up your course list. Upload PDFs manually to add assignments or materials."
+              : "Classroom connection is ready. Choose the work you want to add to your academic context."}</p>
           <script>setTimeout(() => { location.href = ${JSON.stringify(publicFrontendUrl).replace(/</g, "\\u003c")}; }, 1200);</script>
         </body>`);
     } catch {
@@ -1984,6 +2008,59 @@ async function handleApi(req, res, url) {
     sendJson(res, 200, {
       connector: publicClassroomConnector(updatedConnector),
       disconnected: true,
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/classroom/courses/refresh") {
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    const classroomPolicy = getProductClassroomPolicy(state);
+    if (!classroomPolicy.planReady) {
+      const error = new Error("Finish plan setup before refreshing your course list.");
+      error.status = 403;
+      throw error;
+    }
+    const connector = await getClassroomConnectorStatus({
+      state,
+      session,
+      repository,
+      userId: session.user.id,
+      config: googleClassroomConfig,
+    });
+    if (!connector.connected || !connector.actions.sync) {
+      sendJson(res, 409, {
+        error: connector.reconnectRequired
+          ? "Reconnect Classroom to refresh your course list."
+          : "Connect Classroom to refresh your course list.",
+        connector: publicClassroomConnector(connector),
+        syncBlocked: true,
+        readOnly: true,
+        writebackEnabled: false,
+        secretsPrinted: false,
+      });
+      return;
+    }
+    if (googleClassroomConfig.mode === "oauth") requireAccountSession(session);
+    const result = await syncGoogleClassroomIntoState({
+      state,
+      session,
+      repository,
+      config: googleClassroomConfig,
+      courseOnly: true,
+    });
+    await repository.saveState(session, state);
+    sendJson(res, 200, {
+      ...result,
+      connector: publicClassroomConnector(result.connector),
+      summary: publicClassroomSummary(result.summary),
+      syncRun: publicClassroomSyncRun(result.syncRun),
+      state: publicState(state, persistence),
+      message: "Courses refreshed.",
+      policy: getPublicEntitlementSummary(resolveEntitlements(state).activePlanKey).classroom,
+      readOnly: true,
+      writebackEnabled: false,
       secretsPrinted: false,
     });
     return;
@@ -2132,7 +2209,29 @@ async function handleApi(req, res, url) {
     }
     const assistantPolicy = getAssistantExecutionPolicy(state);
     enforceRateLimit(req, session, "ai_call");
-    enforceUsage(state, "ai_call");
+    const deterministic = getDeterministicAiResponse(body.message || "");
+    if (deterministic) {
+      const result = {
+        verb: requestedVerb,
+        answer: deterministic.answer,
+        sourceLabels: [],
+        nextActions: [],
+        deterministic: true,
+        generationSucceeded: true,
+        grounding: {
+          uploadedMaterialUsed: false,
+          insufficientContext: false,
+          insufficiencyReason: null,
+          snippets: [],
+        },
+      };
+      const { conversation, messages } = createAiPersistencePayload({ session, body, result });
+      await repository.saveAiConversation(session, conversation, messages).catch((error) => {
+        logger.warn("ai_conversation.persistence_failed", { requestId: req.requestId, status: error.status || 500 });
+      });
+      sendJson(res, 200, publicAiResult(result));
+      return;
+    }
     const groundingContext = getGroundingContext(state, body.message || "");
     const retrievalOverride = await repository.retrieveGroundedChunks(session, {
       state,
@@ -2141,15 +2240,87 @@ async function handleApi(req, res, url) {
       course: groundingContext.course,
       limit: assistantPolicy.retrievalLimit,
     });
-    const result = await runStudentOsVerb({
-      verb: requestedVerb,
-      message: body.message || "",
-      state,
-      retrievalOverride,
-      assistantPolicy,
+    const activePlanKey = resolveEntitlements(state).activePlanKey;
+    const allowance = getAiWeeklyAllowance(activePlanKey);
+    const period = getAiWeeklyPeriod();
+    const task = classifyAiTask({ verb: requestedVerb, message: body.message || "", retrieval: retrievalOverride });
+    let reservation;
+    try {
+      reservation = await repository.reserveAiWeeklyAllowance(session, {
+        planTier: activePlanKey,
+        periodKey: period.periodKey,
+        allowance,
+        actionType: task.actionType,
+        creditCost: task.creditCost,
+        requestId: req.requestId,
+        metadata: { verb: requestedVerb },
+      });
+    } catch (error) {
+      logger.warn("ai_allowance.reservation_failed", { requestId: req.requestId, status: error.status || 500 });
+      sendJson(res, 200, publicAiResult({
+        verb: requestedVerb,
+        answer: AI_ALLOWANCE_COPY.unavailable,
+        sourceLabels: [],
+        nextActions: [],
+        generationSucceeded: false,
+        retryable: true,
+        grounding: { uploadedMaterialUsed: false, insufficientContext: false, insufficiencyReason: null, snippets: [] },
+      }));
+      return;
+    }
+    if (!reservation.allowed) {
+      sendJson(res, 200, publicAiResult({
+        verb: requestedVerb,
+        answer: `${AI_ALLOWANCE_COPY.exhausted} ${AI_ALLOWANCE_COPY.exhaustedNextStep}`,
+        sourceLabels: [],
+        nextActions: ["Update your courses or academic context"],
+        generationSucceeded: false,
+        allowanceLimited: true,
+        weeklyAiHelp: buildPublicAiAllowance({ ...reservation, refreshesAt: period.refreshesAt, blocked: true }),
+        grounding: { uploadedMaterialUsed: false, insufficientContext: false, insufficiencyReason: null, snippets: [] },
+      }));
+      return;
+    }
+    let result;
+    try {
+      result = await runStudentOsVerb({
+        verb: requestedVerb,
+        message: body.message || "",
+        state,
+        retrievalOverride,
+        assistantPolicy,
+      });
+    } catch (error) {
+      logger.warn("ai_generation.failed", { requestId: req.requestId, status: error.status || 500 });
+      result = {
+        verb: requestedVerb,
+        answer: AI_ALLOWANCE_COPY.unavailable,
+        sourceLabels: [],
+        nextActions: [],
+        generationSucceeded: false,
+        retryable: true,
+        grounding: { uploadedMaterialUsed: false, insufficientContext: false, insufficiencyReason: null, snippets: [] },
+      };
+    }
+    const generated = result.generationSucceeded !== false;
+    const settlement = await repository.settleAiWeeklyAllowance(session, {
+      requestId: req.requestId,
+      status: generated ? "charged" : "refunded",
+    }).catch((error) => {
+      logger.warn("ai_allowance.settlement_failed", { requestId: req.requestId, status: error.status || 500 });
+      return null;
+    });
+    const usedAfterSettlement = settlement?.used ?? (generated ? reservation.used : Math.max(0, reservation.used - task.creditCost));
+    result.weeklyAiHelp = buildPublicAiAllowance({
+      allowance,
+      used: usedAfterSettlement,
+      remaining: Math.max(0, allowance - usedAfterSettlement),
+      refreshesAt: period.refreshesAt,
     });
     const { conversation, messages } = createAiPersistencePayload({ session, body, result });
-    await repository.saveAiConversation(session, conversation, messages);
+    await repository.saveAiConversation(session, conversation, messages).catch((error) => {
+      logger.warn("ai_conversation.persistence_failed", { requestId: req.requestId, status: error.status || 500 });
+    });
     sendJson(res, 200, publicAiResult(result));
     return;
   }
@@ -2346,8 +2517,13 @@ async function handleApi(req, res, url) {
     const { session, state } = await getStateContext(req);
     requireDashboardActive(state);
     const topic = state.topics.find((item) => item.id === body.topicId && isAcademicContextRecord(item)) || state.topics.find(isAcademicContextRecord);
+    if (!topic) {
+      const error = new Error("Add a course topic before starting a tutor lesson.");
+      error.status = 400;
+      throw error;
+    }
     const course = findCourse(state, topic.courseId);
-    const sources = state.sourceMaterials.filter((source) => isAcademicContextRecord(source) && topic.sourceMaterialIds.includes(source.id));
+    const sources = (state.sourceMaterials || []).filter((source) => isAcademicContextRecord(source) && (topic.sourceMaterialIds || []).includes(source.id));
     const lesson = createTutorLesson({
       course,
       topic,
@@ -2799,6 +2975,23 @@ const server = createServer(async (req, res) => {
       policy: error.policy,
       rateLimit: error.rateLimit,
     });
+    if (url.pathname === "/api/ai/verb") {
+      const setupRequired = /setup|dashboard|workspace/i.test(String(error.message || ""));
+      const rateLimited = (error.status || 0) === 429;
+      const answer = setupRequired
+        ? "Complete StudentOS setup before using Ask StudentOS."
+        : rateLimited
+          ? "AI help is busy right now. Please wait a moment and try again."
+          : AI_ALLOWANCE_COPY.unavailable;
+      sendJson(res, error.status || 500, {
+        error: answer,
+        answer,
+        retryable: !setupRequired,
+        grounding: { uploadedMaterialUsed: false, insufficientContext: false, insufficiencyReason: null, snippets: [] },
+        requestId,
+      });
+      return;
+    }
     sendJson(res, error.status || 500, {
       error: publicErrorMessage(error, "StudentOS server error"),
       requestId,

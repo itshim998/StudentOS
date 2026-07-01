@@ -200,6 +200,7 @@ function courseById(state, courseId) {
 }
 
 function sourcesForTopic(state, topic) {
+  if (!topic) return [];
   return (state.sourceMaterials || []).filter((source) =>
     isAcademicContextRecord(source) && topic.sourceMaterialIds?.includes(source.id));
 }
@@ -218,6 +219,7 @@ function readySourceChunks(state) {
 }
 
 export function getGroundingContext(state, message = "") {
+  normalizeLearningState(state);
   const topic = findBestTopicForMessage(state, message);
   const course = courseById(state, topic?.courseId) || state.courses.find(isAcademicContextRecord);
   return { topic, course };
@@ -1087,10 +1089,15 @@ function findBestTopicForMessage(state, message) {
     return words.some((word) => lower.includes(word));
   });
   if (matchedTopic) return matchedTopic;
-
-  const dueAssignment = [...state.assignments].filter(isAcademicContextRecord)
-    .sort((left, right) => Date.parse(left.dueDate || "") - Date.parse(right.dueDate || ""))[0];
-  return topicById(state, dueAssignment?.topicIds?.[0]) || state.topics.find(isAcademicContextRecord);
+  const matchedAssignment = state.assignments.filter(isAcademicContextRecord).find((assignment) =>
+    topicTitleSlug(assignment.title).some((word) => lower.includes(word)));
+  const assignmentTopic = topicById(state, matchedAssignment?.topicIds?.[0]);
+  if (assignmentTopic) return assignmentTopic;
+  const matchedCourse = state.courses.filter(isAcademicContextRecord).find((course) =>
+    topicTitleSlug(course.title).some((word) => lower.includes(word)));
+  return matchedCourse
+    ? state.topics.filter(isAcademicContextRecord).find((topic) => topic.courseId === matchedCourse.id) || null
+    : null;
 }
 
 export function buildStudyPlan(state, topic) {
@@ -1171,15 +1178,26 @@ export function buildReviewCheck(state, topic) {
 }
 
 export function answerFromStudentMaterials({ verb, message, state, retrievalOverride = null, assistantPolicy = {} }) {
+  normalizeLearningState(state);
   const { topic, course } = getGroundingContext(state, message);
   const sources = sourcesForTopic(state, topic);
-  const retrieved = retrievalOverride || retrieveGroundedSources({ state, message, topic, course });
+  const rawRetrieved = retrievalOverride || retrieveGroundedSources({ state, message, topic, course });
+  const retrieved = {
+    chunks: Array.isArray(rawRetrieved?.chunks) ? rawRetrieved.chunks : [],
+    sources: Array.isArray(rawRetrieved?.sources) ? rawRetrieved.sources : [],
+    memories: Array.isArray(rawRetrieved?.memories) ? rawRetrieved.memories : [],
+    labels: Array.isArray(rawRetrieved?.labels) ? rawRetrieved.labels : [],
+    hasUploadedMaterial: rawRetrieved?.hasUploadedMaterial === true,
+    retrievalMode: rawRetrieved?.retrievalMode || "local-json",
+    confidence: rawRetrieved?.confidence || { score: 0, label: "low", lowConfidence: true, semanticAvailable: false },
+  };
   const sourceLabels = retrieved.labels.length
     ? retrieved.labels
     : sources.map((source) => ({ label: source.citationLabel, type: "student_material" }));
   const preferences = state.studentProfile?.preferences || {};
   const webFallback = sources.some((source) => source.webFallbackAllowed);
   const requestText = String(message || "").trim();
+  const requiresSpecificMaterial = /\b(?:this|my|the attached|the uploaded|selected)\b.{0,40}\b(?:pdf|file|material|notes?|assignment|rubric)\b/i.test(requestText);
   const insufficientMaterial = retrieved.confidence?.lowConfidence ||
     (!retrieved.hasUploadedMaterial && !retrieved.chunks.length && !retrieved.memories.length);
   const groundingSummary = retrieved.confidence?.lowConfidence
@@ -1188,8 +1206,56 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
       ? "I used your selected study material."
       : "Use this as a study-plan draft until you add more relevant material.";
   const retrievedSnippet = retrieved.chunks[0]?.snippet || retrieved.memories[0]?.body || retrieved.sources[0]?.extractedText || "";
-  const coverage = determineTopicCoverage(state, topic);
   const normalizedVerb = AI_VERBS.includes(verb) ? verb : "Ask";
+  if (!topic || !course) {
+    const generalGuidance = requiresSpecificMaterial
+      ? "I don’t have that material yet. Add or select it in Academic Context, then ask again."
+      : "I can answer generally for now. Add your materials for more personalized help.";
+    const generalAnswer = normalizedVerb === "Plan"
+      ? `${generalGuidance} Start with one clear goal, choose the next deadline or topic, and schedule a focused study block followed by a short review.`
+      : normalizedVerb === "Make"
+        ? `${generalGuidance} I can still help you create a general study outline once you name the topic and the format you need.`
+        : normalizedVerb === "Review"
+          ? `${generalGuidance} Tell me the topic or paste the work you want to review, and I’ll help you check understanding without submitting it for you.`
+          : generalGuidance;
+    return {
+      verb: normalizedVerb,
+      courseId: null,
+      topicId: null,
+      coverage: null,
+      sourceLabels,
+      answer: generalAnswer,
+      nextActions: requiresSpecificMaterial ? ["Add or select the missing material"] : ["Ask a study question", "Add academic context when useful"],
+      grounding: {
+        uploadedMaterialUsed: retrieved.hasUploadedMaterial,
+        summary: generalGuidance,
+        retrievedCount: retrieved.chunks.length + retrieved.sources.length + retrieved.memories.length,
+        retrievalMode: retrieved.retrievalMode,
+        confidence: retrieved.confidence,
+        snippets: retrieved.chunks.map((chunk) => ({
+          chunkId: chunk.id,
+          citationLabel: chunk.citationLabel || chunk.source?.citationLabel,
+          snippet: chunk.snippet,
+          sourceTitle: chunk.source?.title,
+          confidenceLabel: chunk.confidenceLabel,
+          confidenceScore: chunk.confidenceScore,
+          semanticScore: chunk.semanticScore,
+        })),
+        contextUnavailable: true,
+        requiresSpecificMaterial,
+      },
+      academicProfile: {
+        goal: preferences.academicGoal || "",
+        stream: preferences.stream || "",
+        classLevel: preferences.classLevel || state.studentProfile?.gradeBand || "",
+        dailyStudyAvailabilityMinutes: preferences.dailyStudyAvailabilityMinutes || preferences.dailyStudyWindowMinutes || null,
+        studyBreakPattern: preferences.studyBreakPattern || "",
+        weakTopicCount: (preferences.weakTopicIds || []).length,
+      },
+      webFallback: { allowed: false },
+    };
+  }
+  const coverage = determineTopicCoverage(state, topic);
   const base = {
     verb: normalizedVerb,
     courseId: course.id,
@@ -1211,6 +1277,8 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
         confidenceScore: chunk.confidenceScore,
         semanticScore: chunk.semanticScore,
       })),
+      contextUnavailable: false,
+      requiresSpecificMaterial,
     },
     academicProfile: {
       goal: preferences.academicGoal || "",

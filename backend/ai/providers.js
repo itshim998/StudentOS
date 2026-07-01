@@ -60,7 +60,7 @@ export class GroqGroundedProvider {
     return Boolean(this.config.configured && this.fetch);
   }
 
-  async generate({ messages, maxTokens = 900 }) {
+  async generate({ messages, maxTokens = this.config.maxCompletionTokens, reasoningEffort = this.config.reasoningEffort }) {
     if (!this.isConfigured()) {
       throw new Error("groq_not_configured");
     }
@@ -83,7 +83,7 @@ export class GroqGroundedProvider {
               temperature: 0.45,
               top_p: 0.9,
               max_completion_tokens: maxTokens,
-              reasoning_effort: "medium",
+              reasoning_effort: reasoningEffort,
               stream: false,
             }),
           });
@@ -118,7 +118,7 @@ export class PollinationsTextProvider {
     return Boolean(this.config.configured && this.fetch);
   }
 
-  async generate({ messages, maxTokens = 900 }) {
+  async generate({ messages, maxTokens = this.config.maxCompletionTokens }) {
     if (!this.isConfigured()) {
       throw new Error("pollinations_not_configured");
     }
@@ -196,7 +196,7 @@ export async function runProviderFallback({ messages, config = getAiProviderConf
   for (const provider of providers) {
     if (!provider.isConfigured()) continue;
     try {
-      return await provider.generate({ messages });
+      return { ...await provider.generate({ messages }), generationSucceeded: true, providerFailure: false };
     } catch (error) {
       lastError = error;
     }
@@ -206,6 +206,8 @@ export async function runProviderFallback({ messages, config = getAiProviderConf
     modelUsed: "local_studentos_policy",
     text: "",
     fallbackReason: sanitizeError(lastError || "no_provider_configured"),
+    generationSucceeded: !lastError,
+    providerFailure: Boolean(lastError),
   };
 }
 

@@ -813,6 +813,7 @@ class MockStudentOsRepository {
     this.monitoringAlertEvents = [];
     this.classroomTokens = new Map();
     this.classroomSyncRuns = new Map();
+    this.aiUsageLedger = [];
   }
 
   getInfo() {
@@ -915,6 +916,61 @@ class MockStudentOsRepository {
     return (this.classroomSyncRuns.get(session.user.id) || [])
       .slice(0, limit)
       .map(classroomSyncRunFromRow);
+  }
+
+  async reserveAiWeeklyAllowance(session, request = {}) {
+    const userId = session.user.id;
+    const existing = this.aiUsageLedger.find((entry) => entry.userId === userId && entry.requestId === request.requestId);
+    const used = this.aiUsageLedger
+      .filter((entry) => entry.userId === userId && entry.periodKey === request.periodKey && ["reserved", "charged"].includes(entry.status))
+      .reduce((sum, entry) => sum + Number(entry.creditCost || 0), 0);
+    if (existing) {
+      return {
+        allowed: ["reserved", "charged"].includes(existing.status),
+        allowance: request.allowance,
+        used,
+        remaining: Math.max(0, request.allowance - used),
+        entryId: existing.id,
+        status: existing.status,
+      };
+    }
+    const allowed = Number(request.creditCost || 0) <= Math.max(0, Number(request.allowance || 0) - used);
+    const entry = {
+      id: `ai_usage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      userId,
+      planTier: request.planTier,
+      periodKey: request.periodKey,
+      actionType: request.actionType,
+      creditCost: Number(request.creditCost || 0),
+      status: allowed ? "reserved" : "blocked",
+      requestId: request.requestId,
+      metadata: request.metadata || {},
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    this.aiUsageLedger.push(entry);
+    const nextUsed = used + (allowed ? entry.creditCost : 0);
+    return {
+      allowed,
+      allowance: request.allowance,
+      used: nextUsed,
+      remaining: Math.max(0, Number(request.allowance || 0) - nextUsed),
+      entryId: entry.id,
+      status: entry.status,
+    };
+  }
+
+  async settleAiWeeklyAllowance(session, { requestId, status } = {}) {
+    const entry = this.aiUsageLedger.find((item) => item.userId === session.user.id && item.requestId === requestId);
+    if (!entry) return null;
+    if (entry.status === "reserved" && ["charged", "refunded"].includes(status)) {
+      entry.status = status;
+      entry.updatedAt = nowIso();
+    }
+    const used = this.aiUsageLedger
+      .filter((item) => item.userId === session.user.id && item.periodKey === entry.periodKey && ["reserved", "charged"].includes(item.status))
+      .reduce((sum, item) => sum + Number(item.creditCost || 0), 0);
+    return { entryId: entry.id, status: entry.status, periodKey: entry.periodKey, creditCost: entry.creditCost, used };
   }
 
   async uploadExportPackage(session, { bucket, path, bytes }) {
@@ -1399,6 +1455,46 @@ class SupabaseStudentOsRepository {
     return rows.map(classroomSyncRunFromRow).filter(Boolean);
   }
 
+  async reserveAiWeeklyAllowance(session, request = {}) {
+    const route = this.route(session);
+    const rows = await route.client.rpc("reserve_ai_weekly_allowance", {
+      p_user_id: session.user.id,
+      p_plan_tier: request.planTier,
+      p_period_key: request.periodKey,
+      p_allowance: request.allowance,
+      p_action_type: request.actionType,
+      p_credit_cost: request.creditCost,
+      p_request_id: request.requestId,
+      p_metadata: request.metadata || {},
+    });
+    const row = rows?.[0] || {};
+    return {
+      allowed: row.allowed === true,
+      allowance: Number(row.allowance || request.allowance || 0),
+      used: Number(row.used || 0),
+      remaining: Number(row.remaining || 0),
+      entryId: row.entry_id || null,
+      status: row.entry_status || (row.allowed ? "reserved" : "blocked"),
+    };
+  }
+
+  async settleAiWeeklyAllowance(session, { requestId, status } = {}) {
+    const route = this.route(session);
+    const rows = await route.client.rpc("settle_ai_weekly_allowance", {
+      p_user_id: session.user.id,
+      p_request_id: requestId,
+      p_status: status,
+    });
+    const row = rows?.[0];
+    return row ? {
+      entryId: row.entry_id,
+      status: row.entry_status,
+      periodKey: row.period_key,
+      creditCost: Number(row.credit_cost || 0),
+      used: Number(row.used || 0),
+    } : null;
+  }
+
   async uploadExportPackage(session, { bucket, path, bytes, mimeType }) {
     assertOwnedExportPath(session.user.id, path);
     const route = this.route(session);
@@ -1520,6 +1616,7 @@ class SupabaseStudentOsRepository {
       "background_jobs",
       "embeddings_metadata",
       "memory_items",
+      "ai_usage_ledger",
       "ai_messages",
       "ai_conversations",
       "audit_logs",
@@ -1991,6 +2088,18 @@ export class StudentOsRepository {
     return this.useSupabase(session)
       ? this.supabase.listClassroomSyncRuns(session, options)
       : this.mock.listClassroomSyncRuns(session, options);
+  }
+
+  async reserveAiWeeklyAllowance(session, request) {
+    return this.useSupabase(session)
+      ? this.supabase.reserveAiWeeklyAllowance(session, request)
+      : this.mock.reserveAiWeeklyAllowance(session, request);
+  }
+
+  async settleAiWeeklyAllowance(session, settlement) {
+    return this.useSupabase(session)
+      ? this.supabase.settleAiWeeklyAllowance(session, settlement)
+      : this.mock.settleAiWeeklyAllowance(session, settlement);
   }
 
   async uploadExportPackage(session, storageObject) {

@@ -27,16 +27,7 @@ export class MockGoogleClassroomReadOnlyConnector {
   }
 
   async fetchSnapshot() {
-    const courses = (this.seedState.courses || [])
-      .slice(0, 2)
-      .map((course) => ({
-        providerCourseId: course.providerCourseId || course.id.replace(/^course_/, "mock_course_"),
-        title: course.title,
-        section: course.term || "",
-        teacher: course.teacher || "",
-        alternateLink: "https://classroom.google.com/mock/course",
-        updateTime: new Date().toISOString(),
-      }));
+    const { courses } = await this.fetchCourseSnapshot();
     const courseById = new Map((this.seedState.courses || []).map((course) => [course.id, course]));
     const courseWork = (this.seedState.assignments || [])
       .filter((assignment) => assignment.source === "mock_google_classroom" || assignment.source === "google_classroom")
@@ -71,6 +62,20 @@ export class MockGoogleClassroomReadOnlyConnector {
       alternateLink: item.alternateLink,
     }));
     return { courses, courseWork, submissions };
+  }
+
+  async fetchCourseSnapshot() {
+    const courses = (this.seedState.courses || [])
+      .slice(0, 2)
+      .map((course) => ({
+        providerCourseId: course.providerCourseId || course.id.replace(/^course_/, "mock_course_"),
+        title: course.title,
+        section: course.term || "",
+        teacher: course.teacher || "",
+        alternateLink: "https://classroom.google.com/mock/course",
+        updateTime: new Date().toISOString(),
+      }));
+    return { courses, courseWork: [], courseWorkMaterials: [], submissions: [], errors: [] };
   }
 
   async listAssignments() {

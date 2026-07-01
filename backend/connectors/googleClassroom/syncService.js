@@ -341,7 +341,8 @@ export async function syncGoogleClassroomIntoState({
   let connectorState = "connected";
   const startedAt = nowIso(now);
   if (config.mode === "mock") {
-    snapshot = await new MockGoogleClassroomReadOnlyConnector(state).fetchSnapshot();
+    const connector = new MockGoogleClassroomReadOnlyConnector(state);
+    snapshot = courseOnly ? await connector.fetchCourseSnapshot() : await connector.fetchSnapshot();
   } else {
     try {
       snapshot = await fetchOAuthSnapshot({ session, repository, config, fetchImpl, now, courseOnly });
@@ -401,8 +402,13 @@ export async function syncGoogleClassroomIntoState({
     await repository.saveClassroomSyncRun(session, syncRun).catch(() => null);
   }
   prefs.state = connectorState;
-  prefs.lastSyncAt = completedAt;
-  prefs.lastSyncSummary = summary;
+  if (courseOnly) {
+    prefs.lastCourseRefreshAt = completedAt;
+    prefs.lastCourseRefreshSummary = summary;
+  } else {
+    prefs.lastSyncAt = completedAt;
+    prefs.lastSyncSummary = summary;
+  }
   prefs.mode = config.mode;
   prefs.readOnly = true;
   prefs.writebackEnabled = false;

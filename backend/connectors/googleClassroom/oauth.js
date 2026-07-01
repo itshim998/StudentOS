@@ -24,12 +24,13 @@ function sign(secret, payload) {
   return createHmac("sha256", secret || "studentos-classroom-state").update(payload).digest("base64url");
 }
 
-export function createClassroomOAuthState({ userId, config, now = new Date() }) {
+export function createClassroomOAuthState({ userId, config, now = new Date(), purpose = "setup" }) {
   const payload = encode({
     sub: userId,
     iat: Math.floor(now.getTime() / 1000),
     exp: Math.floor(now.getTime() / 1000) + 600,
     typ: "studentos_google_classroom_oauth",
+    purpose: purpose === "course_recovery" ? "course_recovery" : "setup",
   });
   return `${payload}.${sign(config.stateSecret, payload)}`;
 }
