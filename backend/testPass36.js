@@ -100,14 +100,14 @@ starterState.sourceMaterials = Array.from({ length: 27 }, (_, index) => source(`
 const almostFull = getAcademicContextCapacity(starterState);
 assert.equal(almostFull.status, "almost_full");
 assert.equal(almostFull.message, ACADEMIC_CONTEXT_COPY.almostFull);
-assert.equal(getPublicAcademicContextCapacity(starterState).message, "Your academic context is almost full. Remove older material or upgrade to add more.");
+assert.equal(getPublicAcademicContextCapacity(starterState).message, "Your academic context is almost full.");
 assert.equal("used" in getPublicAcademicContextCapacity(starterState), false);
 assert.equal("limit" in getPublicAcademicContextCapacity(starterState), false);
 
 starterState.sourceMaterials.push(...Array.from({ length: 3 }, (_, index) => source(`uploaded_full_${index}`)));
 const full = getAcademicContextCapacity(starterState);
 assert.equal(full.status, "full");
-assert.equal(full.message, "Your academic context is full. Upgrade or remove older material to add this.");
+assert.equal(full.message, "Your academic context is full. Remove older material or upgrade to add more.");
 assert.throws(() => assertAcademicContextCanAdd(starterState), /academic context is full/);
 
 const selectionState = readyState("starter", "trial");

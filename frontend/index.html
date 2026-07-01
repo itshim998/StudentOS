@@ -113,7 +113,7 @@
         </button>
         <button class="nav-item" data-view="memory" type="button">
           <span class="nav-icon memory-icon" aria-hidden="true"></span>
-          <span>Memory</span>
+          <span>Academic Context</span>
         </button>
         <button class="nav-item" data-view="studio" type="button">
           <span class="nav-icon studio-icon" aria-hidden="true"></span>
@@ -401,63 +401,55 @@
 
       <section class="view" id="view-memory" aria-labelledby="view-title">
         <div class="memory-shell">
-          <section class="memory-brief-panel" aria-label="Memory overview">
+          <section class="memory-brief-panel academic-context-hero" aria-label="Academic Context overview">
             <div>
-              <p class="eyebrow">Memory</p>
-              <h3>Your academic memory</h3>
-              <p>Upload private materials, search your library, and see when sources need attention without exposing processing details first.</p>
+              <p class="eyebrow">Academic Context</p>
+              <h3>Academic Context</h3>
+              <p>Assignments, materials, and Classroom work StudentOS can use for your semester.</p>
             </div>
-            <div class="memory-brief-grid" aria-label="Memory actions">
-              <span>Upload source material</span>
-              <span>Search your academic memory</span>
-              <span>Review sources that need attention</span>
-            </div>
+            <div id="academic-context-summary" class="academic-context-summary" aria-label="Academic Context summary"></div>
           </section>
 
-          <div class="memory-layout memory-library-layout">
-            <section class="memory-library-panel">
+          <div class="memory-layout academic-context-layout">
+            <section class="memory-upload-panel academic-context-upload-panel">
               <div class="section-heading">
                 <div>
-                  <p class="eyebrow">Source Library</p>
-                  <h3>Student Materials</h3>
-                </div>
-                <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="Answer from my uploaded sources where possible, and call out what is not covered yet.">Ask from sources</button>
-              </div>
-              <label class="memory-search">
-                <span>Search your academic memory</span>
-                <input id="source-search-input" type="search" placeholder="Search sources, courses, or notes">
-              </label>
-              <div id="source-list" class="source-list memory-source-list"></div>
-            </section>
-            <section class="memory-upload-panel">
-              <div class="section-heading">
-                <div>
-                  <p class="eyebrow">Private Upload</p>
-                  <h3>Add Source Material</h3>
+                  <p class="eyebrow">Add PDF</p>
+                  <h3>Add an assignment or material</h3>
                 </div>
               </div>
-              <p class="surface-intro">Files stay private to StudentOS and help AI answer from your materials, cite sources, support review, and show course coverage.</p>
+              <p class="surface-intro">Choose a course and add a PDF to your academic context.</p>
               <p id="source-capacity-message" class="muted-copy" aria-live="polite"></p>
               <form id="source-form" class="form-grid source-upload-form">
                 <label>
+                  Type
+                  <select name="artifactKind" id="source-kind-select">
+                    <option value="assignment">Assignment</option>
+                    <option value="material">Material</option>
+                  </select>
+                </label>
+                <label>
                   Title
-                  <input name="title" type="text" value="Chapter handout" required>
+                  <input name="title" type="text" placeholder="Name this PDF" required>
                 </label>
                 <label>
                   Course
-                  <select name="courseId" id="source-course-select"></select>
+                  <select name="courseId" id="source-course-select" required></select>
+                </label>
+                <label id="source-deadline-field">
+                  Deadline
+                  <input name="deadline" id="source-deadline" type="date" required>
                 </label>
                 <label>
-                  Private file
-                  <input name="file" id="source-file" type="file" accept=".txt,.md,.markdown,.pdf,.doc,.docx,.ppt,.pptx,text/plain,text/markdown,application/pdf" required>
+                  PDF file
+                  <input name="file" id="source-file" type="file" accept=".pdf,application/pdf" required>
                 </label>
-                <div class="upload-privacy-copy">
-                  <strong>Private source upload</strong>
-                  <p>Accepted files keep the existing upload handling. StudentOS marks private material clearly and only uses it inside your account.</p>
-                </div>
-                <button class="primary-button" type="submit">Upload private source</button>
+                <button id="source-submit-button" class="primary-button" type="submit">Upload assignment</button>
               </form>
               <div id="source-result" class="result-box source-result-panel" aria-live="polite"></div>
+            </section>
+            <section class="memory-library-panel academic-context-content-panel">
+              <div id="source-list" class="source-list memory-source-list"></div>
             </section>
           </div>
         </div>
@@ -732,6 +724,18 @@
         <div id="contract-result" class="result-box"></div>
       </div>
     </aside>
+
+    <dialog id="academic-context-delete-dialog" class="academic-context-delete-dialog">
+      <div class="delete-dialog-content">
+        <p class="eyebrow">Permanent deletion</p>
+        <h3>Delete this item?</h3>
+        <p>This will permanently delete this file from StudentOS. StudentOS will stop using it for planning, answers, and revision. This will not delete anything from Google Classroom.</p>
+        <div class="delete-dialog-actions">
+          <button id="academic-context-delete-cancel" class="secondary-button" type="button">Keep it</button>
+          <button id="academic-context-delete-confirm" class="primary-button danger-action" type="button">Delete permanently</button>
+        </div>
+      </div>
+    </dialog>
   </div>
 
   <script src="/runtime-config.js"></script>

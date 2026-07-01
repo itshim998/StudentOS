@@ -46,6 +46,12 @@ import {
   getPublicAcademicContextCapacity,
   getPublicProductCapabilities,
 } from "./domain/productFeatureAccessService.js";
+import {
+  applyAcademicContextDeletion,
+  buildAcademicContextDeletionPlan,
+  linkManualAcademicContextUpload,
+  validateManualAcademicContextContract,
+} from "./domain/academicContextService.js";
 import { getRequestSession } from "./auth/session.js";
 import {
   getPublicAuthConfig,
@@ -77,6 +83,7 @@ import {
 import {
   getClassroomDueWork,
   getClassroomTodayAction,
+  ignoreClassroomItemsForAcademicContext,
   isAcademicContextRecord,
   selectClassroomItemsForAcademicContext,
 } from "./connectors/googleClassroom/mapper.js";
@@ -108,7 +115,7 @@ import {
   chunkExtractedText,
   extractSourceText,
   MAX_SOURCE_UPLOAD_BYTES,
-  validateSourceUpload,
+  validateAcademicContextPdfUpload,
 } from "./storage/sourceMaterialService.js";
 import {
   buildSourceCleanupPlan,
@@ -449,7 +456,7 @@ function publicState(state, persistence) {
   const assignments = (state.assignments || []).filter(isAcademicContextRecord);
   const roadmap = (state.roadmap || []).filter((item) => !item.archived && item.status !== "archived");
   const dueWork = getClassroomDueWork(state, {
-    includeDiscoveredReview: classroomPolicy.autoCheckEnabled === true,
+    includeDiscoveredReview: classroomPolicy.courseworkReviewEnabled === true && classroomPolicy.autoCheckEnabled === true,
   });
   return {
     ...state,
@@ -464,6 +471,7 @@ function publicState(state, persistence) {
     memoryItems: (state.memoryItems || []).filter(isAcademicContextRecord),
     classroomItems: (state.classroomItems || [])
       .filter((item) => item.selectionState !== "archived")
+      .filter((item) => classroomPolicy.courseworkReviewEnabled === true || item.academicContextIncluded === true)
       .map((item) => ({
         id: item.id,
         itemType: item.itemType,
@@ -520,7 +528,7 @@ function publicState(state, persistence) {
     todayNextActions: getTodayNextActions(state),
     classroomDueWork: dueWork,
     todayDoNow: getClassroomTodayAction(state, {
-      includeDiscoveredReview: classroomPolicy.autoCheckEnabled === true,
+      includeDiscoveredReview: classroomPolicy.courseworkReviewEnabled === true && classroomPolicy.autoCheckEnabled === true,
     }),
     queueHealth: buildQueueHealth(state.backgroundJobs || []),
     persistence: publicRetrievalStatus(persistence),
@@ -625,6 +633,7 @@ function publicClassroomSummary(summary = null) {
     retentionApplied: summary.retentionApplied === true,
     googleClassroomDeleted: false,
     emptyClassroom: summary.emptyClassroom === true,
+    courseOnly: summary.courseOnly === true,
   };
 }
 
@@ -641,6 +650,7 @@ function publicClassroomSyncRun(run = {}) {
     skippedItems: run.skippedItems || 0,
     errorCount: run.errorCount || 0,
     emptyClassroom: run.payload?.emptyClassroom === true,
+    courseOnly: run.payload?.courseOnly === true,
   };
 }
 
@@ -716,6 +726,7 @@ async function maybeRunAutomaticClassroomCheck({ state, session } = {}) {
       session,
       repository,
       config: googleClassroomConfig,
+      courseOnly: policy.courseOnly === true,
     });
     await repository.saveState(session, state);
     return result;
@@ -1754,9 +1765,15 @@ async function handleApi(req, res, url) {
     requireAccountSession(session);
     if (body.action === "save_materials") {
       assertAcademicContextSelection(state, body.payload?.materialIds || []);
-      const classroomIds = new Set((state.classroomItems || []).map((item) => String(item.id)));
-      const selectedClassroomIds = (body.payload?.materialIds || []).map(String).filter((id) => classroomIds.has(id));
-      selectClassroomItemsForAcademicContext(state, selectedClassroomIds, { replace: true });
+      const classroomPolicy = getProductClassroomPolicy(state);
+      if (classroomPolicy.courseworkReviewEnabled === true) {
+        const classroomIds = new Set((state.classroomItems || []).map((item) => String(item.id)));
+        const selectedClassroomIds = (body.payload?.materialIds || []).map(String).filter((id) => classroomIds.has(id));
+        selectClassroomItemsForAcademicContext(state, selectedClassroomIds, { replace: true });
+      } else {
+        const classroomIds = new Set((state.classroomItems || []).map((item) => String(item.id)));
+        body.payload.materialIds = (body.payload?.materialIds || []).map(String).filter((id) => !classroomIds.has(id));
+      }
     }
     const lifecycle = applyProductLifecycleAction(state, body.action, body.payload || {}, {
       config: productFlowConfig,
@@ -1906,11 +1923,13 @@ async function handleApi(req, res, url) {
       });
       markClassroomConnected(state, metadata, { mode: "oauth" });
       markProductClassroomConnected(state);
+      const classroomPolicy = getProductClassroomPolicy(state);
       await syncGoogleClassroomIntoState({
         state,
         session,
         repository,
         config: googleClassroomConfig,
+        courseOnly: classroomPolicy.courseOnly === true,
       }).catch((error) => {
         logger.warn("classroom_onboarding_sync.failed", {
           requestId: req.requestId,
@@ -1923,7 +1942,9 @@ async function handleApi(req, res, url) {
         <title>StudentOS Classroom Connected</title>
         <body>
           <h1>Google Classroom connected</h1>
-          <p>Classroom connection is ready. Choose the work you want to add to your academic context.</p>
+          <p>${classroomPolicy.courseOnly === true
+            ? "Starter uses Classroom only to help set up your course list. Upload PDFs manually to add assignments or materials."
+            : "Classroom connection is ready. Choose the work you want to add to your academic context."}</p>
           <script>setTimeout(() => { location.href = ${JSON.stringify(publicFrontendUrl).replace(/</g, "\\u003c")}; }, 1200);</script>
         </body>`);
     } catch {
@@ -2001,6 +2022,7 @@ async function handleApi(req, res, url) {
       session,
       repository,
       config: googleClassroomConfig,
+      courseOnly: classroomPolicy.courseOnly === true,
     });
     await repository.saveState(session, state);
     sendJson(res, 200, {
@@ -2023,10 +2045,24 @@ async function handleApi(req, res, url) {
     requireAccountSession(session);
     requireProductMaterialAccess(state);
     const policy = getProductClassroomPolicy(state);
-    if (!policy.planReady || policy.manualImportEnabled !== true) {
+    if (!policy.planReady || policy.manualImportEnabled !== true || policy.courseworkReviewEnabled !== true) {
       const error = new Error("Your current plan is not ready to add Classroom work.");
       error.status = 403;
       throw error;
+    }
+    const ignoredIds = Array.isArray(body.ignoreIds) ? body.ignoreIds.map(String) : [];
+    if (ignoredIds.length) {
+      const ignored = ignoreClassroomItemsForAcademicContext(state, ignoredIds);
+      await repository.saveState(session, state);
+      sendJson(res, 200, {
+        state: publicState(state, persistence),
+        ignoredCount: ignored.length,
+        message: ignored.length ? "Classroom work was left out of your academic context." : "No Classroom work changed.",
+        readOnly: true,
+        writebackEnabled: false,
+        secretsPrinted: false,
+      });
+      return;
     }
     const requestedIds = Array.isArray(body.itemIds) ? body.itemIds.map(String) : [];
     const lifecycle = getProductLifecycleSnapshot(state);
@@ -2367,31 +2403,28 @@ async function handleApi(req, res, url) {
       });
       const file = form.files.file;
       if (!file) {
-        sendJson(res, 400, { error: "Missing file field", uploadError: true, uploadStage, secretsPrinted: false });
-        return;
-      }
-      const course = findCourse(state, form.fields.courseId) || state.courses.find(isAcademicContextRecord) || {
-        id: "academic-context",
-        title: "Academic context",
-      };
-      const validation = validateSourceUpload({
-        filename: file.filename,
-        mimeType: file.mimeType,
-        sizeBytes: file.bytes.length,
-      });
-      if (!validation.ok) {
         sendJson(res, 400, {
-          error: "Invalid source upload",
+          error: "Please upload a PDF for Academic Context.",
+          code: "academic_context_pdf_required",
           uploadError: true,
           uploadStage: "validation",
-          validation: {
-            errors: validation.errors,
-            maxBytes: validation.maxBytes,
-          },
           secretsPrinted: false,
         });
         return;
       }
+      const validation = validateAcademicContextPdfUpload({
+        filename: file.filename,
+        mimeType: file.mimeType,
+        sizeBytes: file.bytes.length,
+        bytes: file.bytes,
+      });
+      const contract = validateManualAcademicContextContract({
+        state,
+        fields: form.fields,
+        file,
+        pdfValidation: validation,
+      });
+      const course = contract.course;
       enforceUsage(state, "upload", { fileSizeBytes: validation.sizeBytes });
 
       uploadStage = "text_extraction";
@@ -2404,7 +2437,7 @@ async function handleApi(req, res, url) {
         session,
         course,
         courseId: course.id,
-        title: form.fields.title || validation.filename,
+        title: contract.title,
         file: {
           ...file,
           filename: validation.filename,
@@ -2415,6 +2448,7 @@ async function handleApi(req, res, url) {
           ...extraction,
           status: "extracting",
         },
+        artifactKind: contract.kind,
       });
       if (repository.useSupabase(session)) {
         uploadStage = "storage_upload";
@@ -2445,6 +2479,7 @@ async function handleApi(req, res, url) {
       material.indexedAt = material.status === "indexed" ? new Date().toISOString() : null;
       material.failedAt = material.status === "failed" || material.status === "needs_ocr" ? new Date().toISOString() : null;
       material.chunkCount = sourceChunks.length;
+      const { assignment } = linkManualAcademicContextUpload(state, material, contract);
       const memoryItem = material.status === "indexed"
         ? createMemoryItemForSource({ material, course })
         : null;
@@ -2486,7 +2521,7 @@ async function handleApi(req, res, url) {
       state.auditLog.push({
         id: `audit_${material.id}`,
         actorId: state.studentProfile.id,
-        action: "source_material.uploaded",
+          action: "source_material.uploaded",
         targetType: "source_material",
         targetId: material.id,
         riskLevel: "low",
@@ -2510,6 +2545,8 @@ async function handleApi(req, res, url) {
           filename: material.filename,
           mimeType: material.mimeType,
           sizeBytes: material.sizeBytes,
+          artifactKind: contract.kind,
+          assignmentId: assignment?.id || null,
           status: material.status,
           chunkCount: material.chunkCount,
           extractionSummary: material.extractionSummary,
@@ -2519,7 +2556,22 @@ async function handleApi(req, res, url) {
           citationLabel: material.citationLabel,
           isPrivate: true,
           publicUrlAllowed: false,
+          artifactKind: material.artifactKind,
+          origin: material.origin,
+          dueDate: material.dueDate || null,
+          dueAt: material.dueAt || null,
         },
+        assignment: assignment ? {
+          id: assignment.id,
+          courseId: assignment.courseId,
+          title: assignment.title,
+          dueDate: assignment.dueDate,
+          dueAt: assignment.dueAt,
+          status: assignment.status,
+          source: assignment.source,
+          sourceMaterialId: assignment.sourceMaterialId,
+          handedIn: false,
+        } : null,
         memoryItem: memoryItem
           ? {
               id: memoryItem.id,
@@ -2565,6 +2617,44 @@ async function handleApi(req, res, url) {
         secretsPrinted: false,
       });
     }
+    return;
+  }
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/academic-context/items/")) {
+    const itemId = decodeURIComponent(url.pathname.split("/")[4] || "");
+    const kind = String(url.searchParams.get("kind") || "");
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    requireUploadSession(session);
+    const deletionPlan = buildAcademicContextDeletionPlan(state, { kind, itemId });
+    if (!deletionPlan) {
+      sendJson(res, 404, { error: "Academic context item not found.", secretsPrinted: false });
+      return;
+    }
+
+    const cleanupPlans = deletionPlan.sourceIds
+      .map((sourceId) => buildSourceCleanupPlan(state, sourceId))
+      .filter(Boolean);
+    const deletedAssignmentIds = new Set();
+    for (const cleanupPlan of cleanupPlans) {
+      (cleanupPlan.assignmentIds || []).forEach((id) => deletedAssignmentIds.add(id));
+      await repository.hardDeleteSourceArtifacts(session, cleanupPlan);
+    }
+    const assignmentIdsWithoutSource = (deletionPlan.assignmentIds || []).filter((id) => !deletedAssignmentIds.has(id));
+    if (assignmentIdsWithoutSource.length) {
+      await repository.hardDeleteSourceArtifacts(session, { assignmentIds: assignmentIdsWithoutSource });
+    }
+    applyAcademicContextDeletion(state, deletionPlan);
+    await repository.saveState(session, state);
+    sendJson(res, 200, {
+      deleted: true,
+      hardDeleted: true,
+      kind: deletionPlan.kind,
+      itemId: deletionPlan.itemId,
+      classroomUnchanged: true,
+      state: publicState(state, persistence),
+      message: "This item was permanently deleted from StudentOS.",
+      secretsPrinted: false,
+    });
     return;
   }
   if (req.method === "DELETE" && url.pathname.startsWith("/api/sources/")) {

@@ -3449,6 +3449,168 @@ textarea:focus-visible {
   }
 }
 
+.academic-context-hero {
+  align-items: stretch;
+}
+
+.academic-context-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  min-width: min(100%, 34rem);
+}
+
+.academic-context-summary article {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--surface-2);
+}
+
+.academic-context-summary strong {
+  color: var(--ink);
+  font-size: 0.95rem;
+}
+
+.academic-context-summary span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.academic-context-layout {
+  grid-template-columns: minmax(16rem, 0.72fr) minmax(0, 1.55fr);
+  align-items: start;
+}
+
+.academic-context-upload-panel {
+  position: sticky;
+  top: 1rem;
+}
+
+.academic-context-content-panel,
+.academic-context-group {
+  display: grid;
+  gap: 1rem;
+}
+
+.academic-context-group + .academic-context-group {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.academic-context-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.academic-context-card {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.academic-context-preview {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 0.35rem;
+  min-height: 6.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  background: var(--surface-2);
+}
+
+.academic-context-preview span {
+  padding: 0.25rem 0.45rem;
+  border-radius: 0.45rem;
+  background: var(--mint);
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.academic-context-preview small,
+.academic-context-card-body p {
+  color: var(--muted);
+}
+
+.academic-context-card-body {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.academic-context-card-body > strong {
+  overflow-wrap: anywhere;
+}
+
+.academic-context-card-body p {
+  margin: 0;
+}
+
+.academic-context-delete-dialog {
+  width: min(34rem, calc(100vw - 2rem));
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 1.25rem;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 36%);
+}
+
+.academic-context-delete-dialog::backdrop {
+  background: rgb(15 25 35 / 52%);
+}
+
+.delete-dialog-content {
+  display: grid;
+  gap: 1rem;
+  padding: 1.5rem;
+}
+
+.delete-dialog-content h3,
+.delete-dialog-content p {
+  margin: 0;
+}
+
+.delete-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+@media (max-width: 980px) {
+  .academic-context-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .academic-context-upload-panel {
+    position: static;
+  }
+}
+
+@media (max-width: 680px) {
+  .academic-context-summary,
+  .academic-context-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .academic-context-card {
+    grid-template-columns: 4.25rem minmax(0, 1fr);
+  }
+}
+
 /* Pass 35.2: responsive setup persistence and academic material controls. */
 .product-save-status {
   min-height: 20px;

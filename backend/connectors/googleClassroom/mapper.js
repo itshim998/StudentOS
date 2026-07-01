@@ -138,6 +138,74 @@ function courseMap(snapshot = {}) {
   return new Map((snapshot.courses || []).map((course) => [course.providerCourseId, course]));
 }
 
+export function syncClassroomCoursesIntoState(state, snapshot = {}, { now = new Date() } = {}) {
+  state.courses = state.courses || [];
+  state.auditLog = state.auditLog || [];
+  let importedCourses = 0;
+  let updatedCourses = 0;
+  for (const incoming of snapshot.courses || []) {
+    if (!incoming.providerCourseId) continue;
+    const id = classroomCourseId(incoming.providerCourseId);
+    let course = state.courses.find((candidate) => candidate.id === id);
+    if (!course) {
+      course = { id, createdAt: nowIso(now) };
+      state.courses.push(course);
+      importedCourses += 1;
+    } else {
+      updatedCourses += 1;
+    }
+    Object.assign(course, {
+      title: incoming.title || incoming.section || "Classroom course",
+      term: incoming.section || "Classroom",
+      teacher: incoming.teacher || null,
+      source: "google_classroom",
+      provider: "google_classroom",
+      providerCourseId: incoming.providerCourseId,
+      alternateLink: incoming.alternateLink || null,
+      readOnly: true,
+      courseOnlySync: true,
+      academicContextIncluded: true,
+      selectionState: "imported",
+      archived: false,
+      updatedAt: incoming.updateTime || nowIso(now),
+    });
+  }
+  state.auditLog.push({
+    id: `audit_classroom_courses_${now.getTime()}`,
+    actorId: state.studentProfile?.id || "student_unknown",
+    action: "google_classroom.course_list_refreshed",
+    targetType: "google_classroom",
+    targetId: state.studentProfile?.id || "student_unknown",
+    riskLevel: "low",
+    metadata: {
+      courseOnly: true,
+      importedCourses,
+      updatedCourses,
+      courseworkFetched: false,
+      writebackEnabled: false,
+    },
+    createdAt: nowIso(now),
+  });
+  return {
+    discoveredCourses: new Set((snapshot.courses || []).map((course) => course.providerCourseId).filter(Boolean)).size,
+    importedCourses,
+    updatedCourses,
+    discoveredAssignments: 0,
+    updatedAssignments: 0,
+    discoveredMaterials: 0,
+    updatedMaterials: 0,
+    selectedItems: 0,
+    skippedItems: 0,
+    evictedAssignments: 0,
+    evictedMaterials: 0,
+    retentionApplied: false,
+    googleClassroomDeleted: false,
+    errors: [],
+    emptyClassroom: !(snapshot.courses || []).length,
+    courseOnly: true,
+  };
+}
+
 function baseClassroomItem({ id, itemType, providerCourseId, externalId, course, title, now, existing = null }) {
   return {
     id,
@@ -616,6 +684,18 @@ export function selectClassroomItemsForAcademicContext(state, selectedIds = [], 
     createdAt: nowIso(now),
   });
   return { imported, selectedIds: [...selected], unknownIds: [] };
+}
+
+export function ignoreClassroomItemsForAcademicContext(state, ignoredIds = [], { now = new Date() } = {}) {
+  const ignored = new Set((ignoredIds || []).map(String));
+  const changed = [];
+  for (const item of state.classroomItems || []) {
+    if (!ignored.has(String(item.id)) || item.academicContextIncluded) continue;
+    item.selectionState = "ignored";
+    item.updatedAt = nowIso(now);
+    changed.push(item);
+  }
+  return changed;
 }
 
 function legacyItemForAssignment(state, assignment, course, now) {

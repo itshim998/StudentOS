@@ -16,6 +16,9 @@ export function buildSourceCleanupPlan(state, sourceId) {
   const jobEventIds = (state.jobEvents || [])
     .filter((item) => item.sourceId === sourceId)
     .map((item) => item.id);
+  const assignmentIds = (state.assignments || [])
+    .filter((item) => item.sourceMaterialId === sourceId || (item.sourceMaterialIds || []).includes(sourceId))
+    .map((item) => item.id);
   return {
     sourceId,
     material,
@@ -26,6 +29,7 @@ export function buildSourceCleanupPlan(state, sourceId) {
     embeddingIds,
     jobIds,
     jobEventIds,
+    assignmentIds,
   };
 }
 
@@ -72,5 +76,7 @@ export function hardDeleteSourceState(state, sourceId) {
   state.embeddingsMetadata = (state.embeddingsMetadata || []).filter((item) => item.sourceMaterialId !== sourceId);
   state.backgroundJobs = (state.backgroundJobs || []).filter((item) => item.sourceId !== sourceId);
   state.jobEvents = (state.jobEvents || []).filter((item) => item.sourceId !== sourceId);
+  state.assignments = (state.assignments || []).filter((item) =>
+    item.sourceMaterialId !== sourceId && !(item.sourceMaterialIds || []).includes(sourceId));
   return plan;
 }

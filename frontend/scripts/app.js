@@ -26,6 +26,7 @@ let productPersistenceError = null;
 let productUploadTail = Promise.resolve();
 let productUploadsPending = 0;
 let productClassroomRefreshAttempted = false;
+let pendingAcademicContextDeletion = null;
 const productUploadResults = new Map();
 const ACTION_LOADING_TIMEOUT_MS = 30000;
 const LONG_ACTION_LOADING_TIMEOUT_MS = 60000;
@@ -60,10 +61,18 @@ const els = {
   coursesGrid: document.getElementById("courses-grid"),
   sourceSearchInput: document.getElementById("source-search-input"),
   sourceList: document.getElementById("source-list"),
+  academicContextSummary: document.getElementById("academic-context-summary"),
   sourceCourseSelect: document.getElementById("source-course-select"),
+  sourceKindSelect: document.getElementById("source-kind-select"),
+  sourceDeadlineField: document.getElementById("source-deadline-field"),
+  sourceDeadline: document.getElementById("source-deadline"),
+  sourceSubmitButton: document.getElementById("source-submit-button"),
   sourceFile: document.getElementById("source-file"),
   sourceCapacityMessage: document.getElementById("source-capacity-message"),
   sourceResult: document.getElementById("source-result"),
+  academicContextDeleteDialog: document.getElementById("academic-context-delete-dialog"),
+  academicContextDeleteCancel: document.getElementById("academic-context-delete-cancel"),
+  academicContextDeleteConfirm: document.getElementById("academic-context-delete-confirm"),
   scoreTopicSelect: document.getElementById("score-topic-select"),
   extensionAssignmentSelect: document.getElementById("extension-assignment-select"),
   flowAssignmentSelect: document.getElementById("flow-assignment-select"),
@@ -970,6 +979,7 @@ function updateClassroomActions(connector = {}) {
   if (els.classroomSyncBtn) {
     els.classroomSyncBtn.hidden = !actions.sync;
     els.classroomSyncBtn.disabled = false;
+    els.classroomSyncBtn.textContent = starterCourseOnlyClassroom() ? "Refresh courses" : "Check Classroom";
   }
   if (els.classroomDisconnectBtn) {
     els.classroomDisconnectBtn.hidden = !actions.disconnect;
@@ -1204,7 +1214,7 @@ const ONBOARDING_PAGE_COPY = Object.freeze({
   },
   academic_context: {
     title: "Syllabus and Academic Context",
-    copy: "Upload academic files or describe your syllabus naturally. You can use either option or both.",
+    copy: "Add your subjects and describe your syllabus naturally. PDF uploads become available in Academic Context after Setup.",
     fields: [
       { name: "subjects", label: "Subjects or courses", placeholder: "One per line is fine", multiline: true },
       { name: "syllabusNotes", label: "Describe your syllabus or courses", placeholder: "Type naturally about topics, units, routines, assignments, or anything StudentOS should understand.", multiline: true },
@@ -1213,25 +1223,27 @@ const ONBOARDING_PAGE_COPY = Object.freeze({
 });
 
 function academicContextUploadMarkup() {
-  const uploads = [...productUploadResults.values()];
-  const capacity = currentAcademicContextCapacity();
-  const addBlocked = capacity.canAdd !== true;
   return `
     <section class="academic-file-upload" aria-labelledby="academic-file-upload-title">
       <div>
-        <strong id="academic-file-upload-title">Add academic files</strong>
-        <p>Upload a syllabus, notes, routines, assignments, or files such as PDF, image, DOCX, PPTX, XLSX, or similar.</p>
+        <strong id="academic-file-upload-title">Add PDFs after Setup</strong>
+        <p>Add your subjects here first. When Setup is complete, Academic Context lets you choose a course and upload an assignment or material PDF.</p>
       </div>
       <label class="academic-file-picker" for="product-academic-files">
-        <span>${addBlocked ? "Academic context unavailable" : "Choose files"}</span>
-        <input id="product-academic-files" type="file" multiple ${addBlocked ? "disabled" : ""} accept=".txt,.md,.markdown,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.jpg,.jpeg,.png,.webp,.heic,.heif,text/plain,text/markdown,application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif">
+        <span>Available after Setup</span>
+        <input id="product-academic-files" type="file" disabled accept=".pdf,application/pdf">
       </label>
-      ${academicContextCapacityMarkup()}
-      <div id="product-upload-status" class="academic-upload-status" aria-live="polite">
-        ${uploads.map((item) => `<div class="academic-upload-item ${escapeHtml(item.status)}"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.copy)}</span></div>`).join("")}
-      </div>
+      <p class="form-help">Add a course in Setup before uploading academic context.</p>
     </section>
   `;
+}
+
+function currentClassroomPolicy() {
+  return state?.planAccess?.entitlements?.classroom || classroomStatus?.policy || {};
+}
+
+function starterCourseOnlyClassroom() {
+  return currentClassroomPolicy().courseOnly === true;
 }
 
 const PAID_PRODUCT_PLAN_KEYS = Object.freeze(["starter", "essential", "plus", "pro"]);
@@ -1315,16 +1327,33 @@ function academicContextCapacityMarkup() {
   return `<p class="${tone}" data-academic-context-status="${escapeHtml(capacity.status)}">${escapeHtml(capacity.message)}</p>`;
 }
 
+function syncAcademicContextUploadType() {
+  const assignment = (els.sourceKindSelect?.value || "assignment") === "assignment";
+  if (els.sourceDeadlineField) els.sourceDeadlineField.hidden = !assignment;
+  if (els.sourceDeadline) {
+    els.sourceDeadline.required = assignment;
+    if (!assignment) els.sourceDeadline.value = "";
+  }
+  if (els.sourceSubmitButton) els.sourceSubmitButton.textContent = assignment ? "Upload assignment" : "Upload material";
+}
+
 function updateProductFeatureControls() {
   const capacity = currentAcademicContextCapacity();
-  const blockMaterialAdd = capacity.canAdd !== true;
+  const noCourses = !(state?.courses || []).length;
+  const blockMaterialAdd = capacity.canAdd !== true || noCourses;
   if (els.sourceFile) els.sourceFile.disabled = blockMaterialAdd;
+  if (els.sourceCourseSelect) els.sourceCourseSelect.disabled = blockMaterialAdd;
+  if (els.sourceKindSelect) els.sourceKindSelect.disabled = blockMaterialAdd;
+  if (els.sourceDeadline) els.sourceDeadline.disabled = blockMaterialAdd;
   const sourceSubmit = document.querySelector("#source-form button[type='submit']");
   if (sourceSubmit) sourceSubmit.disabled = blockMaterialAdd;
   if (els.sourceCapacityMessage) {
-    els.sourceCapacityMessage.textContent = capacity.status === "available" ? "" : capacity.message;
+    els.sourceCapacityMessage.textContent = noCourses
+      ? "Add a course in Setup before uploading academic context."
+      : capacity.message;
     els.sourceCapacityMessage.classList.toggle("warning-copy", capacity.status === "full");
   }
+  syncAcademicContextUploadType();
 
   const capabilities = currentProductCapabilities();
   const assignmentCoachEnabled = capabilities?.features?.assignmentCoach === true;
@@ -1525,11 +1554,12 @@ function onboardingStepMarkup(lifecycle, step) {
 }
 
 function classroomStepMarkup(lifecycle) {
+  const starterCourseOnly = starterCourseOnlyClassroom();
   if (lifecycle.classroomChoice === "classroom" && !lifecycle.classroomConnectedAt) {
     return `
       <p class="eyebrow">Classroom setup</p>
       <h2 id="product-flow-title">Connect Google Classroom</h2>
-      <p class="product-flow-lead">Connect your account so StudentOS can show coursework you may want to add to your academic context.</p>
+      <p class="product-flow-lead">${starterCourseOnly ? "Starter uses Classroom only to help set up your course list. Upload PDFs manually to add assignments or materials." : "Connect your account so StudentOS can show coursework you may want to add to your academic context."}</p>
       <div id="product-flow-message" class="result-box" aria-live="polite"></div>
       <button class="primary-button" type="button" data-product-action="connect-classroom">Connect Google Classroom</button>
       <button class="text-button" type="button" data-product-action="choose-path" data-choice="manual">My institution does not use Classroom</button>
@@ -1543,7 +1573,7 @@ function classroomStepMarkup(lifecycle) {
     <div class="product-choice-grid">
       <button class="choice-card" type="button" data-product-action="choose-path" data-choice="classroom">
         <strong>Connect Google Classroom</strong>
-        <span>Choose coursework to include in your academic context.</span>
+        <span>${starterCourseOnly ? "Use Classroom to help set up your course list." : "Choose coursework to include in your academic context."}</span>
       </button>
       <button class="choice-card" type="button" data-product-action="choose-path" data-choice="manual">
         <strong>My institution does not use Classroom</strong>
@@ -1577,6 +1607,7 @@ function materialCandidates() {
 function materialsStepMarkup(lifecycle) {
   const candidates = materialCandidates();
   const classroom = lifecycle.classroomChoice === "classroom";
+  const starterCourseOnly = classroom && starterCourseOnlyClassroom();
   const draft = lifecycle.materialsDraft || {};
   const draftIds = new Set((draft.materialIds || []).length ? draft.materialIds : lifecycle.selectedMaterialIds || []);
   const draftLabels = (draft.materialLabels || []).length ? draft.materialLabels : lifecycle.selectedMaterialLabels || [];
@@ -1585,9 +1616,9 @@ function materialsStepMarkup(lifecycle) {
   return `
     <p class="eyebrow">Select academic materials</p>
     <h2 id="product-flow-title">Choose what belongs in your first workspace</h2>
-    <p class="product-flow-lead">${classroom ? "Choose Classroom work to add to your academic context." : "Add a few material names now, or continue and add them later."}</p>
+    <p class="product-flow-lead">${starterCourseOnly ? "Starter uses Classroom only to help set up your course list. Upload PDFs manually to add assignments or materials." : classroom ? "Choose Classroom work to add to your academic context." : "Add a few material names now, or continue and add them later."}</p>
     <form id="product-materials-form" class="product-flow-form">
-      ${candidates.length ? `<div class="material-choice-list">${candidates.map((item) => `
+      ${starterCourseOnly ? `<div class="product-empty-state"><strong>Your course list is ready</strong><p>Finish Setup, then use Academic Context to upload assignment or material PDFs against a course.</p></div>` : candidates.length ? `<div class="material-choice-list">${candidates.map((item) => `
         <label class="check-row material-choice-row">
           <input name="materialIds" type="checkbox" value="${escapeHtml(item.id)}" data-material-label="${escapeHtml(item.title)}" ${draftIds.has(item.id) ? "checked" : ""} ${addBlocked && !draftIds.has(item.id) ? "disabled" : ""}>
           <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.course)} · ${escapeHtml(item.type)}${item.date ? ` · ${escapeHtml(formatDate(item.date))}` : ""}</small></span>
@@ -1966,7 +1997,8 @@ function renderClassroomPanel() {
   const stateName = normalizedClassroomState(connector);
   const emptyClassroom = summary?.emptyClassroom || history.some((run) => run.payload?.emptyClassroom);
   const showDetails = summary || history.length;
-  const policy = state?.planAccess?.entitlements?.classroom || classroomStatus?.policy || {};
+  const policy = currentClassroomPolicy();
+  const courseOnly = policy.courseOnly === true;
   const cadence = String(policy.cadence || "").toLowerCase();
   const cadenceCopy = cadence.includes("weekly")
     ? "weekly"
@@ -1977,33 +2009,35 @@ function renderClassroomPanel() {
         : cadence.includes("trial")
           ? "once during Trial Mode"
           : "from time to time";
-  const checkPolicyCopy = policy.automaticChecksEnabled
+  const checkPolicyCopy = courseOnly
+    ? "Starter uses Classroom only to help set up your course list. Upload PDFs manually to add assignments or materials."
+    : policy.automaticChecksEnabled
     ? `StudentOS checks for new coursework ${cadenceCopy}. You choose what to include.`
     : "Classroom coursework refreshes only when you ask. You choose what to include.";
   setResult(els.classroomPanel, `
     <div class="classroom-compact-head">
       <div>
         <strong>${escapeHtml(ui.title || classroomModeLabel(stateName))}</strong>
-        <p>${escapeHtml(ui.message || "StudentOS can include Classroom coursework in your study plan.")}</p>
+        <p>${escapeHtml(courseOnly ? "Classroom courses can help set up your course list. Upload PDFs manually on Starter." : ui.message || "StudentOS can include Classroom coursework in your study plan.")}</p>
       </div>
-      ${summary ? `<span>${escapeHtml(`${summary.discoveredAssignments || 0} new to review / ${summary.updatedAssignments || 0} refreshed`)}</span>` : ""}
+      ${summary ? `<span>${escapeHtml(courseOnly ? `${summary.discoveredCourses || 0} course(s) ready` : `${summary.discoveredAssignments || 0} new to review / ${summary.updatedAssignments || 0} refreshed`)}</span>` : ""}
     </div>
     <div class="tag-row">
-      ${tag(ui.badge || classroomModeLabel(stateName), stateName === "reconnect_required" ? "medium" : "source")}
+      ${tag(courseOnly ? "Course list setup" : ui.badge || classroomModeLabel(stateName), stateName === "reconnect_required" ? "medium" : "source")}
       ${lastSync ? tag(`checked ${formatDate(lastSync)}`, "source") : ""}
       ${providerEmail && stateName === "connected" ? tag("connected account", "source") : ""}
     </div>
-    ${ui.detail ? `<p>${escapeHtml(ui.detail)}</p>` : actions.sync ? `<p>Check Classroom when you want to review the latest work.</p>` : ""}
+    ${courseOnly ? `<p>Refresh your course list when Setup changes.</p>` : ui.detail ? `<p>${escapeHtml(ui.detail)}</p>` : actions.sync ? `<p>Check Classroom when you want to review the latest work.</p>` : ""}
     <p class="muted-copy">${escapeHtml(checkPolicyCopy)}</p>
-    ${emptyClassroom ? `<p class="muted-copy">No active Classroom coursework was found. StudentOS is ready to refresh when new work appears.</p>` : ""}
+    ${emptyClassroom && !courseOnly ? `<p class="muted-copy">No active Classroom coursework was found. StudentOS is ready to refresh when new work appears.</p>` : ""}
     ${showDetails ? `
       <details class="classroom-details">
         <summary>Recent checks</summary>
-        ${summary ? `<p>${escapeHtml(`${summary.discoveredCourses || 0} course(s), ${summary.discoveredAssignments || 0} new assignment(s) to review, ${summary.updatedAssignments || 0} refreshed${summary.emptyClassroom ? " / no active coursework" : ""}`)}</p>` : ""}
+        ${summary ? `<p>${escapeHtml(courseOnly ? `${summary.discoveredCourses || 0} course(s) available for Setup` : `${summary.discoveredCourses || 0} course(s), ${summary.discoveredAssignments || 0} new assignment(s) to review, ${summary.updatedAssignments || 0} refreshed${summary.emptyClassroom ? " / no active coursework" : ""}`)}</p>` : ""}
         ${history.length ? `
           <div class="mini-history">
             ${history.slice(0, 4).map((run) => `
-              <span>${escapeHtml(humanize(run.status))}: ${escapeHtml(formatDate(run.completedAt || run.startedAt))} / ${run.discoveredAssignments || 0} new, ${run.updatedAssignments || 0} refreshed${run.errorCount ? " / needs review" : ""}</span>
+              <span>${escapeHtml(humanize(run.status))}: ${escapeHtml(formatDate(run.completedAt || run.startedAt))}${courseOnly ? " / course list checked" : ` / ${run.discoveredAssignments || 0} new, ${run.updatedAssignments || 0} refreshed`}${run.errorCount ? " / needs review" : ""}</span>
             `).join("")}
           </div>
         ` : ""}
@@ -2024,6 +2058,7 @@ function classroomStatusCard() {
   const stateName = normalizedClassroomState(connector);
   const ui = classroomUi(connector, summary, history);
   const emptyClassroom = summary?.emptyClassroom || history.some((run) => run.payload?.emptyClassroom);
+  const courseOnly = starterCourseOnlyClassroom();
   if (["disabled", "setup_required", "status_pending"].includes(stateName) && !classroomItems.length) {
     return "";
   }
@@ -2033,22 +2068,22 @@ function classroomStatusCard() {
         <div>
           <span class="workspace-label">Classroom workspace</span>
           <strong>Google Classroom</strong>
-          <p>${providerEmail ? `Connected as ${escapeHtml(providerEmail)}` : "Choose what to add"}</p>
+          <p>${providerEmail ? `Connected as ${escapeHtml(providerEmail)}` : courseOnly ? "Course list setup" : "Choose what to add"}</p>
         </div>
       </header>
       <div class="tag-row">
-        ${tag(ui.badge || classroomModeLabel(stateName), stateName === "reconnect_required" ? "medium" : "source")}
-        ${tag(`${selectedItems} selected`, "source")}
-        ${tag(`${reviewItems} to review`, reviewItems ? "medium" : "source")}
+        ${tag(courseOnly ? "Course list setup" : ui.badge || classroomModeLabel(stateName), stateName === "reconnect_required" ? "medium" : "source")}
+        ${courseOnly ? tag("Course list only", "source") : tag(`${selectedItems} selected`, "source")}
+        ${courseOnly ? "" : tag(`${reviewItems} to review`, reviewItems ? "medium" : "source")}
         ${lastSync ? tag(`checked ${formatDate(lastSync)}`, "source") : tag("check when ready", "medium")}
         ${tag("student controlled", "source")}
       </div>
       <div class="course-signal-grid">
-        <span><strong>${selectedItems}</strong> selected for academic context</span>
-        <span><strong>${reviewItems}</strong> ready to review</span>
+        <span><strong>${courseOnly ? state.courses.length : selectedItems}</strong> ${courseOnly ? "courses ready" : "selected for academic context"}</span>
+        ${courseOnly ? "" : `<span><strong>${reviewItems}</strong> ready to review</span>`}
         <span><strong>${lastSync ? formatDate(lastSync) : "When ready"}</strong> last checked</span>
       </div>
-      ${emptyClassroom ? `<p class="muted-copy">No active Classroom coursework was found yet.</p>` : ""}
+      ${courseOnly ? `<p class="muted-copy">Classroom courses can help set up your course list. Upload PDFs manually on Starter.</p>` : emptyClassroom ? `<p class="muted-copy">No active Classroom coursework was found yet.</p>` : ""}
       ${stateName === "reconnect_required" ? `<p class="warning-copy">Reconnect Classroom to check for new work and refresh selected items.</p>` : ""}
     </article>
   `;
@@ -2171,7 +2206,7 @@ function renderCourses() {
           </div>
           <div>
             <span>Materials</span>
-            <p>${escapeHtml(sources.slice(0, 2).map((source) => source.title).join(" / ") || "Upload course material in Memory")}</p>
+            <p>${escapeHtml(sources.slice(0, 2).map((source) => source.title).join(" / ") || "Upload course material in Academic Context")}</p>
           </div>
           <div>
             <span>Next action</span>
@@ -2192,147 +2227,151 @@ function renderCourses() {
   els.coursesGrid.innerHTML = `${classroomStatusCard()}${courseCards || empty}`;
 }
 
+function academicContextAssignmentStatus(assignment) {
+  if (assignment.handedIn === true || ["completed", "done", "graded", "returned", "submitted"].includes(String(assignment.status || "").toLowerCase())) {
+    return "Already handed in";
+  }
+  const due = timestampFor(assignment.dueAt || assignment.dueDate);
+  if (Number.isFinite(due) && due < Date.now()) return "Overdue";
+  if (Number.isFinite(due) && due - Date.now() <= 72 * 60 * 60 * 1000) return "Due soon";
+  return "Not handed in";
+}
+
+function academicContextOrigin(item) {
+  return item.source === "google_classroom" || item.provider === "google_classroom" ? "Classroom" : "Manual upload";
+}
+
+function academicContextPreview(isPdf = true) {
+  return `<div class="academic-context-preview" aria-hidden="true"><span>${isPdf ? "PDF" : "DOC"}</span><small>Preview</small></div>`;
+}
+
+function academicContextOpenAction(url) {
+  return url ? `<a class="mini-action" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Open</a>` : "";
+}
+
 function renderSources() {
-  const health = state.queueHealth || { counts: {}, failedJobs: [], processingJobs: [], retryableFailed: 0 };
-  const activeSources = (state.sourceMaterials || [])
-    .filter((source) => !source.deletedAt)
-    .sort((left, right) => {
-      const freshness = classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left);
-      if (freshness) return freshness;
-      return String(left.id || left.title || "").localeCompare(String(right.id || right.title || ""));
-    });
-  const indexedSources = activeSources.filter(sourceIsIndexed);
-  const needsAttentionCount = activeSources.filter((source) => source.extractionError || source.ocrRequired || source.status === "needs_ocr").length;
-  const search = sourceSearchQuery.trim().toLowerCase();
-  const failedCount = health.counts?.failed || 0;
-  const stuckCount = health.stuckJobsCount || 0;
-  const reviewCount = failedCount + stuckCount + needsAttentionCount;
-  const queueCard = `
-    <article class="source-card library-health-card">
-      <div class="library-health-head">
-        <div>
-          <span class="workspace-label">Sources ready</span>
-          <strong>${activeSources.length ? `${indexedSources.length} ready for study` : "No sources yet"}</strong>
-          <p>Your uploads stay private. Sources that need attention are called out without exposing processing details first.</p>
+  const assignments = [...(state.assignments || [])]
+    .filter((assignment) => !assignment.archived)
+    .sort(sortStudentWork);
+  const materials = (state.sourceMaterials || [])
+    .filter((source) => !source.deletedAt && source.artifactKind !== "assignment")
+    .sort((left, right) => classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left));
+  const courseOnly = starterCourseOnlyClassroom();
+  const reviewEnabled = currentClassroomPolicy().courseworkReviewEnabled === true;
+  const classroomReviewItems = reviewEnabled
+    ? (state.classroomItems || [])
+      .filter((item) => item.selectionState === "discovered" && !item.academicContextIncluded)
+      .sort((left, right) => classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left))
+      .slice(0, 12)
+    : [];
+  const capacity = currentAcademicContextCapacity();
+  const connector = activeClassroomConnector();
+  const classroomStatusCopy = courseOnly
+    ? "Classroom courses can help set up your course list. Upload PDFs manually on Starter."
+    : classroomReviewItems.length
+      ? "New Classroom work found"
+      : normalizedClassroomState(connector) === "connected"
+        ? "Classroom connected"
+        : "Classroom can be connected in Setup";
+
+  if (els.academicContextSummary) {
+    els.academicContextSummary.innerHTML = `
+      <article><strong>${assignments.length}</strong><span>Assignments included</span></article>
+      <article><strong>${materials.length}</strong><span>Materials included</span></article>
+      <article><strong>${escapeHtml(classroomStatusCopy)}</strong><span>Classroom status</span></article>
+      <article><strong>${escapeHtml(capacity.message || "You have room for more material.")}</strong><span>Context room</span></article>
+    `;
+  }
+
+  const assignmentCards = assignments.map((assignment) => {
+    const course = courseById(assignment.courseId);
+    const source = (state.sourceMaterials || []).find((item) => item.id === assignment.sourceMaterialId || (assignment.sourceMaterialIds || []).includes(item.id));
+    const status = academicContextAssignmentStatus(assignment);
+    const origin = academicContextOrigin(assignment);
+    const prompt = `Help me study for ${assignment.title} in ${course?.title || assignment.courseTitle || "this course"}.`;
+    return `
+      <article class="source-card academic-context-card">
+        ${academicContextPreview(origin === "Manual upload")}
+        <div class="academic-context-card-body">
+          <strong>${escapeHtml(assignment.title)}</strong>
+          <p>${escapeHtml(course?.title || assignment.courseTitle || "Course")} / due ${escapeHtml(formatDate(assignment.dueAt || assignment.dueDate))}</p>
+          <div class="tag-row">${tag(origin, "source")}${tag(status, status === "Overdue" ? "urgent" : status === "Due soon" ? "medium" : "source")}</div>
+          <div class="source-action-row">
+            ${academicContextOpenAction(assignment.alternateLink || source?.linkUrl)}
+            <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}">Ask StudentOS</button>
+            <button class="mini-action danger-action" type="button" data-delete-context-kind="assignment" data-delete-context-id="${escapeHtml(assignment.id)}">Delete</button>
+          </div>
         </div>
-        <button class="mini-action" type="button" data-retry-failed-jobs>Retry source issues</button>
-      </div>
-      <div class="tag-row">
-        ${tag(activeSources.length ? "Saved privately" : "Upload ready", "source")}
-        ${reviewCount ? tag("Needs review", "urgent") : tag("Sources ready", "source")}
-        ${tag("Uses your materials", "source")}
-      </div>
-      <details class="source-technical-details">
-        <summary>Library details</summary>
-        <div class="source-health-grid">
-          <span><strong>${activeSources.length}</strong> saved sources</span>
-          <span><strong>${health.counts?.queued || 0}</strong> waiting</span>
-          <span><strong>${health.counts?.processing || 0}</strong> preparing</span>
-          <span><strong>${failedCount}</strong> needs review</span>
-          <span><strong>${stuckCount}</strong> delayed</span>
-          <span><strong>${health.counts?.completed || 0}</strong> ready</span>
+      </article>
+    `;
+  }).join("") || `<article class="source-card source-empty-card"><strong>No assignments included</strong><p>Upload an assignment PDF and set its deadline to add due work.</p></article>`;
+
+  const materialCards = materials.map((source) => {
+    const course = courseById(source.courseId);
+    const origin = academicContextOrigin(source);
+    const prompt = buildSourceAiPrompt(source, course);
+    const ready = source.readyForStudy || source.status === "indexed" || source.status === "ready";
+    return `
+      <article class="source-card academic-context-card">
+        ${academicContextPreview(origin === "Manual upload")}
+        <div class="academic-context-card-body">
+          <strong>${escapeHtml(source.title)}</strong>
+          <p>${escapeHtml(course?.title || "Course")}</p>
+          <div class="tag-row">${tag(origin, "source")}${tag(ready ? "Ready for study" : "Selected material", ready ? "source" : "medium")}</div>
+          <div class="source-action-row">
+            ${academicContextOpenAction(source.linkUrl || source.alternateLink)}
+            <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}">Ask StudentOS</button>
+            <button class="mini-action danger-action" type="button" data-delete-context-kind="material" data-delete-context-id="${escapeHtml(source.id)}">Delete</button>
+          </div>
         </div>
-        ${health.processingJobs?.length ? "<p>Some material is still being prepared.</p>" : ""}
-        ${health.failedJobs?.length ? "<p>One or more materials need another try.</p>" : ""}
-      </details>
-    </article>
-  `;
-  const classroomReviewItems = (state.classroomItems || [])
-    .filter((item) => ["discovered", "ignored"].includes(item.selectionState) && !item.academicContextIncluded)
-    .sort((left, right) => classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left))
-    .slice(0, 12);
+      </article>
+    `;
+  }).join("") || `<article class="source-card source-empty-card"><strong>No materials included</strong><p>Upload a material PDF to make it ready for study.</p></article>`;
+
   const classroomReview = classroomReviewItems.length ? `
-    <section class="source-card classroom-review-card" aria-label="Classroom work to review">
-      <div class="source-card-head">
-        <div>
-          <span class="workspace-label">New Classroom work found</span>
-          <strong>Choose what to add</strong>
-          <p>Only work you choose becomes part of your academic context.</p>
-        </div>
-      </div>
-      <div class="material-choice-list">
+    <section class="academic-context-group classroom-review-card" aria-label="Classroom work to review">
+      <div class="source-card-head"><div><span class="workspace-label">New Classroom work found</span><h3>Classroom work to review</h3><p>Choose what to add to your academic context.</p></div></div>
+      <div class="academic-context-card-grid">
         ${classroomReviewItems.map((item) => `
-          <article class="item-card">
-            <strong>${escapeHtml(item.title)}</strong>
-            <p>${escapeHtml(item.courseTitle || "Classroom course")}${item.dueAt ? ` / due ${escapeHtml(formatDate(item.dueAt))}` : ""}</p>
-            <div class="item-meta">
-              ${tag(item.itemType === "assignment" ? "Assignment" : "Material", "source")}
-              ${item.handedIn ? tag("Already handed in", "source") : item.dueAt ? tag(`Due ${formatDate(item.dueAt)}`, "medium") : ""}
-              ${tag("Read-only", "source")}
+          <article class="source-card academic-context-card compact">
+            ${academicContextPreview(false)}
+            <div class="academic-context-card-body">
+              <strong>${escapeHtml(item.title)}</strong>
+              <p>${escapeHtml(item.courseTitle || "Classroom course")}${item.dueAt ? ` / due ${escapeHtml(formatDate(item.dueAt))}` : ""}</p>
+              <div class="tag-row">${tag(item.itemType === "assignment" ? "Assignment" : "Material", "source")}${item.handedIn ? tag("Already handed in", "source") : ""}</div>
+              <div class="source-action-row">
+                <button class="mini-action" type="button" data-classroom-item-id="${escapeHtml(item.id)}">Add</button>
+                <button class="mini-action" type="button" data-classroom-ignore-id="${escapeHtml(item.id)}">Ignore</button>
+              </div>
             </div>
-            <button class="mini-action" type="button" data-classroom-item-id="${escapeHtml(item.id)}">Review and add</button>
           </article>
         `).join("")}
       </div>
     </section>
   ` : "";
-  const sourceCards = activeSources.map((source) => {
-    const course = courseById(source.courseId);
-    const latestJob = latestSourceJob(source);
-    const embeddedCount = sourceEmbeddedChunks(source);
-    const healthLabel = sourceHealthLabel(source, latestJob, embeddedCount);
-    const matchesSearch = !search || sourceSearchText(source, course, latestJob, embeddedCount).includes(search);
-    if (!matchesSearch) return "";
-    const prompt = buildSourceAiPrompt(source, course);
-    const needsReview = /needs|ocr|failed/i.test(`${healthLabel} ${latestJob?.status || ""} ${source.status || ""}`);
-    const readyLabel = needsReview ? "Needs review" : (sourceIsIndexed(source) || embeddedCount ? "Ready" : "Saved privately");
-    return `
-      <article class="source-card source-library-card">
-        <div class="source-card-head">
-          <div>
-            <span class="workspace-label">Private source</span>
-            <strong>${escapeHtml(source.title)}</strong>
-            <p>${escapeHtml(course?.title || "Course")} / ${escapeHtml(sourceTypeLabel(source))}</p>
-          </div>
-          <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}">${needsReview ? "Review source" : "Explain source"}</button>
-        </div>
-        <div class="tag-row">
-          ${tag(readyLabel, needsReview ? "urgent" : "source")}
-          ${tag(sourceVisibilityLabel(source), "source")}
-          ${tag("Uses your materials", "source")}
-        </div>
-        <details class="source-technical-details">
-          <summary>Source details</summary>
-          <div class="source-health-grid source-card-metrics">
-            <span><strong>${escapeHtml(sourceStatusLabel(healthLabel))}</strong> status</span>
-            <span><strong>${source.citationLabel ? "Ready" : "Preparing"}</strong> study reference</span>
-            <span><strong>Student controlled</strong> selected material</span>
-          </div>
-          ${source.extractionError || latestJob?.lastError ? `<p class="warning-copy">This material needs another try before it is ready for study.</p>` : ""}
-          ${source.extractedSnippet ? `<blockquote class="source-preview">${escapeHtml(source.extractedSnippet)}</blockquote>` : ""}
-          <div class="source-action-row">
-            <button class="mini-action" type="button" data-reindex-source-id="${source.id}">Retry source</button>
-            <button class="mini-action danger-action" type="button" data-delete-source-id="${source.id}">Delete</button>
-          </div>
-        </details>
-      </article>
-    `;
-  }).join("");
-  const noSources = activeSources.length ? "" : `
-    <article class="source-card source-empty-card">
-      <strong>No source materials yet</strong>
-      <p>Upload a private source to begin building your StudentOS source library.</p>
-      <div class="tag-row">${tag("private upload ready", "source")}${tag("Private", "source")}</div>
-    </article>
+
+  els.sourceList.innerHTML = `
+    <section class="academic-context-group" aria-labelledby="academic-context-assignments-title">
+      <div class="section-heading"><div><p class="eyebrow">Due work</p><h3 id="academic-context-assignments-title">Assignments</h3></div></div>
+      <div class="academic-context-card-grid">${assignmentCards}</div>
+    </section>
+    <section class="academic-context-group" aria-labelledby="academic-context-materials-title">
+      <div class="section-heading"><div><p class="eyebrow">Ready for study</p><h3 id="academic-context-materials-title">Materials</h3></div></div>
+      <div class="academic-context-card-grid">${materialCards}</div>
+    </section>
+    ${classroomReview}
   `;
-  const noMatches = activeSources.length && search && !sourceCards.trim() ? `
-    <article class="source-card source-empty-card">
-      <strong>No matching sources</strong>
-      <p>Search checks titles, courses, source types, snippets, citation labels, and source status from the loaded library.</p>
-      <div class="tag-row">${tag("searching this library", "source")}</div>
-    </article>
-  ` : "";
-  els.sourceList.innerHTML = queueCard + classroomReview + (sourceCards || noMatches || noSources);
 }
 
 function renderSelects() {
   const courseOptions = state.courses.map((course) => `<option value="${course.id}">${escapeHtml(course.title)}</option>`).join("");
   const topicOptions = state.topics.map((topic) => `<option value="${topic.id}">${escapeHtml(topic.title)}</option>`).join("");
   const assignmentOptions = state.assignments.filter(assignmentNeedsAction).map((assignment) => `<option value="${assignment.id}">${escapeHtml(assignment.title)}</option>`).join("");
-  els.sourceCourseSelect.innerHTML = courseOptions;
+  els.sourceCourseSelect.innerHTML = `<option value="">Choose a course</option>${courseOptions}`;
   els.scoreTopicSelect.innerHTML = topicOptions;
   els.extensionAssignmentSelect.innerHTML = assignmentOptions;
   els.flowAssignmentSelect.innerHTML = assignmentOptions;
+  syncAcademicContextUploadType();
 }
 
 function formatBytes(bytes = 0) {
@@ -2639,7 +2678,7 @@ function setView(viewName) {
   document.querySelectorAll(".view").forEach((view) => {
     view.classList.toggle("active", view.id === `view-${viewName}`);
   });
-  const titles = { today: "Today", setup: "Setup", courses: "Courses", memory: "Memory", studio: "Studio", account: "Account" };
+  const titles = { today: "Today", setup: "Setup", courses: "Courses", memory: "Academic Context", studio: "Studio", account: "Account" };
   els.viewTitle.textContent = titles[viewName] || "Today";
   if (viewName === "account") {
     loadAccountSnapshot().catch(() => null);
@@ -2971,18 +3010,33 @@ async function draftExtension(event) {
 
 async function addSource(event) {
   event.preventDefault();
+  const formElement = event.currentTarget;
   const capacity = currentAcademicContextCapacity();
   if (capacity.canAdd !== true) {
     setResult(els.sourceResult, `<p>${escapeHtml(capacity.message)}</p>`);
     return;
   }
-  const form = new FormData(event.currentTarget);
-  if (!form.get("file") || !form.get("file").name) {
-    setResult(els.sourceResult, `<p>Choose a file first.</p>`);
+  const form = new FormData(formElement);
+  const kind = String(form.get("artifactKind") || "assignment");
+  const file = form.get("file");
+  if (!state.courses?.length) {
+    setResult(els.sourceResult, `<p>Add a course in Setup before uploading academic context.</p>`);
     return;
   }
-  await withButtonLoading(event.submitter, "Uploading...", async () => {
-    setLoading(els.sourceResult, "Uploading to private source library...");
+  if (!file || !file.name || !/\.pdf$/i.test(file.name) || (file.type && file.type !== "application/pdf")) {
+    setResult(els.sourceResult, `<p>Please upload a PDF for Academic Context.</p>`);
+    return;
+  }
+  if (!form.get("courseId")) {
+    setResult(els.sourceResult, `<p>${kind === "assignment" ? "Choose a course for this assignment." : "Choose a course for this material."}</p>`);
+    return;
+  }
+  if (kind === "assignment" && !form.get("deadline")) {
+    setResult(els.sourceResult, `<p>Set the assignment deadline before uploading.</p>`);
+    return;
+  }
+  await withButtonLoading(event.submitter, kind === "assignment" ? "Uploading assignment..." : "Uploading material...", async () => {
+    setLoading(els.sourceResult, `Adding this ${kind} to Academic Context...`);
     try {
       const result = await api("/api/sources/upload", {
         method: "POST",
@@ -2990,22 +3044,46 @@ async function addSource(event) {
       });
       setResult(els.sourceResult, `
         <strong>${escapeHtml(result.material.title)}</strong>
-        <p>${result.material.extractionError ? "This material was added, but it needs another try before it is ready for study." : "Added to your academic context and ready for StudentOS to use."}</p>
-        <div class="tag-row">${tag("Private", "source")}${tag(sourceStatusLabel(result.material.status || result.status))}${tag("Private to your account", "source")}</div>
+        <p>${result.material.extractionError ? "This PDF was added, but it needs another try before it is ready for study." : `${kind === "assignment" ? "Assignment" : "Material"} added to your academic context and ready for study.`}</p>
       `);
+      formElement.reset();
+      syncAcademicContextUploadType();
       await loadBootstrap();
     } catch (error) {
       setResult(els.sourceResult, `
-        <strong>Source upload unavailable</strong>
-        <p>${escapeHtml(error.message || "StudentOS could not finish adding this material. Check the file and try again.")}</p>
-        <div class="tag-row">
-          ${tag("try again", "medium")}
-          ${tag("Private", "source")}
-          ${tag("Private to your account", "source")}
-        </div>
+        <strong>Could not add this PDF</strong>
+        <p>${escapeHtml(error.message || "StudentOS could not finish adding this item. Check the PDF and try again.")}</p>
       `);
     }
   }, { timeoutTarget: els.sourceResult, timeoutCopy: "Uploading is taking longer than expected. You can try again.", timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS });
+}
+
+function openAcademicContextDeleteConfirmation(kind, itemId) {
+  pendingAcademicContextDeletion = { kind, itemId };
+  const dialog = els.academicContextDeleteDialog;
+  if (!dialog) return;
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+}
+
+function closeAcademicContextDeleteConfirmation() {
+  pendingAcademicContextDeletion = null;
+  const dialog = els.academicContextDeleteDialog;
+  if (!dialog) return;
+  if (typeof dialog.close === "function") dialog.close();
+  else dialog.removeAttribute("open");
+}
+
+async function deleteAcademicContextItem() {
+  const pending = pendingAcademicContextDeletion;
+  if (!pending) return;
+  const result = await api(`/api/academic-context/items/${encodeURIComponent(pending.itemId)}?kind=${encodeURIComponent(pending.kind)}`, {
+    method: "DELETE",
+  });
+  state = result.state || state;
+  closeAcademicContextDeleteConfirmation();
+  render();
+  setResult(els.sourceResult, `<strong>Deleted permanently</strong><p>This item is no longer part of your academic context.</p>`);
 }
 
 async function deleteSource(sourceId) {
@@ -3306,7 +3384,7 @@ async function connectClassroom() {
 }
 
 async function syncClassroom() {
-  setLoading(els.classroomPanel, "Checking Classroom work...");
+  setLoading(els.classroomPanel, starterCourseOnlyClassroom() ? "Refreshing Classroom courses..." : "Checking Classroom work...");
   const result = await api("/api/classroom/sync", {
     method: "POST",
     body: JSON.stringify({}),
@@ -3325,6 +3403,16 @@ async function addClassroomItemToAcademicContext(itemId) {
   state = result.state || state;
   render();
   if (els.sourceResult) setResult(els.sourceResult, `<p>${escapeHtml(result.message || "Selected Classroom work was added to your academic context.")}</p>`);
+}
+
+async function ignoreClassroomItem(itemId) {
+  const result = await api("/api/classroom/selection", {
+    method: "POST",
+    body: JSON.stringify({ ignoreIds: [itemId] }),
+  });
+  state = result.state || state;
+  render();
+  if (els.sourceResult) setResult(els.sourceResult, `<p>${escapeHtml(result.message || "Classroom work was left out of your academic context.")}</p>`);
 }
 
 async function disconnectClassroom() {
@@ -3641,7 +3729,7 @@ async function connectClassroomFromProductFlow() {
 
 async function refreshClassroomForProductFlow() {
   productClassroomRefreshAttempted = true;
-  productFlowMessage("Checking for Classroom work you can choose…");
+  productFlowMessage(starterCourseOnlyClassroom() ? "Refreshing your Classroom course list..." : "Checking for Classroom work you can choose...");
   try {
     const result = await api("/api/classroom/sync", {
       method: "POST",
@@ -3652,7 +3740,9 @@ async function refreshClassroomForProductFlow() {
     classroomStatusLoaded = true;
     render();
   } catch (error) {
-    productFlowMessage(error.message || "StudentOS could not check Classroom work yet. You can continue and add material later.");
+    productFlowMessage(error.message || (starterCourseOnlyClassroom()
+      ? "StudentOS could not refresh your course list yet. You can continue Setup and try again later."
+      : "StudentOS could not check Classroom work yet. You can continue and add material later."));
   }
 }
 
@@ -3792,6 +3882,16 @@ function wireEvents() {
       });
       return;
     }
+    const classroomIgnoreButton = event.target.closest("[data-classroom-ignore-id]");
+    if (classroomIgnoreButton) {
+      withButtonLoading(classroomIgnoreButton, "Ignoring...", () => ignoreClassroomItem(classroomIgnoreButton.dataset.classroomIgnoreId), {
+        timeoutTarget: els.sourceResult,
+        timeoutCopy: "This Classroom choice is taking longer than expected. Please try again.",
+      }).catch((error) => {
+        if (els.sourceResult) setResult(els.sourceResult, `<p>${escapeHtml(error.message)}</p>`);
+      });
+      return;
+    }
     const button = event.target.closest("[data-ai-open]");
     if (button) {
       handleAiContextButton(button);
@@ -3839,12 +3939,18 @@ function wireEvents() {
   document.getElementById("score-form").addEventListener("submit", recordScore);
   document.getElementById("extension-form").addEventListener("submit", draftExtension);
   document.getElementById("source-form").addEventListener("submit", addSource);
+  els.sourceKindSelect?.addEventListener("change", syncAcademicContextUploadType);
   els.sourceSearchInput?.addEventListener("input", (event) => {
     sourceSearchQuery = event.currentTarget.value;
     renderSources();
   });
   els.onboardingForm.addEventListener("submit", submitOnboarding);
   els.sourceList.addEventListener("click", (event) => {
+    const contextDeleteButton = event.target.closest("[data-delete-context-id]");
+    if (contextDeleteButton) {
+      openAcademicContextDeleteConfirmation(contextDeleteButton.dataset.deleteContextKind, contextDeleteButton.dataset.deleteContextId);
+      return;
+    }
     const button = event.target.closest("[data-delete-source-id]");
     if (button) {
       withButtonLoading(button, "Deleting...", () => deleteSource(button.dataset.deleteSourceId), {
@@ -3875,6 +3981,20 @@ function wireEvents() {
         setResult(els.sourceResult, `<p>${escapeHtml(error.message)}</p>`);
       });
     }
+  });
+  els.academicContextDeleteCancel?.addEventListener("click", closeAcademicContextDeleteConfirmation);
+  els.academicContextDeleteConfirm?.addEventListener("click", () => {
+    withButtonLoading(els.academicContextDeleteConfirm, "Deleting...", deleteAcademicContextItem, {
+      timeoutTarget: els.sourceResult,
+      timeoutCopy: "Deletion is taking longer than expected. Please try again.",
+      timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+    }).catch((error) => {
+      setResult(els.sourceResult, `<p>${escapeHtml(error.message)}</p>`);
+    });
+  });
+  els.academicContextDeleteDialog?.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeAcademicContextDeleteConfirmation();
   });
   document.querySelectorAll("[data-auth-mode]").forEach((button) => {
     button.addEventListener("click", () => setAuthShellMode(button.dataset.authMode));

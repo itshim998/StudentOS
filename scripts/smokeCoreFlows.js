@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import net from "node:net";
+import { buildPdfFixtureBuffer } from "../tests/e2e/fixtures/pdfFixture.js";
 
 const ROOT = new URL("..", import.meta.url);
 const SECRET_PATTERNS = [
@@ -186,9 +187,12 @@ async function main() {
     assert.equal(bootstrap.assignments.length, 0, "fresh workspaces must not contain placeholder assignments");
 
     const form = new FormData();
+    form.set("artifactKind", "material");
     form.set("courseId", courseId);
     form.set("title", "Smoke source note");
-    form.set("file", new Blob(["Quadratics use factoring, graphing, roots, and vertex form for exam questions."], { type: "text/plain" }), "smoke-source.txt");
+    form.set("file", new Blob([
+      buildPdfFixtureBuffer("Quadratics use factoring, graphing, roots, and vertex form for exam questions."),
+    ], { type: "application/pdf" }), "smoke-source.pdf");
     const upload = await request(baseUrl, "/api/sources/upload", {
       method: "POST",
       body: form,
@@ -199,6 +203,24 @@ async function main() {
     const sourceStatus = await request(baseUrl, "/api/sources/status");
     assert(sourceStatus.sources.some((source) => source.id === upload.material.id));
 
+    const assignmentForm = new FormData();
+    assignmentForm.set("artifactKind", "assignment");
+    assignmentForm.set("courseId", courseId);
+    assignmentForm.set("title", "Smoke assignment PDF");
+    assignmentForm.set("deadline", "2026-12-01");
+    assignmentForm.set("file", new Blob([
+      buildPdfFixtureBuffer("Complete the smoke assignment before its deadline."),
+    ], { type: "application/pdf" }), "smoke-assignment.pdf");
+    const assignmentUpload = await request(baseUrl, "/api/sources/upload", {
+      method: "POST",
+      body: assignmentForm,
+    });
+    assert.equal(assignmentUpload.assignment.title, "Smoke assignment PDF");
+    assert.equal(assignmentUpload.assignment.courseId, courseId);
+    assert.equal(assignmentUpload.assignment.dueDate, "2026-12-01");
+    assert.equal(assignmentUpload.assignment.handedIn, false);
+    assert(assignmentUpload.state.assignments.some((assignment) => assignment.id === assignmentUpload.assignment.id));
+
     for (const verb of ["Ask", "Plan", "Make", "Review"]) {
       const ai = await request(baseUrl, "/api/ai/verb", {
         method: "POST",
@@ -208,6 +230,22 @@ async function main() {
       assert.equal(ai.verb, verb);
       assert(ai.response || ai.answer || ai.output || ai.content);
     }
+
+    const deletedMaterial = await request(
+      baseUrl,
+      `/api/academic-context/items/${encodeURIComponent(upload.material.id)}?kind=material`,
+      { method: "DELETE" },
+    );
+    assert.equal(deletedMaterial.hardDeleted, true);
+    assert.equal(deletedMaterial.classroomUnchanged, true);
+    assert.equal(deletedMaterial.state.sourceMaterials.some((source) => source.id === upload.material.id), false);
+    const deletedAssignment = await request(
+      baseUrl,
+      `/api/academic-context/items/${encodeURIComponent(assignmentUpload.assignment.id)}?kind=assignment`,
+      { method: "DELETE" },
+    );
+    assert.equal(deletedAssignment.hardDeleted, true);
+    assert.equal(deletedAssignment.state.assignments.some((assignment) => assignment.id === assignmentUpload.assignment.id), false);
 
     const score = await request(baseUrl, "/api/tests/score", {
       method: "POST",
@@ -229,6 +267,8 @@ async function main() {
     });
     assert.equal(classroomSync.connector.writeScopesEnabled, false);
     assert.equal(classroomSync.writebackEnabled ?? false, false);
+    assert.equal(classroomSync.summary.courseOnly, true);
+    assert.equal(classroomSync.state.classroomItems.length, 0);
     assertNoClassroomInternals("/api/classroom/sync connector", classroomSync.connector);
     assert.equal(Object.hasOwn(classroomSync.syncRun || {}, "payload"), false);
 

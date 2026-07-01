@@ -4,10 +4,10 @@ import { once } from "node:events";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildPdfFixtureBuffer } from "./fixtures/pdfFixture.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "../..");
-const FIXTURE_DIR = path.join(__dirname, "fixtures");
 
 function redact(value) {
   return String(value || "")
@@ -54,7 +54,7 @@ async function clickNav(page, name) {
 }
 
 async function openAiDrawer(page) {
-  await page.getByRole("button", { name: /Ask StudentOS/i }).click();
+  await page.locator("#ai-launcher").click();
   await expect(page.locator("#ai-panel")).toBeVisible();
 }
 
@@ -772,11 +772,10 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
   await page.getByRole("button", { name: "Save and continue" }).click();
 
   await expect(page.getByRole("heading", { name: "Syllabus and Academic Context" })).toBeVisible();
-  await expect(page.locator("#product-flow-content")).toContainText("Upload academic files or describe your syllabus naturally");
-  await expect(page.getByText("Choose files", { exact: true })).toBeVisible();
+  await expect(page.locator("#product-flow-content")).toContainText("PDF uploads become available in Academic Context after Setup");
+  await expect(page.getByText("Available after Setup", { exact: true })).toBeVisible();
   await expect(page.locator("#product-academic-files")).toHaveAttribute("accept", /\.pdf/);
-  await expect(page.locator("#product-academic-files")).toHaveAttribute("accept", /\.xlsx/);
-  await expect(page.locator("#product-academic-files")).toHaveAttribute("accept", /image/);
+  await expect(page.locator("#product-academic-files")).not.toHaveAttribute("accept", /\.xlsx|image/);
   expect(persistenceOrder.filter((item) => ["daily_schedule", "exam_pattern", "academic_context"].includes(item.step)).map((item) => item.step)).toEqual(["daily_schedule"]);
   dailySaveReleased = true;
   releaseDailySave();
@@ -786,8 +785,8 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
 
   await page.locator("textarea[name='subjects']").fill("Mathematics\nPhysics");
   await page.locator("textarea[name='syllabusNotes']").fill("Our semester covers calculus, mechanics, and weekly problem sets.");
-  await page.locator("#product-academic-files").setInputFiles(path.join(FIXTURE_DIR, "quadratics-note.txt"));
-  await expect(page.locator("#product-upload-status")).toContainText("Added to your academic context");
+  await expect(page.locator("#product-academic-files")).toBeDisabled();
+  await expect(page.locator("#product-flow-content")).toContainText("Add a course in Setup before uploading academic context.");
   await expectNoLifecycleTechnicalCopy(page, "academic context upload page");
   await page.getByRole("button", { name: "Save and continue" }).click();
 
@@ -821,7 +820,7 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
   await page.getByRole("button", { name: "Edit details", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Syllabus and Academic Context" })).toBeVisible();
   await expect(page.locator("textarea[name='syllabusNotes']")).toHaveValue("Our semester covers calculus, mechanics, and weekly problem sets.");
-  await expect(page.locator("#product-upload-status")).toContainText("Added to your academic context");
+  await expect(page.locator("#product-academic-files")).toBeDisabled();
   failAcademicSaves = true;
   await page.getByRole("button", { name: "Save and continue" }).click();
   await expect(page.getByRole("heading", { name: "How should StudentOS find your coursework?" })).toBeVisible();
@@ -998,7 +997,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#ai-message")).toHaveValue(/Plan today from my tasks/i);
   await closeAiDrawer(page);
 
-  for (const view of ["Today", "Setup", "Courses", "Memory", "Studio", "Account"]) {
+  for (const view of ["Today", "Setup", "Courses", "Academic Context", "Studio", "Account"]) {
     await clickNav(page, view);
   }
 
@@ -1024,35 +1023,41 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#ai-message")).toHaveValue(/Course workspace/i);
   await closeAiDrawer(page);
 
-  await clickNav(page, "Memory");
-  await expect(page.locator("#view-memory")).toContainText("Your academic memory");
-  await expect(page.locator("#view-memory")).toContainText("Search your academic memory");
-  await expect(page.locator("#view-memory")).toContainText("Upload private source");
+  await clickNav(page, "Academic Context");
+  await expect(page.locator("#view-memory")).toContainText("Assignments, materials, and Classroom work StudentOS can use for your semester.");
+  await expect(page.locator("#view-memory")).toContainText("Assignments included");
+  await expect(page.locator("#view-memory")).toContainText("Materials included");
   await page.route("**/api/sources/upload", async (route) => {
     await delay(300);
     await route.continue();
   });
+  await page.locator("#source-kind-select").selectOption("material");
   await page.locator("#source-form input[name='title']").fill("E2E quadratics note");
-  await page.locator("#source-file").setInputFiles(path.join(FIXTURE_DIR, "quadratics-note.txt"));
-  await page.getByRole("button", { name: "Upload private source" }).click();
-  await expect(page.locator("#source-result")).toContainText("Uploading to private source library");
+  await page.locator("#source-course-select").selectOption({ index: 1 });
+  await page.locator("#source-file").setInputFiles({
+    name: "quadratics-note.pdf",
+    mimeType: "application/pdf",
+    buffer: buildPdfFixtureBuffer("Quadratics vertex form and worked examples for StudentOS."),
+  });
+  await page.getByRole("button", { name: "Upload material" }).click();
+  await expect(page.locator("#source-result")).toContainText("Adding this material to Academic Context");
   await expect(page.locator("#source-result")).toContainText("E2E quadratics note", { timeout: 15_000 });
   await expect(page.locator("#source-result")).toContainText(/academic context/i);
-  await expect(page.locator("#source-result")).toContainText("Private");
   await page.unroute("**/api/sources/upload");
-  await expect(page.locator("#source-list")).toContainText("Sources ready");
-  await expect(page.locator("#source-list")).toContainText(/Uses your materials/i);
+  await expect(page.locator("#source-list")).toContainText("Materials");
+  await expect(page.locator("#source-list")).toContainText(/Ready for study/i);
   await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
-  await expectNoVisibleExternalBranding(page, "source library");
-  await page.locator("#source-search-input").fill("E2E quadratics");
-  await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
-  await page.locator("#source-search-input").fill("missing-memory-source");
-  await expect(page.locator("#source-list")).toContainText("No matching sources");
-  await page.locator("#source-search-input").fill("");
-  await page.locator("#source-list").getByRole("button", { name: "Explain source" }).first().click();
+  await expectNoVisibleExternalBranding(page, "academic context");
+  await page.locator("#source-list").getByRole("button", { name: "Ask StudentOS" }).first().click();
   await expect(page.locator("#ai-panel")).toBeVisible();
   await expect(page.locator("#ai-message")).toHaveValue(/Explain this source/i);
   await closeAiDrawer(page);
+  const uploadedCard = page.locator(".academic-context-card").filter({ hasText: "E2E quadratics note" });
+  await uploadedCard.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator("#academic-context-delete-dialog")).toBeVisible();
+  await expect(page.locator("#academic-context-delete-dialog")).toContainText("This will permanently delete this file from StudentOS.");
+  await page.getByRole("button", { name: "Keep it" }).click();
+  await expect(uploadedCard).toBeVisible();
 
   await page.route("**/api/ai/verb", async (route) => {
     await delay(250);
@@ -1215,7 +1220,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
 test("responsive surfaces and AI drawer avoid horizontal overflow", async ({ page }) => {
   test.setTimeout(75_000);
   const widths = [1440, 1280, 1024, 768, 430, 390, 360];
-  const views = ["Today", "Setup", "Courses", "Memory", "Studio", "Account"];
+  const views = ["Today", "Setup", "Courses", "Academic Context", "Studio", "Account"];
 
   for (const width of widths) {
     await page.setViewportSize({ width, height: width <= 430 ? 820 : 900 });

@@ -12,9 +12,9 @@ import { isAcademicContextRecord, isClassroomRecord } from "../connectors/google
 
 export const ACADEMIC_CONTEXT_COPY = Object.freeze({
   pending: "Plan setup pending. Finish setup before adding academic material.",
-  available: "You can add selected material to your academic context.",
-  almostFull: "Your academic context is almost full. Remove older material or upgrade to add more.",
-  full: "Your academic context is full. Upgrade or remove older material to add this.",
+  available: "You have room for more material.",
+  almostFull: "Your academic context is almost full.",
+  full: "Your academic context is full. Remove older material or upgrade to add more.",
 });
 
 function productError(message, status = 403, code = "feature_unavailable") {

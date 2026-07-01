@@ -6,13 +6,13 @@ import { once } from "node:events";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildPdfFixtureBuffer } from "./fixtures/pdfFixture.js";
 import { getSupabaseEnvironment, loadDotEnv } from "../../backend/config/supabaseEnv.js";
 import { createSupabaseClients } from "../../backend/supabase/clients.js";
 import { routeUserToShard } from "../../backend/supabase/shardRouter.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "../..");
-const FIXTURE_DIR = path.join(__dirname, "fixtures");
 function truthy(value) {
   return ["1", "true", "yes"].includes(String(value || "").toLowerCase());
 }
@@ -248,7 +248,7 @@ async function waitForUploadSettled(page) {
   await expect.poll(async () => locator.innerText(), {
     timeout: 35_000,
     message: "source upload should render success or safe error",
-  }).toMatch(/Live E2E quadratics note|Source upload unavailable|Invalid source upload|Source upload did not finish|Source upload failed/i);
+  }).toMatch(/Live E2E quadratics note|Could not add this PDF|StudentOS request did not finish/i);
   return locator.innerText();
 }
 async function waitForExportSettled(page) {
@@ -568,10 +568,16 @@ test.describe("StudentOS live Supabase E2E", () => {
     await expect(page.locator("#onboarding-result")).toContainText("course roadmap generated", { timeout: 15_000 });
     await expect(page.locator("#view-title")).toHaveText("Today");
 
-    await clickNav(page, "Memory");
+    await clickNav(page, "Academic Context");
+    await page.locator("#source-kind-select").selectOption("material");
     await page.locator("#source-form input[name='title']").fill("Live E2E quadratics note");
-    await page.locator("#source-file").setInputFiles(path.join(FIXTURE_DIR, "quadratics-note.txt"));
-    await page.getByRole("button", { name: "Upload private source" }).click();
+    await page.locator("#source-course-select").selectOption({ index: 1 });
+    await page.locator("#source-file").setInputFiles({
+      name: "quadratics-note.pdf",
+      mimeType: "application/pdf",
+      buffer: buildPdfFixtureBuffer("Quadratics vertex form and worked examples for StudentOS."),
+    });
+    await page.getByRole("button", { name: "Upload material" }).click();
     const uploadResultText = await waitForUploadSettled(page);
     if (!uploadResultText.includes("Live E2E quadratics note")) {
       await testInfo.attach("masked-source-upload-response", {
@@ -580,8 +586,7 @@ test.describe("StudentOS live Supabase E2E", () => {
       });
     }
     expect(uploadResultText).toContain("Live E2E quadratics note");
-    await expect(page.locator("#source-result")).toContainText(/source section/i);
-    await expect(page.locator("#source-result")).toContainText("Private");
+    await expect(page.locator("#source-result")).toContainText(/academic context/i);
 
     await clickNav(page, "Studio");
     await openAiDrawer(page);
@@ -625,7 +630,7 @@ test.describe("StudentOS live Supabase E2E", () => {
     await page.getByRole("button", { name: "Sign in" }).click();
     await secondBootstrapAfterSignIn;
     await expect(page.locator("#auth-session")).toContainText(disposableUser.email, { timeout: 15_000 });
-    await clickNav(page, "Memory");
+    await clickNav(page, "Academic Context");
     await expect(page.locator("#source-list")).toContainText("Live E2E quadratics note", { timeout: 15_000 });
 
     await assertNoServiceSecretsInFrontend(page, baseUrl, [

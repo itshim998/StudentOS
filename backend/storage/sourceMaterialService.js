@@ -77,6 +77,21 @@ export function validateSourceUpload({ filename, mimeType, sizeBytes }) {
   };
 }
 
+export function validateAcademicContextPdfUpload({ filename, mimeType, sizeBytes, bytes }) {
+  const validation = validateSourceUpload({ filename, mimeType, sizeBytes });
+  const headerOffset = Buffer.from(bytes || []).subarray(0, 1024).indexOf("%PDF-");
+  const pdfOnly = extname(String(filename || "")).toLowerCase() === ".pdf" &&
+    validation.mimeType === "application/pdf" &&
+    headerOffset >= 0;
+  const errors = validation.errors.filter((error) => error !== "unsupported_file_type");
+  if (!pdfOnly) errors.push("pdf_required");
+  return {
+    ...validation,
+    ok: errors.length === 0,
+    errors: [...new Set(errors)],
+  };
+}
+
 export function createSafeStoragePath({ userId, courseId, sourceId, filename }) {
   const safeFilename = normalizeFilename(filename);
   const safeCourseId = String(courseId || "uncategorized").replace(/[^a-zA-Z0-9_-]+/g, "-");
@@ -213,7 +228,7 @@ export function chunkExtractedText(text, { maxChars = 900, overlapChars = 120 } 
   return chunks;
 }
 
-export function createSourceMaterialRecord({ session, course, courseId, title, file, config, extraction }) {
+export function createSourceMaterialRecord({ session, course, courseId, title, file, config, extraction, artifactKind = "material" }) {
   const sourceId = `src_upload_${Date.now()}_${randomUUID().slice(0, 8)}`;
   const validation = validateSourceUpload({
     filename: file.filename,
@@ -240,6 +255,7 @@ export function createSourceMaterialRecord({ session, course, courseId, title, f
     title: title || validation.filename,
     kind: "uploaded_file",
     sourceType: "uploaded_file",
+    artifactKind,
     filename: validation.filename,
     mimeType: validation.mimeType,
     sizeBytes: validation.sizeBytes,

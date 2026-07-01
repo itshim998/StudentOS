@@ -1019,15 +1019,19 @@ class MockStudentOsRepository {
       .map(clone);
   }
 
-  async hardDeleteSourceArtifacts(session, { sourceId, storageBucket, storagePath } = {}) {
+  async hardDeleteSourceArtifacts(session, { sourceId, storageBucket, storagePath, assignmentIds = [] } = {}) {
     const state = await this.loadState(session);
     if (storageBucket && storagePath) await this.deleteStorageObject(session, { bucket: storageBucket, path: storagePath });
-    state.sourceMaterials = (state.sourceMaterials || []).filter((item) => item.id !== sourceId);
-    state.sourceChunks = (state.sourceChunks || []).filter((item) => item.sourceMaterialId !== sourceId);
-    state.memoryItems = (state.memoryItems || []).filter((item) => !item.sourceMaterialIds?.includes(sourceId));
-    state.embeddingsMetadata = (state.embeddingsMetadata || []).filter((item) => item.sourceMaterialId !== sourceId);
-    state.backgroundJobs = (state.backgroundJobs || []).filter((item) => item.sourceId !== sourceId);
-    state.jobEvents = (state.jobEvents || []).filter((item) => item.sourceId !== sourceId);
+    const assignments = new Set(assignmentIds);
+    if (sourceId) {
+      state.sourceMaterials = (state.sourceMaterials || []).filter((item) => item.id !== sourceId);
+      state.sourceChunks = (state.sourceChunks || []).filter((item) => item.sourceMaterialId !== sourceId);
+      state.memoryItems = (state.memoryItems || []).filter((item) => !item.sourceMaterialIds?.includes(sourceId));
+      state.embeddingsMetadata = (state.embeddingsMetadata || []).filter((item) => item.sourceMaterialId !== sourceId);
+      state.backgroundJobs = (state.backgroundJobs || []).filter((item) => item.sourceId !== sourceId);
+      state.jobEvents = (state.jobEvents || []).filter((item) => item.sourceId !== sourceId);
+    }
+    state.assignments = (state.assignments || []).filter((item) => !assignments.has(item.id));
     await this.saveState(session, state);
     return { hardDeleted: true, mode: "mock", storageObjectDeleteRequested: Boolean(storagePath) };
   }
@@ -1287,7 +1291,7 @@ class SupabaseStudentOsRepository {
   }
 
   async saveSourceIngestion(session, state) {
-    await this.saveChangedCollections(session, state, ["sourceMaterials", "sourceChunks", "memoryItems", "embeddingsMetadata", "backgroundJobs", "jobEvents", "auditLog"]);
+    await this.saveChangedCollections(session, state, ["assignments", "sourceMaterials", "sourceChunks", "memoryItems", "embeddingsMetadata", "backgroundJobs", "jobEvents", "auditLog"]);
   }
 
   async saveBackgroundJobs(session, state) {
@@ -1700,20 +1704,21 @@ class SupabaseStudentOsRepository {
     embeddingIds = [],
     jobIds = [],
     jobEventIds = [],
+    assignmentIds = [],
   } = {}) {
-    if (!sourceId) throw new Error("source_id_required");
+    if (!sourceId && !assignmentIds.length) throw new Error("academic_context_record_required");
     const route = this.route(session);
     if (storageBucket && storagePath) {
       await route.client.deleteObjects(storageBucket, [storagePath]);
     }
     const userFilter = `eq.${session.user.id}`;
-    const deletes = [
+    const deletes = sourceId ? [
       ["job_events", { user_id: userFilter, source_id: `eq.${sourceId}` }],
       ["background_jobs", { user_id: userFilter, source_id: `eq.${sourceId}` }],
       ["source_chunks", { user_id: userFilter, source_material_id: `eq.${sourceId}` }],
       ["embeddings_metadata", { user_id: userFilter, source_material_id: `eq.${sourceId}` }],
       ["source_materials", { user_id: userFilter, id: `eq.${sourceId}` }],
-    ];
+    ] : [];
     const memoryFilter = inFilter(memoryItemIds);
     if (memoryFilter) deletes.unshift(["memory_items", { user_id: userFilter, id: memoryFilter }]);
     const chunkFilter = inFilter(sourceChunkIds);
@@ -1724,6 +1729,8 @@ class SupabaseStudentOsRepository {
     if (jobFilter) deletes.unshift(["background_jobs", { user_id: userFilter, id: jobFilter }]);
     const eventFilter = inFilter(jobEventIds);
     if (eventFilter) deletes.unshift(["job_events", { user_id: userFilter, id: eventFilter }]);
+    const assignmentFilter = inFilter(assignmentIds);
+    if (assignmentFilter) deletes.unshift(["assignments", { user_id: userFilter, id: assignmentFilter }]);
     for (const [table, filters] of deletes) {
       await route.client.deleteRows(table, { filters });
     }
