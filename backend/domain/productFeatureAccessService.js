@@ -8,6 +8,7 @@ import {
   getPlanEntitlements,
   getPublicEntitlementSummary,
 } from "./planEntitlementService.js";
+import { isAcademicContextRecord, isClassroomRecord } from "../connectors/googleClassroom/mapper.js";
 
 export const ACADEMIC_CONTEXT_COPY = Object.freeze({
   pending: "Plan setup pending. Finish setup before adding academic material.",
@@ -23,14 +24,8 @@ function productError(message, status = 403, code = "feature_unavailable") {
   return error;
 }
 
-function classroomItem(item = {}) {
-  return item.source === "google_classroom" ||
-    item.provider === "google_classroom" ||
-    String(item.sourceType || "").startsWith("google_classroom");
-}
-
 function activeSources(state = {}) {
-  return (state.sourceMaterials || []).filter((source) => !source.deletedAt);
+  return (state.sourceMaterials || []).filter((source) => isAcademicContextRecord(source) && !source.deletedAt);
 }
 
 function selectedContextIds(state = {}, overrideIds = null) {
@@ -43,14 +38,21 @@ function selectedContextIds(state = {}, overrideIds = null) {
 export function countAcademicContextMaterials(state = {}, { selectedMaterialIds = null } = {}) {
   const selectedIds = selectedContextIds(state, selectedMaterialIds);
   const knownClassroomIds = new Set([
-    ...activeSources(state).filter(classroomItem).map((item) => String(item.id)),
-    ...(state.assignments || []).filter(classroomItem).map((item) => String(item.id)),
+    ...(state.classroomItems || []).map((item) => String(item.id)),
+    ...(state.assignments || []).filter(isClassroomRecord).map((item) => String(item.id)),
+    ...(state.sourceMaterials || []).filter(isClassroomRecord).map((item) => String(item.id)),
   ]);
+  const importedClassroomIds = (state.classroomItems || [])
+    .filter((item) => item.academicContextIncluded === true && item.selectionState === "imported")
+    .map((item) => String(item.id));
   const uploadedIds = activeSources(state)
-    .filter((source) => !classroomItem(source))
+    .filter((source) => !isClassroomRecord(source))
     .map((source) => String(source.id));
   const selectedKnownIds = [...selectedIds].filter((id) => knownClassroomIds.has(id));
-  return new Set([...uploadedIds, ...selectedKnownIds]).size;
+  return new Set([
+    ...uploadedIds,
+    ...(selectedMaterialIds === null ? importedClassroomIds : selectedKnownIds),
+  ]).size;
 }
 
 export function getResolvedProductAccess(state = {}) {

@@ -71,8 +71,15 @@ import {
   disconnectGoogleClassroom,
   getClassroomConnectorStatus,
   markClassroomConnected,
+  shouldRunAutomaticClassroomCheck,
   syncGoogleClassroomIntoState,
 } from "./connectors/googleClassroom/syncService.js";
+import {
+  getClassroomDueWork,
+  getClassroomTodayAction,
+  isAcademicContextRecord,
+  selectClassroomItemsForAcademicContext,
+} from "./connectors/googleClassroom/mapper.js";
 import { savePersistentClassroomToken } from "./connectors/googleClassroom/tokenStore.js";
 import { runStudentOsVerb } from "./ai/studentBrainAdapter.js";
 import { getSafeAiProviderStatus, getAiProviderConfig } from "./ai/providerConfig.js";
@@ -436,10 +443,43 @@ function publicState(state, persistence) {
   const resolvedPlan = resolveEntitlements(state);
   const selectedPlanKey = normalizePlanKey(productLifecycle.selectedPlanId) || resolvedPlan.selectedPlanKey;
   const activePlanKey = resolvedPlan.activePlanKey;
+  const classroomPolicy = getProductClassroomPolicy(state);
+  const courses = (state.courses || []).filter(isAcademicContextRecord);
+  const topics = (state.topics || []).filter(isAcademicContextRecord);
+  const assignments = (state.assignments || []).filter(isAcademicContextRecord);
+  const roadmap = (state.roadmap || []).filter((item) => !item.archived && item.status !== "archived");
+  const dueWork = getClassroomDueWork(state, {
+    includeDiscoveredReview: classroomPolicy.autoCheckEnabled === true,
+  });
   return {
     ...state,
+    courses,
+    topics,
+    assignments,
+    roadmap,
+    testSessions: (state.testSessions || []).filter(isAcademicContextRecord),
+    revisionEvents: (state.revisionEvents || []).filter(isAcademicContextRecord),
+    tutorLessons: (state.tutorLessons || []).filter(isAcademicContextRecord),
+    assignmentAutomationContracts: (state.assignmentAutomationContracts || []).filter(isAcademicContextRecord),
+    memoryItems: (state.memoryItems || []).filter(isAcademicContextRecord),
+    classroomItems: (state.classroomItems || [])
+      .filter((item) => item.selectionState !== "archived")
+      .map((item) => ({
+        id: item.id,
+        itemType: item.itemType,
+        title: item.title,
+        courseTitle: item.courseTitle,
+        dueAt: item.dueAt || null,
+        postedAt: item.postedAt || null,
+        providerUpdatedAt: item.providerUpdatedAt || null,
+        submissionState: item.submissionState || null,
+        handedIn: item.handedIn === true,
+        selectionState: item.selectionState,
+        academicContextIncluded: item.academicContextIncluded === true,
+        readOnly: true,
+      })),
     studentProfile: getSafeStudentProfile(state.studentProfile, creditBalance),
-    sourceMaterials: (state.sourceMaterials || []).map((source) => {
+    sourceMaterials: (state.sourceMaterials || []).filter(isAcademicContextRecord).map((source) => {
       const {
         storageBucket,
         storagePath,
@@ -478,6 +518,10 @@ function publicState(state, persistence) {
     creditBalance,
     assignmentInsights: getAssignmentInsights(state),
     todayNextActions: getTodayNextActions(state),
+    classroomDueWork: dueWork,
+    todayDoNow: getClassroomTodayAction(state, {
+      includeDiscoveredReview: classroomPolicy.autoCheckEnabled === true,
+    }),
     queueHealth: buildQueueHealth(state.backgroundJobs || []),
     persistence: publicRetrievalStatus(persistence),
     productLifecycle,
@@ -569,14 +613,12 @@ function publicBillingPreview(result = {}, action = "checkout") {
 function publicClassroomSummary(summary = null) {
   if (!summary) return null;
   return {
-    importedCourses: summary.importedCourses || 0,
-    updatedCourses: summary.updatedCourses || 0,
-    importedAssignments: summary.importedAssignments || 0,
+    discoveredCourses: summary.discoveredCourses || 0,
+    discoveredAssignments: summary.discoveredAssignments || 0,
     updatedAssignments: summary.updatedAssignments || 0,
-    importedMaterials: summary.importedMaterials || 0,
+    discoveredMaterials: summary.discoveredMaterials || 0,
     updatedMaterials: summary.updatedMaterials || 0,
-    importedTopics: summary.importedTopics || 0,
-    updatedTopics: summary.updatedTopics || 0,
+    selectedItems: summary.selectedItems || 0,
     skippedItems: summary.skippedItems || 0,
     evictedAssignments: summary.evictedAssignments || 0,
     evictedMaterials: summary.evictedMaterials || 0,
@@ -591,11 +633,10 @@ function publicClassroomSyncRun(run = {}) {
     status: run.status || "unknown",
     startedAt: run.startedAt || null,
     completedAt: run.completedAt || null,
-    importedCourses: run.importedCourses || 0,
-    updatedCourses: run.updatedCourses || 0,
-    importedAssignments: run.importedAssignments || 0,
+    discoveredCourses: run.payload?.discoveredCourses || 0,
+    discoveredAssignments: run.payload?.discoveredAssignments || 0,
     updatedAssignments: run.updatedAssignments || 0,
-    importedMaterials: run.importedMaterials || 0,
+    discoveredMaterials: run.payload?.discoveredMaterials || 0,
     updatedMaterials: run.updatedMaterials || 0,
     skippedItems: run.skippedItems || 0,
     errorCount: run.errorCount || 0,
@@ -629,7 +670,7 @@ function publicClassroomConnector(connector = {}) {
     ? "preview"
     : ["disabled", "setup_required"].includes(connector.state || connector.status)
       ? "inactive"
-      : "classroom_import";
+      : "classroom";
   return {
     mode: publicMode,
     state: connector.state || connector.status || "status_pending",
@@ -655,6 +696,38 @@ function publicClassroomConnector(connector = {}) {
   };
 }
 
+async function maybeRunAutomaticClassroomCheck({ state, session } = {}) {
+  const lifecycle = getProductLifecycleSnapshot(state);
+  const policy = getProductClassroomPolicy(state);
+  if (!lifecycle.dashboardActive || lifecycle.classroomChoice !== "classroom" || !lifecycle.classroomConnectedAt) return null;
+  const schedule = shouldRunAutomaticClassroomCheck({ state, policy });
+  if (!schedule.due) return null;
+  const connector = await getClassroomConnectorStatus({
+    state,
+    session,
+    repository,
+    userId: session.user.id,
+    config: googleClassroomConfig,
+  });
+  if (!connector.connected || !connector.actions.sync) return null;
+  try {
+    const result = await syncGoogleClassroomIntoState({
+      state,
+      session,
+      repository,
+      config: googleClassroomConfig,
+    });
+    await repository.saveState(session, state);
+    return result;
+  } catch (error) {
+    logger.warn("classroom_automatic_check.failed", {
+      status: error.status || 500,
+      code: error.code || "classroom_check_failed",
+    });
+    return null;
+  }
+}
+
 function publicErrorMessage(error, fallback = "We couldn’t complete that request. Please try again.") {
   const message = redactSecrets(error?.message || fallback);
   if ((error?.status || 0) === 429 || /429|too many|rate limit/i.test(message)) {
@@ -667,15 +740,15 @@ function publicErrorMessage(error, fallback = "We couldn’t complete that reque
 }
 
 function findAssignment(state, id) {
-  return state.assignments.find((assignment) => assignment.id === id);
+  return state.assignments.find((assignment) => assignment.id === id && isAcademicContextRecord(assignment));
 }
 
 function findCourse(state, id) {
-  return state.courses.find((course) => course.id === id);
+  return state.courses.find((course) => course.id === id && isAcademicContextRecord(course));
 }
 
 function findTopics(state, ids) {
-  return state.topics.filter((topic) => ids.includes(topic.id));
+  return state.topics.filter((topic) => ids.includes(topic.id) && isAcademicContextRecord(topic));
 }
 
 function requireUploadSession(session) {
@@ -1669,7 +1742,8 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
-    const { state, persistence } = await getStateContext(req);
+    const { session, state, persistence } = await getStateContext(req);
+    await maybeRunAutomaticClassroomCheck({ state, session });
     sendJson(res, 200, publicState(state, persistence));
     return;
   }
@@ -1680,6 +1754,9 @@ async function handleApi(req, res, url) {
     requireAccountSession(session);
     if (body.action === "save_materials") {
       assertAcademicContextSelection(state, body.payload?.materialIds || []);
+      const classroomIds = new Set((state.classroomItems || []).map((item) => String(item.id)));
+      const selectedClassroomIds = (body.payload?.materialIds || []).map(String).filter((id) => classroomIds.has(id));
+      selectClassroomItemsForAcademicContext(state, selectedClassroomIds, { replace: true });
     }
     const lifecycle = applyProductLifecycleAction(state, body.action, body.payload || {}, {
       config: productFlowConfig,
@@ -1846,7 +1923,7 @@ async function handleApi(req, res, url) {
         <title>StudentOS Classroom Connected</title>
         <body>
           <h1>Google Classroom connected</h1>
-          <p>Classroom connection is ready. StudentOS will add coursework to your study plan only.</p>
+          <p>Classroom connection is ready. Choose the work you want to add to your academic context.</p>
           <script>setTimeout(() => { location.href = ${JSON.stringify(publicFrontendUrl).replace(/</g, "\\u003c")}; }, 1200);</script>
         </body>`);
     } catch {
@@ -1935,6 +2012,45 @@ async function handleApi(req, res, url) {
       assignmentInsights: getAssignmentInsights(state),
       todayNextActions: getTodayNextActions(state),
       policy: getPublicEntitlementSummary(resolveEntitlements(state).activePlanKey).classroom,
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/classroom/selection") {
+    const body = await readJsonBody(req);
+    const { session, state, persistence } = await getStateContext(req);
+    requireAccountSession(session);
+    requireProductMaterialAccess(state);
+    const policy = getProductClassroomPolicy(state);
+    if (!policy.planReady || policy.manualImportEnabled !== true) {
+      const error = new Error("Your current plan is not ready to add Classroom work.");
+      error.status = 403;
+      throw error;
+    }
+    const requestedIds = Array.isArray(body.itemIds) ? body.itemIds.map(String) : [];
+    const lifecycle = getProductLifecycleSnapshot(state);
+    const currentlyImportedIds = (state.classroomItems || [])
+      .filter((item) => item.academicContextIncluded && item.selectionState === "imported")
+      .map((item) => item.id);
+    const mergedIds = [...new Set([...(lifecycle.selectedMaterialIds || []), ...currentlyImportedIds, ...requestedIds])];
+    assertAcademicContextSelection(state, mergedIds);
+    const selection = selectClassroomItemsForAcademicContext(state, requestedIds, { replace: false });
+    const importedLabels = selection.imported.map((item) => item.title);
+    state.studentProfile.productLifecycle.selectedMaterialIds = mergedIds;
+    state.studentProfile.productLifecycle.selectedMaterialLabels = [...new Set([
+      ...(lifecycle.selectedMaterialLabels || []),
+      ...importedLabels,
+    ])];
+    await repository.saveState(session, state);
+    sendJson(res, 200, {
+      state: publicState(state, persistence),
+      selectedCount: selection.imported.length,
+      message: selection.imported.length
+        ? "Selected Classroom work was added to your academic context."
+        : "Choose Classroom work to include in your academic context.",
+      readOnly: true,
+      writebackEnabled: false,
       secretsPrinted: false,
     });
     return;
@@ -2109,7 +2225,7 @@ async function handleApi(req, res, url) {
       sendJson(res, error.status || 500, {
         error: error.status === 404
           ? "Assignment not found"
-          : "StudentOS could not analyze this assignment flow. Refresh synced data and try again.",
+          : "StudentOS could not prepare this assignment. Check Classroom work and try again.",
         assignmentFlowError: true,
         requestId: req.requestId,
         secretsPrinted: false,
@@ -2171,7 +2287,7 @@ async function handleApi(req, res, url) {
     assertProductFeatureAccess(state, FEATURE_KEYS.ASSIGNMENT_COACH, {
       message: "Assignment preparation is available with Plus or Pro. Student review is always required.",
     });
-    const assignment = findAssignment(state, body.assignmentId) || state.assignments[0];
+    const assignment = findAssignment(state, body.assignmentId) || state.assignments.find(isAcademicContextRecord);
     const draft = buildExtensionDecisionDraft({
       profile: state.studentProfile,
       assignment,
@@ -2193,9 +2309,9 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
     requireDashboardActive(state);
-    const topic = state.topics.find((item) => item.id === body.topicId) || state.topics[0];
+    const topic = state.topics.find((item) => item.id === body.topicId && isAcademicContextRecord(item)) || state.topics.find(isAcademicContextRecord);
     const course = findCourse(state, topic.courseId);
-    const sources = state.sourceMaterials.filter((source) => topic.sourceMaterialIds.includes(source.id));
+    const sources = state.sourceMaterials.filter((source) => isAcademicContextRecord(source) && topic.sourceMaterialIds.includes(source.id));
     const lesson = createTutorLesson({
       course,
       topic,
@@ -2214,9 +2330,10 @@ async function handleApi(req, res, url) {
     const { state } = await getStateContext(req);
     const safeSnapshot = publicState(state, { mode: supabaseConfig.mode });
     const safeSources = safeSnapshot.sourceMaterials;
+    const safeSourceIds = new Set(safeSources.map((source) => source.id));
     sendJson(res, 200, {
       sources: safeSources,
-      chunks: (state.sourceChunks || []).map((chunk) => ({
+      chunks: (state.sourceChunks || []).filter((chunk) => safeSourceIds.has(chunk.sourceMaterialId || chunk.sourceId)).map((chunk) => ({
         id: chunk.id,
         sourceId: chunk.sourceId,
         courseId: chunk.courseId,
@@ -2253,7 +2370,7 @@ async function handleApi(req, res, url) {
         sendJson(res, 400, { error: "Missing file field", uploadError: true, uploadStage, secretsPrinted: false });
         return;
       }
-      const course = findCourse(state, form.fields.courseId) || state.courses[0] || {
+      const course = findCourse(state, form.fields.courseId) || state.courses.find(isAcademicContextRecord) || {
         id: "academic-context",
         title: "Academic context",
       };

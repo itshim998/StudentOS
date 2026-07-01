@@ -1,3 +1,5 @@
+import { isAcademicContextRecord } from "../connectors/googleClassroom/mapper.js";
+
 function compact(value, limit = 1400) {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -17,16 +19,16 @@ function formatSnippets(snippets = []) {
 }
 
 function formatStudyState(state, baseAnswer) {
-  const course = (state.courses || []).find((item) => item.id === baseAnswer.courseId) || state.courses?.[0];
-  const topic = (state.topics || []).find((item) => item.id === baseAnswer.topicId) || state.topics?.[0];
+  const course = (state.courses || []).find((item) => item.id === baseAnswer.courseId && isAcademicContextRecord(item)) || state.courses?.find(isAcademicContextRecord);
+  const topic = (state.topics || []).find((item) => item.id === baseAnswer.topicId && isAcademicContextRecord(item)) || state.topics?.find(isAcademicContextRecord);
   const preferences = state.studentProfile?.preferences || {};
   const assignments = (state.assignments || [])
-    .filter((item) => !course?.id || item.courseId === course.id)
+    .filter((item) => isAcademicContextRecord(item) && (!course?.id || item.courseId === course.id))
     .slice(0, 4)
     .map((item) => `${item.title} due ${item.dueDate || item.dueAt || "soon"} (${item.status || "open"})`)
     .join("; ");
   const weakTopics = (state.topics || [])
-    .filter((item) => item.courseId === course?.id && (item.weakSignals?.length || ["revision_required", "not_started"].includes(item.mastery)))
+    .filter((item) => isAcademicContextRecord(item) && item.courseId === course?.id && (item.weakSignals?.length || ["revision_required", "not_started"].includes(item.mastery)))
     .slice(0, 5)
     .map((item) => `${item.title}: ${item.weakSignals?.join(", ") || item.mastery}`)
     .join("; ");

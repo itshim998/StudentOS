@@ -3,6 +3,7 @@ import { createEmptyStudentState, retrieveGroundedSources } from "../domain/stud
 import { publicShardRoute, routeUserToShard } from "../supabase/shardRouter.js";
 import { createInitialProductLifecycle, normalizeProductLifecycle } from "../domain/productLifecycleService.js";
 import { removeLegacyDemoArtifacts } from "../migrations/legacyDemoDataCleanup.js";
+import { migrateLegacyClassroomAcademicData } from "../connectors/googleClassroom/mapper.js";
 
 const COLLECTIONS = [
   ["courses", "courses"],
@@ -38,6 +39,7 @@ const COLLECTIONS = [
   ["accountDeletionRequests", "account_deletion_requests"],
   ["accountDeletionReviews", "account_deletion_reviews"],
   ["roleInvitations", "role_invitations"],
+  ["classroomItems", "classroom_items"],
 ];
 
 function clone(value) {
@@ -83,6 +85,7 @@ function ensureStateShape(state) {
   }
   removeDemoSeedRowsForRealUser(shaped);
   normalizeProductLifecycle(shaped);
+  migrateLegacyClassroomAcademicData(shaped);
   return shaped;
 }
 
@@ -199,6 +202,28 @@ function rowForCollection(key, item, userId) {
       citation_label: item.citationLabel || item.title,
       web_fallback_allowed: item.webFallbackAllowed !== false,
       deleted_at: item.deletedAt || null,
+    };
+  }
+  if (key === "classroomItems") {
+    return {
+      ...base,
+      external_id: item.externalId || item.providerCourseWorkId || item.providerMaterialId,
+      provider_course_id: item.providerCourseId,
+      provider_course_work_id: item.providerCourseWorkId || null,
+      provider_material_id: item.providerMaterialId || null,
+      item_type: item.itemType,
+      title: item.title,
+      course_title: item.courseTitle || null,
+      due_at: item.dueAt || null,
+      posted_at: item.postedAt || null,
+      provider_updated_at: item.providerUpdatedAt || null,
+      submission_state: item.submissionState || null,
+      handed_in: item.handedIn === true,
+      selection_state: item.selectionState || "discovered",
+      selected_at: item.selectedAt || null,
+      imported_at: item.importedAt || null,
+      academic_context_included: item.academicContextIncluded === true,
+      last_seen_at: item.lastSeenAt || new Date().toISOString(),
     };
   }
   if (key === "sourceChunks") {
@@ -1162,12 +1187,33 @@ class SupabaseStudentOsRepository {
       });
       state[key] = rows.map(fromPayload).filter(Boolean);
     }
+    const classroomMigrationKeys = [
+      "classroomItems",
+      "assignments",
+      "sourceMaterials",
+      "sourceChunks",
+      "memoryItems",
+      "embeddingsMetadata",
+      "backgroundJobs",
+      "courses",
+      "topics",
+      "roadmap",
+      "testSessions",
+      "assignmentAutomationContracts",
+      "tutorLessons",
+      "revisionEvents",
+    ];
+    const beforeClassroomMigration = Object.fromEntries(classroomMigrationKeys.map((key) => [key, JSON.stringify(state[key] || [])]));
     const shaped = ensureStateShape(state);
     if (JSON.stringify(shaped.studentProfile) !== storedProfilePayload || JSON.stringify(shaped.studentProfile.productLifecycle) !== storedLifecycle) {
       await route.client.upsert("student_profiles", profileRow(shaped.studentProfile, user.id), {
         onConflict: "user_id",
         returning: "minimal",
       });
+    }
+    const changedClassroomKeys = classroomMigrationKeys.filter((key) => JSON.stringify(shaped[key] || []) !== beforeClassroomMigration[key]);
+    if (changedClassroomKeys.length) {
+      await this.saveChangedCollections(session, shaped, changedClassroomKeys);
     }
     return shaped;
   }
@@ -1485,6 +1531,7 @@ class SupabaseStudentOsRepository {
       "notes",
       "timetable_events",
       "assignments",
+      "classroom_items",
       "exams",
       "syllabi",
       "topics",

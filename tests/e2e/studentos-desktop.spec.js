@@ -373,6 +373,7 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
     courses: [],
     assignments: [],
     sourceMaterials: [],
+    classroomItems: [],
     roadmap: [],
     timetable: [],
     productLifecycle: lifecycle,
@@ -495,29 +496,17 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
   });
   await page.route("**/api/classroom/sync", async (route) => {
     classroomSyncCalls += 1;
-    newUserState.courses = [{ id: "course_current", title: "Current Semester" }];
-    newUserState.assignments = [
-      { id: "assignment_old", courseId: "course_current", title: "Older Classroom assignment", source: "google_classroom", classroomUpdatedAt: "2026-05-01T09:00:00.000Z" },
-      { id: "assignment_new", courseId: "course_current", title: "Newest Classroom assignment", source: "google_classroom", classroomUpdatedAt: "2026-06-20T09:00:00.000Z" },
-    ];
-    const classroomMaterial = {
-      id: "material_current",
-      courseId: "course_current",
-      title: "Current Classroom notes",
-      source: "google_classroom",
-      provider: "google_classroom",
-      updateTime: "2026-06-10T09:00:00.000Z",
-    };
-    newUserState.sourceMaterials = [
-      ...newUserState.sourceMaterials.filter((item) => item.id !== classroomMaterial.id),
-      classroomMaterial,
+    newUserState.classroomItems = [
+      { id: "assignment_old", itemType: "assignment", title: "Older Classroom assignment", courseTitle: "Current Semester", source: "google_classroom", selectionState: "discovered", academicContextIncluded: false, providerUpdatedAt: "2026-05-01T09:00:00.000Z" },
+      { id: "assignment_new", itemType: "assignment", title: "Newest Classroom assignment", courseTitle: "Current Semester", source: "google_classroom", selectionState: "discovered", academicContextIncluded: false, providerUpdatedAt: "2026-06-20T09:00:00.000Z" },
+      { id: "material_current", itemType: "material", title: "Current Classroom notes", courseTitle: "Current Semester", source: "google_classroom", selectionState: "discovered", academicContextIncluded: false, providerUpdatedAt: "2026-06-10T09:00:00.000Z" },
     ];
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         state: newUserState,
         connector: { connected: true, state: "connected", actions: { sync: true } },
-        summary: { importedAssignments: 2, importedMaterials: 1 },
+        summary: { discoveredAssignments: 2, discoveredMaterials: 1 },
         secretsPrinted: false,
       }),
     });
@@ -877,27 +866,27 @@ test("Classroom status UI normalizes controls and copy", async ({ page }) => {
     const copy = {
       disabled: {
         title: "Classroom setup is not active",
-        message: "Your workspace is ready. Classroom importing can be turned on later.",
+        message: "Your workspace is ready. Classroom can be connected later.",
         badge: "workspace ready",
       },
       setup_required: {
         title: "Classroom setup is not active",
-        message: "Your workspace is ready. Classroom importing can be turned on later.",
+        message: "Your workspace is ready. Classroom can be connected later.",
         badge: "workspace ready",
       },
       disconnected: {
         title: "Classroom can be connected",
-        message: "Connect when you want StudentOS to include Classroom coursework in your study plan.",
+        message: "Connect when you want to choose Classroom work for your academic context.",
         badge: "optional setup",
       },
       connected: {
         title: "Classroom connected",
-        message: "StudentOS can refresh coursework for your study plan. You stay in control of submissions.",
-        badge: "planning import active",
+        message: "StudentOS can find Classroom work for you to review. You choose what gets added.",
+        badge: "work ready to review",
       },
       reconnect_required: {
         title: "Reconnect Classroom",
-        message: "Reconnect Classroom to refresh imported assignments.",
+        message: "Reconnect Classroom to check for new work and refresh selected items.",
         badge: "reconnect needed",
       },
     }[state];
@@ -953,8 +942,8 @@ test("Classroom status UI normalizes controls and copy", async ({ page }) => {
   connector = connectorFor("connected", {
     lastSyncAt: "2026-06-25T06:00:00.000Z",
     syncSummary: {
-      importedCourses: 1,
-      importedAssignments: 2,
+      discoveredCourses: 1,
+      discoveredAssignments: 2,
       updatedAssignments: 1,
       emptyClassroom: false,
     },
@@ -1087,7 +1076,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await closeAiDrawer(page);
 
   await clickNav(page, "Today");
-  await expect(page.locator("#classroom-panel")).toContainText(/planning import active|connected|demo/i);
+  await expect(page.locator("#classroom-panel")).toContainText(/work ready to review|connected|demo/i);
   await expectClassroomControls(page, { sync: true, disconnect: true });
   await page.route("**/api/classroom/sync", async (route) => {
     const current = await fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json());
@@ -1102,23 +1091,37 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
       status: "open",
       source: "google_classroom",
       readOnly: true,
+      academicContextIncluded: true,
+      selectionState: "imported",
+      handedIn: false,
+      submissionState: "NEW",
+    }];
+    current.classroomItems = [{
+      id: "classroom_item_e2e",
+      itemType: "assignment",
+      title: "E2E Classroom assignment",
+      courseTitle: course.title,
+      dueAt: "2026-07-02T23:59:00.000Z",
+      selectionState: "imported",
+      academicContextIncluded: true,
+      handedIn: false,
     }];
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         state: current,
         connector: { connected: true, state: "connected", actions: { sync: true, disconnect: true }, syncHistory: [] },
-        summary: { importedAssignments: 1, updatedAssignments: 0 },
+        summary: { discoveredAssignments: 0, updatedAssignments: 1 },
         policy: { automaticChecksEnabled: false },
       }),
     });
   });
-  await page.getByRole("button", { name: "Sync Classroom" }).click();
-  await waitForNotLoading(page.locator("#classroom-panel"), "Syncing Classroom assignments");
-  await expect(page.locator("#classroom-panel")).toContainText("planning import active");
+  await page.getByRole("button", { name: "Check Classroom" }).click();
+  await waitForNotLoading(page.locator("#classroom-panel"), "Checking Classroom work");
+  await expect(page.locator("#classroom-panel")).toContainText("work ready to review");
   await expectNoClassroomDeveloperCopy(page, "mock Classroom sync");
   await expect(page.locator("#assignment-list")).toContainText("Google Classroom");
-  await expect(page.locator("#assignment-list")).toContainText("Analyze assignment");
+  await expect(page.locator("#assignment-list")).toContainText("Prepare assignment");
   await page.route("**/api/assignment-flow", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
@@ -1132,7 +1135,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
       },
     }),
   }));
-  await page.getByRole("button", { name: "Analyze assignment" }).first().click();
+  await page.getByRole("button", { name: "Prepare assignment" }).first().click();
   await expect(page.locator("#view-title")).toHaveText("Studio");
   await waitForNotLoading(page.locator("#flow-result"), "Checking coverage and next learning step");
   await expect(page.locator("#flow-result")).toContainText(/Mastery|Practice|Revision|Roadmap|Topic coverage/i);

@@ -59,6 +59,7 @@ const USER_TABLES_FOR_CLEANUP = [
   "notes",
   "timetable_events",
   "assignments",
+  "classroom_items",
   "exams",
   "syllabi",
   "topics",

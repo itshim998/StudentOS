@@ -52,11 +52,11 @@ function syncRunFromSummary({ session, config, summary = {}, status = "completed
     status,
     startedAt,
     completedAt,
-    importedCourses: summary.importedCourses || 0,
-    updatedCourses: summary.updatedCourses || 0,
-    importedAssignments: summary.importedAssignments || 0,
+    importedCourses: 0,
+    updatedCourses: 0,
+    importedAssignments: 0,
     updatedAssignments: summary.updatedAssignments || 0,
-    importedMaterials: summary.importedMaterials || 0,
+    importedMaterials: 0,
     updatedMaterials: summary.updatedMaterials || 0,
     skippedItems: summary.skippedItems || 0,
     errorCount: error ? 1 : errors.length,
@@ -71,6 +71,9 @@ function syncRunFromSummary({ session, config, summary = {}, status = "completed
       emptyClassroom: summary.emptyClassroom === true,
       importedTopics: summary.importedTopics || 0,
       updatedTopics: summary.updatedTopics || 0,
+      discoveredCourses: summary.discoveredCourses || 0,
+      discoveredAssignments: summary.discoveredAssignments || 0,
+      discoveredMaterials: summary.discoveredMaterials || 0,
       errorCode: error ? safeErrorCode(error) : errors.length ? "google_classroom_partial_sync" : null,
       connectorState: error?.connectorState || null,
     },
@@ -96,20 +99,20 @@ function classroomUiForState(stateName, { mode = "", lastSyncAt = "", summary = 
     return {
       title: mode === "mock" ? "Classroom preview ready" : "Classroom connected",
       message: mode === "mock"
-        ? "Choose the coursework you want to include in your study plan."
-        : "StudentOS can refresh coursework for your study plan. You stay in control of submissions.",
-      badge: "planning import active",
+        ? "Choose the work you want to include in your academic context."
+        : "StudentOS can find Classroom work for you to review. You stay in control of what is added.",
+      badge: "work ready to review",
       detail: lastSyncAt
-        ? "Classroom assignments have been refreshed."
+        ? "Classroom work has been refreshed for review."
         : summary
-          ? "Classroom coursework has been added to your study plan."
-          : "Ready to refresh assignments.",
+          ? "Choose what to add to your academic context."
+          : "Ready to check for Classroom work.",
     };
   }
   if (stateName === "disconnected") {
     return {
       title: "Classroom can be connected",
-      message: "Connect when you want StudentOS to include Classroom coursework in your study plan.",
+      message: "Connect when you want to choose Classroom work for your academic context.",
       badge: "optional setup",
       detail: "No Classroom connection is active.",
     };
@@ -117,7 +120,7 @@ function classroomUiForState(stateName, { mode = "", lastSyncAt = "", summary = 
   if (stateName === "reconnect_required") {
     return {
       title: "Reconnect Classroom",
-      message: "Reconnect Classroom to refresh imported assignments.",
+      message: "Reconnect Classroom to check for new work and refresh selected items.",
       badge: "reconnect needed",
       detail: "Existing StudentOS work was not changed.",
     };
@@ -125,7 +128,7 @@ function classroomUiForState(stateName, { mode = "", lastSyncAt = "", summary = 
   if (stateName === "setup_required") {
     return {
       title: "Classroom setup is not active",
-      message: "Your workspace is ready. Classroom importing can be turned on later.",
+      message: "Your workspace is ready. Classroom can be connected later.",
       badge: "workspace ready",
       detail: "Classroom actions are hidden until setup is complete.",
     };
@@ -133,7 +136,7 @@ function classroomUiForState(stateName, { mode = "", lastSyncAt = "", summary = 
   if (stateName === "disabled") {
     return {
       title: "Classroom setup is not active",
-      message: "Your workspace is ready. Classroom importing can be turned on later.",
+      message: "Your workspace is ready. Classroom can be connected later.",
       badge: "workspace ready",
       detail: "Classroom actions are hidden for this workspace.",
     };
@@ -208,6 +211,25 @@ export async function getClassroomConnectorStatus({ state, session, userId, repo
   };
 }
 
+export function shouldRunAutomaticClassroomCheck({ state, policy = {}, now = new Date() } = {}) {
+  if (policy.autoCheckEnabled !== true) return { due: false, reason: "manual_only" };
+  const prefs = state?.studentProfile?.preferences?.googleClassroom || {};
+  const lastSyncAt = prefs.lastSyncAt || null;
+  if (policy.oncePerTrial === true && lastSyncAt) return { due: false, reason: "trial_check_used" };
+  if (!lastSyncAt) return { due: true, reason: "first_check" };
+  const lastSync = Date.parse(lastSyncAt);
+  const intervalDays = Number(policy.intervalDays || 0);
+  if (!Number.isFinite(lastSync) || !Number.isFinite(intervalDays) || intervalDays <= 0) {
+    return { due: false, reason: "schedule_unavailable" };
+  }
+  const dueAt = lastSync + intervalDays * 24 * 60 * 60 * 1000;
+  return {
+    due: now.getTime() >= dueAt,
+    reason: now.getTime() >= dueAt ? "scheduled_check_due" : "schedule_not_due",
+    dueAt: new Date(dueAt).toISOString(),
+  };
+}
+
 async function resolveOAuthToken({ session, repository, config, fetchImpl = fetch, now = new Date() }) {
   let token = await getPersistentClassroomToken({ session, repository, config, now });
   if (!token) {
@@ -247,7 +269,7 @@ async function resolveOAuthToken({ session, repository, config, fetchImpl = fetc
         lastError: "token_refresh_failed",
         now,
       });
-      const wrapped = new Error("Reconnect Classroom to refresh imported assignments.");
+      const wrapped = new Error("Reconnect Classroom to check for new work and refresh selected items.");
       wrapped.status = 401;
       wrapped.connectorState = "reconnect_required";
       throw wrapped;

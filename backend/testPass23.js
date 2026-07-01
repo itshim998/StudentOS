@@ -15,7 +15,7 @@ import {
   createClassroomOAuthState,
   verifyClassroomOAuthState,
 } from "./connectors/googleClassroom/oauth.js";
-import { importClassroomSnapshotIntoState } from "./connectors/googleClassroom/mapper.js";
+import { importClassroomSnapshotIntoState, selectClassroomItemsForAcademicContext } from "./connectors/googleClassroom/mapper.js";
 import { syncGoogleClassroomIntoState, getClassroomConnectorStatus } from "./connectors/googleClassroom/syncService.js";
 import { saveClassroomToken, getClassroomToken, safeClassroomTokenMetadata } from "./connectors/googleClassroom/tokenStore.js";
 import { redactSecrets } from "./observability/logger.js";
@@ -114,15 +114,15 @@ const snapshot = {
   }],
 };
 const firstSummary = importClassroomSnapshotIntoState(state, snapshot, { now });
-assert.equal(firstSummary.importedCourses, 1);
-assert.equal(firstSummary.importedAssignments, 1);
-assert.equal(firstSummary.importedMaterials, 2);
+assert.equal(firstSummary.discoveredCourses, 1);
+assert.equal(firstSummary.discoveredAssignments, 1);
+assert.equal(firstSummary.discoveredMaterials, 2);
 const secondSummary = importClassroomSnapshotIntoState(state, snapshot, { now });
 assert.equal(secondSummary.importedCourses, 0);
-assert.equal(secondSummary.updatedCourses, 1);
 assert.equal(secondSummary.updatedAssignments, 1);
-assert.equal(state.assignments.filter((item) => item.providerCourseWorkId === "work_1").length, 1);
-assert(state.sourceMaterials.some((item) => item.providerCourseWorkMaterialId === "material_post_1"));
+assert.equal(state.assignments.filter((item) => item.providerCourseWorkId === "work_1").length, 0);
+assert(state.classroomItems.some((item) => item.providerCourseWorkMaterialId === "material_post_1"));
+selectClassroomItemsForAcademicContext(state, [state.classroomItems.find((item) => item.providerCourseWorkId === "work_1" && item.itemType === "assignment").id], { now });
 const importedAssignment = state.assignments.find((item) => item.providerCourseWorkId === "work_1");
 assert.equal(importedAssignment.source, "google_classroom");
 assert.equal(importedAssignment.readOnly, true);
@@ -137,8 +137,8 @@ const syncResult = await syncGoogleClassroomIntoState({
   config: getGoogleClassroomConfig({ STUDENTOS_GOOGLE_CLASSROOM_MODE: "mock" }),
   now,
 });
-assert(syncResult.summary.importedAssignments + syncResult.summary.updatedAssignments > 0);
-assert(mockState.auditLog.some((event) => event.action === "google_classroom.sync_completed"));
+assert(syncResult.summary.discoveredAssignments + syncResult.summary.updatedAssignments > 0);
+assert(mockState.auditLog.some((event) => event.action === "google_classroom.discovery_completed"));
 
 const disabledStatus = await getClassroomConnectorStatus({
   state: mockState,
@@ -181,6 +181,6 @@ for (const file of [server, frontend]) {
   assert.equal(file.includes("turnIn"), false);
   assert.equal(file.includes("modifyAttachments"), false);
 }
-assert(frontend.includes("You stay in control of submissions"));
+assert(frontend.includes("You choose what gets added"));
 
 console.log("PASS | StudentOS Pass 23 Google Classroom read-only connector tests passed");

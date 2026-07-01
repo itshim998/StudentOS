@@ -120,17 +120,17 @@ assert.throws(
 assert.equal(assertAcademicContextSelection(selectionState, selectionState.sourceMaterials.slice(0, 5).map((item) => item.id)).status, "full");
 
 const retentionState = readyState("plus");
-retentionState.sourceMaterials = [
-  source("selected_old", { classroom: true, createdAt: "2024-01-01T00:00:00.000Z" }),
-  source("unselected_middle", { classroom: true, createdAt: "2025-01-01T00:00:00.000Z" }),
-  source("unselected_new", { classroom: true, createdAt: "2026-01-01T00:00:00.000Z" }),
+retentionState.classroomItems = [
+  { id: "selected_old", itemType: "material", selectionState: "imported", academicContextIncluded: true, lastSeenAt: "2024-01-01T00:00:00.000Z" },
+  { id: "unselected_middle", itemType: "material", selectionState: "discovered", academicContextIncluded: false, lastSeenAt: "2025-01-01T00:00:00.000Z" },
+  { id: "unselected_new", itemType: "material", selectionState: "discovered", academicContextIncluded: false, lastSeenAt: "2026-01-01T00:00:00.000Z" },
 ];
 retentionState.studentProfile.productLifecycle.selectedMaterialIds = ["selected_old"];
 importClassroomSnapshotIntoState(retentionState, { courses: [], courseWork: [], courseWorkMaterials: [], submissions: [] }, {
   retention: { maxImportedAssignments: 10, maxImportedMaterials: 1 },
 });
-assert(retentionState.sourceMaterials.some((item) => item.id === "selected_old"), "selected Classroom material must never be silently evicted");
-assert.equal(retentionState.sourceMaterials.length, 1);
+assert.equal(retentionState.classroomItems.find((item) => item.id === "selected_old")?.selectionState, "imported", "selected Classroom material must never be silently evicted");
+assert.equal(retentionState.classroomItems.filter((item) => item.selectionState !== "archived").length, 1);
 
 assert.equal(getAssistantExecutionPolicy(readyState("starter")).depth, "guided");
 assert.equal(getAssistantExecutionPolicy(readyState("starter")).retrievalLimit, 3);

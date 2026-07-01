@@ -6,7 +6,7 @@ import {
   handleAssignmentLearningFlow,
   normalizeLearningState,
 } from "./domain/studentosDomain.js";
-import { importClassroomSnapshotIntoState } from "./connectors/googleClassroom/mapper.js";
+import { importClassroomSnapshotIntoState, selectClassroomItemsForAcademicContext } from "./connectors/googleClassroom/mapper.js";
 
 function supabaseShapedState(overrides = {}) {
   return {
@@ -38,6 +38,8 @@ function supabaseShapedState(overrides = {}) {
       providerCourseWorkId: "classroom_work_1",
       topicIds: ["topic_number_systems"],
       readOnly: true,
+      selectionState: "imported",
+      academicContextIncluded: true,
     }],
     ...overrides,
   };
@@ -87,6 +89,8 @@ const partialState = supabaseShapedState({
     topicIds: ["topic_cache_memory"],
     source: "google_classroom",
     readOnly: true,
+    selectionState: "imported",
+    academicContextIncluded: true,
   }],
 });
 const partialFlow = handleAssignmentLearningFlow(partialState, "assignment_cache");
@@ -100,6 +104,8 @@ const noTopicAssignment = {
   title: "Imported assignment without mapped topics",
   source: "google_classroom",
   readOnly: true,
+  selectionState: "imported",
+  academicContextIncluded: true,
 };
 const noTopicCoverage = determineAssignmentCoverage(supabaseShapedState(), noTopicAssignment);
 assert.equal(noTopicCoverage.status, "uncovered");
@@ -123,6 +129,8 @@ const missingCourseState = supabaseShapedState({
     topicIds: ["topic_number_systems"],
     source: "google_classroom",
     readOnly: true,
+    selectionState: "imported",
+    academicContextIncluded: true,
   }],
 });
 const missingCourseFlow = handleAssignmentLearningFlow(missingCourseState, "assignment_missing_course_id");
@@ -158,7 +166,8 @@ const importSummary = importClassroomSnapshotIntoState(classroomState, {
     state: "NEW",
   }],
 });
-assert.equal(importSummary.importedAssignments, 1);
+assert.equal(importSummary.discoveredAssignments, 1);
+selectClassroomItemsForAcademicContext(classroomState, [classroomState.classroomItems.find((item) => item.itemType === "assignment").id]);
 const importedAssignment = classroomState.assignments[0];
 const importedFlow = handleAssignmentLearningFlow(classroomState, importedAssignment.id);
 assert.equal(importedFlow.coverage.status, "uncovered");

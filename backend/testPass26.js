@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { getAssignmentInsights, handleAssignmentLearningFlow } from "./domain/studentosDomain.js";
 import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
-import { importClassroomSnapshotIntoState } from "./connectors/googleClassroom/mapper.js";
+import { importClassroomSnapshotIntoState, selectClassroomItemsForAcademicContext } from "./connectors/googleClassroom/mapper.js";
 import { classifyClassroomError } from "./connectors/googleClassroom/apiClient.js";
 import { GOOGLE_CLASSROOM_READONLY_SCOPES, assertNoGoogleClassroomWriteScopes } from "./connectors/googleClassroom/config.js";
 
@@ -41,10 +41,14 @@ const summary = importClassroomSnapshotIntoState(state, {
   }],
 }, { now });
 
-assert.equal(summary.importedCourses, 1);
-assert.equal(summary.importedAssignments, 1);
-assert.equal(summary.importedTopics, 1);
+assert.equal(summary.discoveredCourses, 1);
+assert.equal(summary.discoveredAssignments, 1);
+assert.equal(summary.discoveredMaterials, 1);
 assert.equal(summary.emptyClassroom, false);
+assert.equal(state.assignments.some((assignment) => assignment.providerCourseWorkId === "work_motion_1"), false);
+assert.equal(state.sourceMaterials.some((source) => source.providerCourseWorkId === "work_motion_1"), false);
+const discoveredAssignment = state.classroomItems.find((item) => item.providerCourseWorkId === "work_motion_1" && item.itemType === "assignment");
+selectClassroomItemsForAcademicContext(state, [discoveredAssignment.id]);
 const importedCourse = state.courses.find((course) => course.providerCourseId === "course_native_1");
 const importedAssignment = state.assignments.find((assignment) => assignment.providerCourseWorkId === "work_motion_1");
 assert(importedCourse);
@@ -84,13 +88,13 @@ assert.equal(classifyClassroomError(401, { error: { message: "Invalid Credential
 assert.equal(classifyClassroomError(429, { error: { message: "Quota exceeded" } }).code, "google_classroom_rate_limited");
 
 const app = await readFile(new URL("../frontend/scripts/app.js", import.meta.url), "utf8");
-assert(app.includes("Google Classroom import"));
-assert(app.includes("Analyze assignment"));
+assert(app.includes("New Classroom work found"));
+assert(app.includes("Review and add"));
 assert(app.includes("No active Classroom coursework was found"));
-assert(app.includes("learning flow ready"));
+assert(app.includes("Selected for academic context"));
 assert(app.includes("Google Classroom"));
 assert(app.includes("Classroom can be connected"));
-assert(app.includes("Reconnect Classroom to refresh imported assignments"));
+assert(app.includes("Reconnect Classroom to check for new work and refresh selected items"));
 assert(app.includes("Classroom syncing is busy right now"));
 assert.equal(app.includes("Classroom import unavailable"), false);
 assert.equal(app.includes("no writeback"), false);

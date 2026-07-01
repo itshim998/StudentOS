@@ -1,3 +1,5 @@
+import { isAcademicContextRecord } from "../connectors/googleClassroom/mapper.js";
+
 function slug(value, fallback = "item") {
   const clean = String(value || "")
     .toLowerCase()
@@ -182,14 +184,14 @@ function examPriority(course, now = new Date()) {
 
 export function generateAcademicRoadmap(state, { now = new Date() } = {}) {
   const items = [];
-  const weakTopicIds = new Set((state.topics || [])
+  const weakTopicIds = new Set((state.topics || []).filter(isAcademicContextRecord)
     .filter((topic) => (topic.weakSignals || []).length || topic.mastery === "revision_required")
     .map((topic) => topic.id));
-  const coursesByExam = [...(state.courses || [])]
+  const coursesByExam = [...(state.courses || [])].filter(isAcademicContextRecord)
     .sort((left, right) => toDate(left.examDate, addDays(now, 90)) - toDate(right.examDate, addDays(now, 90)));
 
   for (const course of coursesByExam) {
-    const courseTopics = (state.topics || []).filter((topic) => topic.courseId === course.id);
+    const courseTopics = (state.topics || []).filter((topic) => topic.courseId === course.id && isAcademicContextRecord(topic));
     const firstWeak = courseTopics.find((topic) => weakTopicIds.has(topic.id)) || courseTopics[0] || null;
     const priority = examPriority(course, now);
     if (course.examDate) {
@@ -234,7 +236,7 @@ export function generateAcademicRoadmap(state, { now = new Date() } = {}) {
   }
 
   const dueWork = [...(state.assignments || [])]
-    .filter((assignment) => assignment.status !== "done")
+    .filter((assignment) => isAcademicContextRecord(assignment) && !assignment.handedIn && !["done", "completed", "returned", "graded", "submitted"].includes(String(assignment.status || "").toLowerCase()))
     .sort((left, right) => toDate(left.dueDate, addDays(now, 90)) - toDate(right.dueDate, addDays(now, 90)))
     .slice(0, 3);
   for (const assignment of dueWork) {

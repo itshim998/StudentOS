@@ -34,6 +34,7 @@ export function buildDeletionDryRunReport(state, requestId, now = new Date()) {
     group("syllabi", "Syllabi", state.syllabi),
     group("exams", "Exams", state.exams),
     group("assignments", "Assignments", state.assignments),
+    group("classroom_items", "Classroom work choices", state.classroomItems),
     group("timetable_events", "Timetable events", state.timetable),
     group("notes", "Notes", state.notes),
     group("source_materials", "Private sources", state.sourceMaterials),

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 import { StudentOsRepository } from "./repository/studentOsRepository.js";
+import { selectClassroomItemsForAcademicContext } from "./connectors/googleClassroom/mapper.js";
 import { buildDataExportPackage } from "./account/exportService.js";
 import {
   GOOGLE_CLASSROOM_READONLY_SCOPES,
@@ -150,9 +151,10 @@ const syncResult = await syncGoogleClassroomIntoState({
   fetchImpl,
   now: new Date(now.getTime() + 2000),
 });
-assert.equal(syncResult.summary.importedCourses, 1);
-assert.equal(syncResult.summary.importedAssignments, 1);
-assert.equal(state.assignments.filter((item) => item.providerCourseWorkId === "work_1").length, 1);
+assert.equal(syncResult.summary.discoveredCourses, 1);
+assert.equal(syncResult.summary.discoveredAssignments, 1);
+assert.equal(state.assignments.filter((item) => item.providerCourseWorkId === "work_1").length, 0);
+selectClassroomItemsForAcademicContext(state, [state.classroomItems.find((item) => item.providerCourseWorkId === "work_1" && item.itemType === "assignment").id]);
 assert(calls.some((call) => call.url.includes("oauth2.googleapis.com/token") && call.method === "POST"));
 const refreshedToken = await getPersistentClassroomToken({ session, repository, config, now: new Date(now.getTime() + 3000) });
 assert.equal(refreshedToken.accessToken, "refreshed-access-token");
@@ -236,7 +238,7 @@ for (const file of [server, frontend, migration]) {
   assert.equal(file.includes("turnIn"), false);
   assert.equal(file.includes("modifyAttachments"), false);
 }
-assert(frontend.includes("You stay in control of submissions"));
+assert(frontend.includes("You choose what gets added"));
 assert(migration.includes("classroom_tokens"));
 assert(migration.includes("revoke all on public.classroom_tokens from authenticated"));
 

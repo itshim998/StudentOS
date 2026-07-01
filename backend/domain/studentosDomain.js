@@ -1,4 +1,5 @@
 import { confidenceLabel, cosineSimilarity, createDeterministicEmbedding } from "../embeddings/embeddingService.js";
+import { isAcademicContextRecord } from "../connectors/googleClassroom/mapper.js";
 
 export const AI_VERBS = Object.freeze(["Ask", "Plan", "Make", "Review"]);
 
@@ -76,6 +77,7 @@ const LEARNING_STATE_ARRAYS = [
   "accountDeletionRequests",
   "accountDeletionReviews",
   "roleInvitations",
+  "classroomItems",
 ];
 
 export function normalizeLearningState(state = {}) {
@@ -190,19 +192,21 @@ function uniqueStrings(values) {
 }
 
 function topicById(state, topicId) {
-  return state.topics.find((topic) => topic.id === topicId) || null;
+  return state.topics.find((topic) => topic.id === topicId && isAcademicContextRecord(topic)) || null;
 }
 
 function courseById(state, courseId) {
-  return state.courses.find((course) => course.id === courseId) || null;
+  return state.courses.find((course) => course.id === courseId && isAcademicContextRecord(course)) || null;
 }
 
 function sourcesForTopic(state, topic) {
-  return (state.sourceMaterials || []).filter((source) => topic.sourceMaterialIds?.includes(source.id));
+  return (state.sourceMaterials || []).filter((source) =>
+    isAcademicContextRecord(source) && topic.sourceMaterialIds?.includes(source.id));
 }
 
 function readySourceMaterials(state) {
   return (state.sourceMaterials || []).filter((source) =>
+    isAcademicContextRecord(source) &&
     !source.deletedAt &&
     ["ready", "indexed"].includes(source.status || source.extractionStatus || "ready"));
 }
@@ -215,7 +219,7 @@ function readySourceChunks(state) {
 
 export function getGroundingContext(state, message = "") {
   const topic = findBestTopicForMessage(state, message);
-  const course = courseById(state, topic.courseId) || state.courses[0];
+  const course = courseById(state, topic?.courseId) || state.courses.find(isAcademicContextRecord);
   return { topic, course };
 }
 
@@ -493,9 +497,9 @@ export function determineTopicCoverage(state, topicOrId) {
 export function determineAssignmentCoverage(state, assignmentOrId) {
   normalizeLearningState(state);
   const assignment = typeof assignmentOrId === "string"
-    ? state.assignments.find((item) => item.id === assignmentOrId)
+    ? state.assignments.find((item) => item.id === assignmentOrId && isAcademicContextRecord(item))
     : assignmentOrId;
-  if (!assignment) {
+  if (!assignment || !isAcademicContextRecord(assignment)) {
     return {
       status: "uncovered",
       confidence: 0,
@@ -544,7 +548,11 @@ export function determineAssignmentCoverage(state, assignmentOrId) {
 
 export function getAssignmentInsights(state) {
   normalizeLearningState(state);
-  return state.assignments.map((assignment) => ({
+  return state.assignments.filter((assignment) =>
+    isAcademicContextRecord(assignment) &&
+    assignment.handedIn !== true &&
+    !["completed", "done", "graded", "returned", "submitted"].includes(String(assignment.status || "").toLowerCase()))
+    .map((assignment) => ({
     assignmentId: assignment.id,
     ...determineAssignmentCoverage(state, assignment),
   }));
@@ -681,7 +689,7 @@ export function createTutorLesson({ course, topic, sources = [], trigger = "gene
 
 export function handleAssignmentLearningFlow(state, assignmentId) {
   normalizeLearningState(state);
-  const assignment = state.assignments.find((item) => item.id === assignmentId);
+  const assignment = state.assignments.find((item) => item.id === assignmentId && isAcademicContextRecord(item));
   if (!assignment) {
     const error = new Error("Assignment not found");
     error.status = 404;
@@ -1074,25 +1082,25 @@ export function buildExtensionDecisionDraft({ profile, assignment, reason }) {
 
 function findBestTopicForMessage(state, message) {
   const lower = String(message || "").toLowerCase();
-  const matchedTopic = state.topics.find((topic) => {
+  const matchedTopic = state.topics.filter(isAcademicContextRecord).find((topic) => {
     const words = topicTitleSlug(topic.title);
     return words.some((word) => lower.includes(word));
   });
   if (matchedTopic) return matchedTopic;
 
-  const dueAssignment = [...state.assignments]
+  const dueAssignment = [...state.assignments].filter(isAcademicContextRecord)
     .sort((left, right) => Date.parse(left.dueDate || "") - Date.parse(right.dueDate || ""))[0];
-  return topicById(state, dueAssignment?.topicIds?.[0]) || state.topics[0];
+  return topicById(state, dueAssignment?.topicIds?.[0]) || state.topics.find(isAcademicContextRecord);
 }
 
 export function buildStudyPlan(state, topic) {
-  const course = courseById(state, topic.courseId) || state.courses[0];
+  const course = courseById(state, topic.courseId) || state.courses.find(isAcademicContextRecord);
   const pressure = examPressureForCourse(course);
   const preferences = state.studentProfile?.preferences || {};
-  const weakTopics = state.topics
+  const weakTopics = state.topics.filter(isAcademicContextRecord)
     .filter((item) => item.courseId === course.id && (item.weakSignals?.length || ["revision_required", "not_started"].includes(item.mastery)))
     .slice(0, 4);
-  const dueWork = state.assignments
+  const dueWork = state.assignments.filter(isAcademicContextRecord)
     .filter((assignment) => assignment.courseId === course.id)
     .sort((left, right) => Date.parse(left.dueDate || "") - Date.parse(right.dueDate || ""))
     .slice(0, 3);
@@ -1276,7 +1284,7 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
 
 export function getTodayNextActions(state) {
   return [...state.roadmap]
-    .filter((item) => item.status === "open")
+    .filter((item) => item.status === "open" && !item.archived)
     .sort((left, right) => {
       const priorityDiff = (PRIORITY_RANK[left.priority] ?? 9) - (PRIORITY_RANK[right.priority] ?? 9);
       if (priorityDiff !== 0) return priorityDiff;

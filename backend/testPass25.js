@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { getAssignmentInsights, handleAssignmentLearningFlow } from "./domain/studentosDomain.js";
 import { createSeedState } from "../tests/fixtures/studentAcademicState.js";
 import { StudentOsRepository } from "./repository/studentOsRepository.js";
+import { selectClassroomItemsForAcademicContext } from "./connectors/googleClassroom/mapper.js";
 import {
   GOOGLE_CLASSROOM_READONLY_SCOPES,
   getGoogleClassroomConfig,
@@ -128,10 +129,10 @@ const syncResult = await syncGoogleClassroomIntoState({
   fetchImpl: classroomFetchForSnapshot(),
   now,
 });
-assert.equal(syncResult.summary.importedCourses, 1);
-assert.equal(syncResult.summary.importedAssignments, 1);
-assert.equal(syncResult.summary.importedTopics, 1);
-assert.equal(syncResult.summary.importedMaterials, 1);
+assert.equal(syncResult.summary.discoveredCourses, 1);
+assert.equal(syncResult.summary.discoveredAssignments, 1);
+assert.equal(syncResult.summary.discoveredMaterials, 1);
+selectClassroomItemsForAcademicContext(state, [state.classroomItems.find((item) => item.providerCourseWorkId === "work_quad_1" && item.itemType === "assignment").id]);
 const importedAssignment = state.assignments.find((assignment) => assignment.providerCourseWorkId === "work_quad_1");
 assert(importedAssignment);
 assert.equal(importedAssignment.source, "google_classroom");
@@ -154,13 +155,12 @@ const secondSync = await syncGoogleClassroomIntoState({
   now: new Date(now.getTime() + 1000),
 });
 assert.equal(secondSync.summary.importedCourses, 0);
-assert.equal(secondSync.summary.updatedCourses, 1);
 assert.equal(secondSync.summary.importedAssignments, 0);
 assert.equal(secondSync.summary.updatedAssignments, 1);
 assert.equal(state.assignments.filter((assignment) => assignment.providerCourseWorkId === "work_quad_1").length, 1);
 assert.equal(state.topics.filter((topic) => topic.providerCourseWorkId === "work_quad_1").length, 1);
 let history = await repository.listClassroomSyncRuns(session, { limit: 5 });
-assert(history.some((run) => run.status === "completed" && run.importedAssignments === 1));
+assert(history.some((run) => run.status === "completed" && run.payload?.discoveredAssignments === 1));
 assert(history.some((run) => run.status === "completed" && run.updatedAssignments === 1));
 
 const emptyState = createSeedState(now);

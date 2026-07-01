@@ -395,6 +395,10 @@ export function buildSafeExportPreview(state) {
     topics: (state.topics || []).map((item) => pick(item, ["id", "courseId", "title", "mastery", "coverageState"])),
     exams: (state.exams || []).map((item) => pick(item, ["id", "courseId", "title", "examDate", "weight"])),
     assignments: (state.assignments || []).map((item) => pick(item, ["id", "courseId", "title", "dueDate", "status"])),
+    classroomItems: (state.classroomItems || []).map((item) => pick(item, [
+      "id", "itemType", "title", "courseTitle", "dueAt", "postedAt", "submissionState", "handedIn",
+      "selectionState", "selectedAt", "importedAt", "academicContextIncluded", "lastSeenAt",
+    ])),
     timetable: (state.timetable || []).map((item) => pick(item, ["id", "courseId", "title", "startsAt", "endsAt"])),
     notes: (state.notes || []).map((item) => pick(item, ["id", "courseId", "topicId", "title", "body"])),
     sourceMaterials: (state.sourceMaterials || []).map((item) => pick(item, [

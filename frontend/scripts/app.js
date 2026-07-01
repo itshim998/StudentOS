@@ -431,7 +431,7 @@ function classroomErrorCopy(error) {
   const message = String(error?.message || "");
   const lower = message.toLowerCase();
   if (lower.includes("insufficient") || lower.includes("scope") || lower.includes("expired") || lower.includes("revoked") || lower.includes("invalid credentials") || lower.includes("unauthorized") || lower.includes("reconnect")) {
-    return "Reconnect Classroom to refresh imported assignments.";
+    return "Reconnect Classroom to check for new work and refresh selected items.";
   }
   if (lower.includes("quota") || lower.includes("rate") || lower.includes("429") || lower.includes("busy")) {
     return "Classroom syncing is busy right now. You can keep working in StudentOS.";
@@ -794,15 +794,16 @@ function classroomFreshnessTimestamp(item = {}) {
 }
 
 function sortStudentWork(left, right) {
-  const leftClassroom = left.source === "google_classroom";
-  const rightClassroom = right.source === "google_classroom";
-  if (leftClassroom && rightClassroom) {
-    const freshness = classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left);
-    if (freshness) return freshness;
-    return String(left.id || left.title || "").localeCompare(String(right.id || right.title || ""));
-  }
-  if (leftClassroom !== rightClassroom) return leftClassroom ? -1 : 1;
-  return timestampFor(left.dueDate || left.dueAt) - timestampFor(right.dueDate || right.dueAt);
+  const due = timestampFor(left.dueAt || left.dueDate) - timestampFor(right.dueAt || right.dueDate);
+  if (due) return due;
+  return timestampFor(left.postedAt || left.createdAt) - timestampFor(right.postedAt || right.createdAt);
+}
+
+function assignmentNeedsAction(assignment = {}) {
+  const status = String(assignment.status || "").toLowerCase();
+  return assignment.handedIn !== true &&
+    !assignment.archived &&
+    !["archived", "completed", "done", "graded", "returned", "submitted"].includes(status);
 }
 
 function getNextActions() {
@@ -811,7 +812,12 @@ function getNextActions() {
 }
 
 function getDueAssignments() {
-  return [...(state.assignments || [])].sort(sortStudentWork);
+  const selectedWork = (state.assignments || []).filter(assignmentNeedsAction).sort(sortStudentWork);
+  const selectedIds = new Set(selectedWork.map((item) => item.id));
+  const reviewWork = (state.classroomDueWork || [])
+    .filter((item) => item.reviewRequired && assignmentNeedsAction(item) && !selectedIds.has(item.id))
+    .sort(sortStudentWork);
+  return [...selectedWork, ...reviewWork];
 }
 
 function getNextTimetableBlock() {
@@ -823,7 +829,7 @@ function getCourseTopics(courseId) {
 }
 
 function getCourseAssignments(courseId) {
-  return (state.assignments || []).filter((assignment) => assignment.courseId === courseId).sort(sortStudentWork);
+  return (state.assignments || []).filter((assignment) => assignment.courseId === courseId && assignmentNeedsAction(assignment)).sort(sortStudentWork);
 }
 
 function getCourseSources(courseId) {
@@ -980,16 +986,16 @@ function classroomUi(connector = {}, summary = null, history = []) {
     return {
       title: connector.mode === "mock" ? "Classroom preview ready" : "Classroom connected",
       message: connector.mode === "mock"
-        ? "Choose the coursework you want to include in your study plan."
-        : "StudentOS can refresh coursework for your study plan. You stay in control of submissions.",
-      badge: "planning import active",
-      detail: lastSync ? `Last refreshed ${formatDate(lastSync)}` : summary ? "Classroom coursework has been added to your study plan." : "Ready to refresh assignments.",
+        ? "Choose the work you want to include in your academic context."
+        : "StudentOS can find Classroom work for you to review. You choose what gets added.",
+      badge: "work ready to review",
+      detail: lastSync ? `Last checked ${formatDate(lastSync)}` : summary ? "Choose what to add to your academic context." : "Ready to check for Classroom work.",
     };
   }
   if (stateName === "disconnected") {
     return {
       title: "Classroom can be connected",
-      message: "Connect when you want StudentOS to include Classroom coursework in your study plan.",
+      message: "Connect when you want to choose Classroom work for your academic context.",
       badge: "optional setup",
       detail: "No Classroom connection is active.",
     };
@@ -997,14 +1003,14 @@ function classroomUi(connector = {}, summary = null, history = []) {
   if (stateName === "reconnect_required") {
     return {
       title: "Reconnect Classroom",
-      message: "Reconnect Classroom to refresh imported assignments.",
+      message: "Reconnect Classroom to check for new work and refresh selected items.",
       badge: "reconnect needed",
       detail: "Existing StudentOS work was not changed.",
     };
   }
   return {
     title: "Classroom setup is not active",
-    message: "Your workspace is ready. Classroom importing can be turned on later.",
+    message: "Your workspace is ready. Classroom can be connected later.",
     badge: "workspace ready",
     detail: "Classroom actions are hidden until setup is complete.",
   };
@@ -1550,19 +1556,19 @@ function classroomStepMarkup(lifecycle) {
 function materialCandidates() {
   const courses = new Map((state.courses || []).map((course) => [course.id, course.title]));
   const rows = [
-    ...(state.sourceMaterials || []).map((item) => ({
+    ...(state.sourceMaterials || []).filter((item) => item.source !== "google_classroom" && item.provider !== "google_classroom").map((item) => ({
       id: item.id,
       title: item.title,
       course: courses.get(item.courseId) || "Academic context",
-      type: item.source === "google_classroom" || item.provider === "google_classroom" ? "Classroom material" : "Uploaded file",
+      type: "Uploaded file",
       date: item.updateTime || item.updatedAt || item.creationTime || item.createdAt || item.dueDate || item.importedAt || "",
     })),
-    ...(state.assignments || []).filter((item) => item.source === "google_classroom").map((item) => ({
+    ...(state.classroomItems || []).filter((item) => item.selectionState !== "archived").map((item) => ({
       id: item.id,
       title: item.title,
-      course: courses.get(item.courseId) || "Classroom course",
-      type: "Classroom assignment",
-      date: item.classroomUpdatedAt || item.updateTime || item.updatedAt || item.creationTime || item.createdAt || item.dueAt || item.dueDate || item.importedAt || "",
+      course: item.courseTitle || "Classroom course",
+      type: item.itemType === "assignment" ? "Classroom assignment" : "Classroom material",
+      date: item.providerUpdatedAt || item.postedAt || item.dueAt || "",
     })),
   ];
   return rows.sort((left, right) => timestampFor(right.date) - timestampFor(left.date));
@@ -1579,14 +1585,14 @@ function materialsStepMarkup(lifecycle) {
   return `
     <p class="eyebrow">Select academic materials</p>
     <h2 id="product-flow-title">Choose what belongs in your first workspace</h2>
-    <p class="product-flow-lead">${classroom ? "Select the newest coursework and materials you want StudentOS to organize." : "Add a few material names now, or continue and add them later."}</p>
+    <p class="product-flow-lead">${classroom ? "Choose Classroom work to add to your academic context." : "Add a few material names now, or continue and add them later."}</p>
     <form id="product-materials-form" class="product-flow-form">
       ${candidates.length ? `<div class="material-choice-list">${candidates.map((item) => `
         <label class="check-row material-choice-row">
           <input name="materialIds" type="checkbox" value="${escapeHtml(item.id)}" data-material-label="${escapeHtml(item.title)}" ${draftIds.has(item.id) ? "checked" : ""} ${addBlocked && !draftIds.has(item.id) ? "disabled" : ""}>
           <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.course)} · ${escapeHtml(item.type)}${item.date ? ` · ${escapeHtml(formatDate(item.date))}` : ""}</small></span>
         </label>
-      `).join("")}</div>` : `<div class="product-empty-state"><strong>${classroom ? "No current Classroom coursework found" : "No materials are waiting yet"}</strong><p>${classroom ? "StudentOS did not find current Classroom coursework yet. You can continue and add material later." : "You can continue now and add material when your workspace is ready."}</p></div>`}
+      `).join("")}</div>` : `<div class="product-empty-state"><strong>${classroom ? "No selected Classroom work yet" : "No materials are waiting yet"}</strong><p>${classroom ? "Choose Classroom work to include in your academic context when it appears." : "You can continue now and add material when your workspace is ready."}</p></div>`}
       ${classroom ? "" : `<label for="product-material-labels">Materials you may add<textarea id="product-material-labels" name="materialLabels" rows="4" placeholder="For example, Chemistry syllabus&#10;Statistics lecture notes">${escapeHtml(draftLabels.join("\n"))}</textarea></label>`}
       ${academicContextCapacityMarkup()}
       <p class="form-help">You can add or remove materials later from Academic Context.</p>
@@ -1804,8 +1810,8 @@ function renderDashboardSummary() {
   const nextBlock = getNextTimetableBlock();
   const nextActions = getNextActions();
   const nextAction = nextActions[0] || null;
-  const nextCourse = courseById(nextAction?.courseId || dueSoon?.courseId);
-  const nextTopic = topicById(nextAction?.topicId || dueSoon?.topicIds?.[0]);
+  const nextCourse = courseById(dueSoon?.courseId || nextAction?.courseId);
+  const nextTopic = topicById(dueSoon?.topicIds?.[0] || nextAction?.topicId);
   const nextExam = upcomingExams[0] || null;
   if (!nextAction && !dueSoon) {
     const guidance = [];
@@ -1824,13 +1830,16 @@ function renderDashboardSummary() {
     return;
   }
   const availability = preferences.dailyStudyAvailabilityMinutes || preferences.dailyStudyWindowMinutes || null;
-  const doNowTitle = studentTaskTitle(nextAction?.title || dueSoon?.title);
+  const doNowTitle = studentTaskTitle(dueSoon?.title || nextAction?.title);
   const doNowContext = [
-    nextCourse?.title || nextAction?.courseTitle,
+    nextCourse?.title || dueSoon?.courseTitle || nextAction?.courseTitle,
     nextTopic?.title || nextAction?.topicTitle,
   ].filter(Boolean).join(" / ") || "Your academic context";
   const riskCopy = weakTopics.map((topic) => topic.title).join(" / ") || "No weak topics yet";
-  const planPrompt = buildTodayPlanPrompt(nextAction, dueSoon, nextBlock);
+  const planPrompt = buildTodayPlanPrompt(dueSoon || nextAction, dueSoon, nextBlock);
+  const reviewRequired = dueSoon?.reviewRequired === true;
+  const dueSoonTimestamp = timestampFor(dueSoon?.dueAt || dueSoon?.dueDate);
+  const dueSoonOverdue = Number.isFinite(dueSoonTimestamp) && dueSoonTimestamp < Date.now();
   setResult(els.dashboardSummary, `
     <article class="today-brief-card">
       <div class="today-brief-copy">
@@ -1839,12 +1848,16 @@ function renderDashboardSummary() {
         <p>Goal: ${escapeHtml(getAcademicGoalLabel())}${preferences.stream || state.studentProfile?.gradeBand ? ` / ${escapeHtml(preferences.stream || state.studentProfile?.gradeBand)}` : ""}</p>
         <div class="tag-row">
           ${tag(doNowContext, "source")}
+          ${reviewRequired ? tag("Review and add", "medium") : ""}
+          ${dueSoonOverdue ? tag("Overdue", "urgent") : ""}
           ${availability ? tag(`${availability} min available`, "source") : ""}
           ${preferences.studyBreakPattern ? tag(studyBreakLabel(preferences.studyBreakPattern), "medium") : ""}
         </div>
       </div>
       <div class="today-brief-actions">
-        <button class="primary-button ai-context-button" type="button" data-ai-open data-ai-verb="Plan" data-ai-prompt="${escapeHtml(planPrompt)}">Plan this block</button>
+        ${reviewRequired
+          ? `<button class="primary-button" type="button" data-classroom-item-id="${escapeHtml(dueSoon.classroomItemId || dueSoon.id)}">Review and add</button>`
+          : `<button class="primary-button ai-context-button" type="button" data-ai-open data-ai-verb="Plan" data-ai-prompt="${escapeHtml(planPrompt)}">Plan this block</button>`}
       </div>
     </article>
     <div class="today-status-strip" role="list" aria-label="Today status">
@@ -1859,7 +1872,7 @@ function renderDashboardSummary() {
         <p>${escapeHtml(riskCopy)}</p>
       </article>
       <article class="today-status-item" role="listitem">
-        <span>Due soon</span>
+        <span>${dueSoonOverdue ? "Overdue" : "Due soon"}</span>
         <strong>${escapeHtml(dueSoon ? formatDate(dueSoon.dueDate) : "None")}</strong>
         <p>${escapeHtml(dueSoon?.title || "No due work listed")}</p>
       </article>
@@ -1973,24 +1986,24 @@ function renderClassroomPanel() {
         <strong>${escapeHtml(ui.title || classroomModeLabel(stateName))}</strong>
         <p>${escapeHtml(ui.message || "StudentOS can include Classroom coursework in your study plan.")}</p>
       </div>
-      ${summary ? `<span>${escapeHtml(`${summary.importedAssignments || 0} new / ${summary.updatedAssignments || 0} updated`)}</span>` : ""}
+      ${summary ? `<span>${escapeHtml(`${summary.discoveredAssignments || 0} new to review / ${summary.updatedAssignments || 0} refreshed`)}</span>` : ""}
     </div>
     <div class="tag-row">
       ${tag(ui.badge || classroomModeLabel(stateName), stateName === "reconnect_required" ? "medium" : "source")}
-      ${lastSync ? tag(`synced ${formatDate(lastSync)}`, "source") : ""}
+      ${lastSync ? tag(`checked ${formatDate(lastSync)}`, "source") : ""}
       ${providerEmail && stateName === "connected" ? tag("connected account", "source") : ""}
     </div>
-    ${ui.detail ? `<p>${escapeHtml(ui.detail)}</p>` : actions.sync ? `<p>Use Sync Classroom when you want the latest assignments in StudentOS.</p>` : ""}
+    ${ui.detail ? `<p>${escapeHtml(ui.detail)}</p>` : actions.sync ? `<p>Check Classroom when you want to review the latest work.</p>` : ""}
     <p class="muted-copy">${escapeHtml(checkPolicyCopy)}</p>
     ${emptyClassroom ? `<p class="muted-copy">No active Classroom coursework was found. StudentOS is ready to refresh when new work appears.</p>` : ""}
     ${showDetails ? `
       <details class="classroom-details">
-        <summary>Sync details</summary>
-        ${summary ? `<p>${escapeHtml(`${summary.importedCourses || 0} course(s), ${summary.importedAssignments || 0} new assignment(s), ${summary.updatedAssignments || 0} updated${summary.emptyClassroom ? " / no active coursework" : ""}`)}</p>` : ""}
+        <summary>Recent checks</summary>
+        ${summary ? `<p>${escapeHtml(`${summary.discoveredCourses || 0} course(s), ${summary.discoveredAssignments || 0} new assignment(s) to review, ${summary.updatedAssignments || 0} refreshed${summary.emptyClassroom ? " / no active coursework" : ""}`)}</p>` : ""}
         ${history.length ? `
           <div class="mini-history">
             ${history.slice(0, 4).map((run) => `
-              <span>${escapeHtml(humanize(run.status))}: ${escapeHtml(formatDate(run.completedAt || run.startedAt))} / ${run.importedAssignments || 0}+${run.updatedAssignments || 0} assignments${run.errorCount ? " / needs review" : ""}</span>
+              <span>${escapeHtml(humanize(run.status))}: ${escapeHtml(formatDate(run.completedAt || run.startedAt))} / ${run.discoveredAssignments || 0} new, ${run.updatedAssignments || 0} refreshed${run.errorCount ? " / needs review" : ""}</span>
             `).join("")}
           </div>
         ` : ""}
@@ -2005,12 +2018,13 @@ function classroomStatusCard() {
   const history = classroomStatus?.syncHistory || connector.syncHistory || [];
   const providerEmail = connector.providerAccountEmail || "";
   const lastSync = connector.lastSyncAt || history[0]?.completedAt || "";
-  const classroomCourses = state.courses.filter((course) => course.source === "google_classroom").length;
-  const classroomAssignments = state.assignments.filter((assignment) => assignment.source === "google_classroom").length;
+  const classroomItems = state.classroomItems || [];
+  const selectedItems = classroomItems.filter((item) => item.academicContextIncluded).length;
+  const reviewItems = classroomItems.filter((item) => item.selectionState === "discovered").length;
   const stateName = normalizedClassroomState(connector);
   const ui = classroomUi(connector, summary, history);
   const emptyClassroom = summary?.emptyClassroom || history.some((run) => run.payload?.emptyClassroom);
-  if (["disabled", "setup_required", "status_pending"].includes(stateName) && !classroomCourses && !classroomAssignments) {
+  if (["disabled", "setup_required", "status_pending"].includes(stateName) && !classroomItems.length) {
     return "";
   }
   return `
@@ -2018,30 +2032,31 @@ function classroomStatusCard() {
       <header class="course-card-head">
         <div>
           <span class="workspace-label">Classroom workspace</span>
-          <strong>Google Classroom import</strong>
-          <p>${providerEmail ? `Connected as ${escapeHtml(providerEmail)}` : "Classroom planning import"}</p>
+          <strong>Google Classroom</strong>
+          <p>${providerEmail ? `Connected as ${escapeHtml(providerEmail)}` : "Choose what to add"}</p>
         </div>
       </header>
       <div class="tag-row">
         ${tag(ui.badge || classroomModeLabel(stateName), stateName === "reconnect_required" ? "medium" : "source")}
-        ${tag(`${classroomCourses} course(s)`, "source")}
-        ${tag(`${classroomAssignments} assignment(s)`, "source")}
-        ${lastSync ? tag(`synced ${formatDate(lastSync)}`, "source") : tag("manual sync", "medium")}
+        ${tag(`${selectedItems} selected`, "source")}
+        ${tag(`${reviewItems} to review`, reviewItems ? "medium" : "source")}
+        ${lastSync ? tag(`checked ${formatDate(lastSync)}`, "source") : tag("check when ready", "medium")}
         ${tag("student controlled", "source")}
       </div>
       <div class="course-signal-grid">
-        <span><strong>${classroomCourses}</strong> imported courses</span>
-        <span><strong>${classroomAssignments}</strong> imported assignments</span>
-        <span><strong>${lastSync ? formatDate(lastSync) : "Manual"}</strong> sync</span>
+        <span><strong>${selectedItems}</strong> selected for academic context</span>
+        <span><strong>${reviewItems}</strong> ready to review</span>
+        <span><strong>${lastSync ? formatDate(lastSync) : "When ready"}</strong> last checked</span>
       </div>
       ${emptyClassroom ? `<p class="muted-copy">No active Classroom coursework was found yet.</p>` : ""}
-      ${stateName === "reconnect_required" ? `<p class="warning-copy">Reconnect Classroom to refresh imported assignments.</p>` : ""}
+      ${stateName === "reconnect_required" ? `<p class="warning-copy">Reconnect Classroom to check for new work and refresh selected items.</p>` : ""}
     </article>
   `;
 }
 
 function renderAssignments() {
-  if (!state.assignments.length) {
+  const assignments = getDueAssignments();
+  if (!assignments.length) {
     const connector = activeClassroomConnector();
     const actions = classroomActions(connector);
     const emptyCopy = actions.connect || actions.reconnect
@@ -2058,28 +2073,37 @@ function renderAssignments() {
     `);
     return;
   }
-  const assignments = getDueAssignments();
   setResult(els.assignmentList, assignments.map((assignment, index) => {
     const course = courseById(assignment.courseId);
     const insight = assignmentInsightById(assignment.id);
     const isClassroom = assignment.source === "google_classroom";
+    const reviewRequired = assignment.reviewRequired === true;
     const isPrimary = index === 0;
-    const primaryLabel = isClassroom ? "Latest Classroom" : "Nearest due";
+    const primaryLabel = "Nearest deadline";
+    const dueTimestamp = timestampFor(assignment.dueAt || assignment.dueDate);
+    const dueLabel = Number.isFinite(dueTimestamp) && dueTimestamp < Date.now()
+      ? "Overdue"
+      : Number.isFinite(dueTimestamp) && dueTimestamp - Date.now() <= 72 * 60 * 60 * 1000
+        ? "Due soon"
+        : assignment.dueAt || assignment.dueDate
+          ? "Upcoming"
+          : "No due date";
     return `
       <article class="item-card assignment-card ${isPrimary ? "assignment-card-primary" : ""}">
         ${isPrimary ? `<span class="queue-label">${escapeHtml(primaryLabel)}</span>` : ""}
         <strong>${escapeHtml(assignment.title)}</strong>
-        <p>${escapeHtml(course?.title || "Course")} / due ${formatDate(assignment.dueDate)}</p>
+        <p>${escapeHtml(course?.title || assignment.courseTitle || "Course")} / due ${formatDate(assignment.dueAt || assignment.dueDate)}</p>
         <div class="item-meta">
-          ${tag(assignment.status === "due_soon" ? "due soon" : assignment.status, assignment.status === "due_soon" ? "medium" : "low")}
+          ${tag(dueLabel, dueLabel === "Overdue" ? "urgent" : "medium")}
           ${isClassroom ? tag("Google Classroom", "source") : tag(humanize(assignment.source))}
-          ${assignment.readOnly ? tag("planning only", "source") : ""}
-          ${isClassroom ? tag("learning flow ready", "medium") : ""}
-          ${assignment.submissionStatus ? tag(humanize(assignment.submissionStatus), "source") : ""}
-          ${insight ? tag(humanize(insight.status), toneForCoverage(insight.status)) : ""}
+          ${reviewRequired ? tag("Review to add", "medium") : isClassroom ? tag("Selected for academic context", "source") : ""}
+          ${assignment.readOnly ? tag("Read-only", "source") : ""}
+          ${!reviewRequired && insight ? tag(humanize(insight.status), toneForCoverage(insight.status)) : ""}
         </div>
-        ${insight ? `<p class="muted-copy">${escapeHtml(insight.summary)}</p>` : ""}
-        <button class="mini-action" type="button" data-flow-id="${assignment.id}">${isClassroom ? "Analyze assignment" : "Analyze"}</button>
+        ${!reviewRequired && insight ? `<p class="muted-copy">${escapeHtml(insight.summary)}</p>` : reviewRequired ? `<p class="muted-copy">New Classroom work found. Review it before adding it to your academic context.</p>` : ""}
+        ${reviewRequired
+          ? `<button class="mini-action" type="button" data-classroom-item-id="${escapeHtml(assignment.classroomItemId || assignment.id)}">Review and add</button>`
+          : `<button class="mini-action" type="button" data-flow-id="${assignment.id}">${isClassroom ? "Prepare assignment" : "Analyze"}</button>`}
       </article>
     `;
   }).join(""));
@@ -2131,7 +2155,7 @@ function renderCourses() {
 
         <div class="tag-row">
           ${isClassroom ? tag("Google Classroom", "source") : ""}
-          ${course.readOnly ? tag("planning only", "source") : ""}
+          ${course.readOnly ? tag("Read-only", "source") : ""}
           ${isClassroom || course.readOnly ? tag("Student controlled", "source") : ""}
           ${revisionCount ? tag("Needs revision", "medium") : topics.length ? tag("On track", "source") : tag("Add topics", "medium")}
         </div>
@@ -2154,7 +2178,7 @@ function renderCourses() {
             <p>${escapeHtml(nextAction ? `${studentTaskTitle(nextAction.title)} / ${nextActionLabel}` : "Generate or sync work to create a next action")}</p>
           </div>
         </div>
-        ${isClassroom && !classroomAssignments.length ? `<p class="muted-copy">Classroom course imported. Sync again when coursework is published.</p>` : ""}
+        ${isClassroom && !classroomAssignments.length ? `<p class="muted-copy">No selected Classroom work is waiting for this course.</p>` : ""}
       </article>
     `;
   }).join("");
@@ -2213,6 +2237,35 @@ function renderSources() {
       </details>
     </article>
   `;
+  const classroomReviewItems = (state.classroomItems || [])
+    .filter((item) => ["discovered", "ignored"].includes(item.selectionState) && !item.academicContextIncluded)
+    .sort((left, right) => classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left))
+    .slice(0, 12);
+  const classroomReview = classroomReviewItems.length ? `
+    <section class="source-card classroom-review-card" aria-label="Classroom work to review">
+      <div class="source-card-head">
+        <div>
+          <span class="workspace-label">New Classroom work found</span>
+          <strong>Choose what to add</strong>
+          <p>Only work you choose becomes part of your academic context.</p>
+        </div>
+      </div>
+      <div class="material-choice-list">
+        ${classroomReviewItems.map((item) => `
+          <article class="item-card">
+            <strong>${escapeHtml(item.title)}</strong>
+            <p>${escapeHtml(item.courseTitle || "Classroom course")}${item.dueAt ? ` / due ${escapeHtml(formatDate(item.dueAt))}` : ""}</p>
+            <div class="item-meta">
+              ${tag(item.itemType === "assignment" ? "Assignment" : "Material", "source")}
+              ${item.handedIn ? tag("Already handed in", "source") : item.dueAt ? tag(`Due ${formatDate(item.dueAt)}`, "medium") : ""}
+              ${tag("Read-only", "source")}
+            </div>
+            <button class="mini-action" type="button" data-classroom-item-id="${escapeHtml(item.id)}">Review and add</button>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  ` : "";
   const sourceCards = activeSources.map((source) => {
     const course = courseById(source.courseId);
     const latestJob = latestSourceJob(source);
@@ -2269,13 +2322,13 @@ function renderSources() {
       <div class="tag-row">${tag("searching this library", "source")}</div>
     </article>
   ` : "";
-  els.sourceList.innerHTML = queueCard + (sourceCards || noMatches || noSources);
+  els.sourceList.innerHTML = queueCard + classroomReview + (sourceCards || noMatches || noSources);
 }
 
 function renderSelects() {
   const courseOptions = state.courses.map((course) => `<option value="${course.id}">${escapeHtml(course.title)}</option>`).join("");
   const topicOptions = state.topics.map((topic) => `<option value="${topic.id}">${escapeHtml(topic.title)}</option>`).join("");
-  const assignmentOptions = state.assignments.map((assignment) => `<option value="${assignment.id}">${escapeHtml(assignment.title)}</option>`).join("");
+  const assignmentOptions = state.assignments.filter(assignmentNeedsAction).map((assignment) => `<option value="${assignment.id}">${escapeHtml(assignment.title)}</option>`).join("");
   els.sourceCourseSelect.innerHTML = courseOptions;
   els.scoreTopicSelect.innerHTML = topicOptions;
   els.extensionAssignmentSelect.innerHTML = assignmentOptions;
@@ -2812,7 +2865,7 @@ async function analyzeAssignmentFlow(assignmentId) {
   } catch (error) {
     setResult(els.flowResult, `
       <strong>Assignment flow unavailable</strong>
-      <p>${escapeHtml(error.message || "StudentOS could not analyze this assignment. Refresh synced data and try again.")}</p>
+      <p>${escapeHtml(error.message || "StudentOS could not prepare this assignment. Check Classroom work and try again.")}</p>
       <div class="tag-row">
         ${tag("try again", "medium")}
         ${tag("no submission", "urgent")}
@@ -3253,7 +3306,7 @@ async function connectClassroom() {
 }
 
 async function syncClassroom() {
-  setLoading(els.classroomPanel, "Syncing Classroom assignments...");
+  setLoading(els.classroomPanel, "Checking Classroom work...");
   const result = await api("/api/classroom/sync", {
     method: "POST",
     body: JSON.stringify({}),
@@ -3262,6 +3315,16 @@ async function syncClassroom() {
   classroomStatus = { connector: result.connector, syncSummary: result.summary, syncHistory: result.connector?.syncHistory || [], policy: result.policy || null };
   classroomStatusLoaded = true;
   render();
+}
+
+async function addClassroomItemToAcademicContext(itemId) {
+  const result = await api("/api/classroom/selection", {
+    method: "POST",
+    body: JSON.stringify({ itemIds: [itemId] }),
+  });
+  state = result.state || state;
+  render();
+  if (els.sourceResult) setResult(els.sourceResult, `<p>${escapeHtml(result.message || "Selected Classroom work was added to your academic context.")}</p>`);
 }
 
 async function disconnectClassroom() {
@@ -3578,7 +3641,7 @@ async function connectClassroomFromProductFlow() {
 
 async function refreshClassroomForProductFlow() {
   productClassroomRefreshAttempted = true;
-  productFlowMessage("Checking for current Classroom coursework…");
+  productFlowMessage("Checking for Classroom work you can choose…");
   try {
     const result = await api("/api/classroom/sync", {
       method: "POST",
@@ -3589,7 +3652,7 @@ async function refreshClassroomForProductFlow() {
     classroomStatusLoaded = true;
     render();
   } catch (error) {
-    productFlowMessage(error.message || "StudentOS could not refresh Classroom coursework yet. You can continue and add material later.");
+    productFlowMessage(error.message || "StudentOS could not check Classroom work yet. You can continue and add material later.");
   }
 }
 
@@ -3719,6 +3782,16 @@ function wireEvents() {
   });
   window.addEventListener("hashchange", handleAuthLocationChange);
   document.addEventListener("click", (event) => {
+    const classroomItemButton = event.target.closest("[data-classroom-item-id]");
+    if (classroomItemButton) {
+      withButtonLoading(classroomItemButton, "Adding...", () => addClassroomItemToAcademicContext(classroomItemButton.dataset.classroomItemId), {
+        timeoutTarget: els.sourceResult,
+        timeoutCopy: "Adding this Classroom work is taking longer than expected. Please try again.",
+      }).catch((error) => {
+        if (els.sourceResult) setResult(els.sourceResult, `<p>${escapeHtml(error.message)}</p>`);
+      });
+      return;
+    }
     const button = event.target.closest("[data-ai-open]");
     if (button) {
       handleAiContextButton(button);
@@ -3742,9 +3815,9 @@ function wireEvents() {
     }).catch(renderClassroomError);
   });
   els.classroomSyncBtn.addEventListener("click", () => {
-    withButtonLoading(els.classroomSyncBtn, "Syncing...", syncClassroom, {
+    withButtonLoading(els.classroomSyncBtn, "Checking...", syncClassroom, {
       timeoutTarget: els.classroomPanel,
-      timeoutCopy: "Classroom sync is taking longer than expected. You can keep working while it finishes.",
+      timeoutCopy: "The Classroom check is taking longer than expected. You can keep working while it finishes.",
       timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
     }).catch(renderClassroomError);
   });
