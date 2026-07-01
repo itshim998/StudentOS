@@ -1024,14 +1024,43 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await closeAiDrawer(page);
 
   await clickNav(page, "Academic Context");
+  await expect(page.getByRole("button", { name: "Memory", exact: true })).toHaveCount(0);
   await expect(page.locator("#view-memory")).toContainText("Assignments, materials, and Classroom work StudentOS can use for your semester.");
   await expect(page.locator("#view-memory")).toContainText("Assignments included");
   await expect(page.locator("#view-memory")).toContainText("Materials included");
+  await expect(page.getByRole("heading", { name: "Assignments", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Materials", exact: true })).toBeVisible();
+  await expect(page.locator("#source-deadline-field")).toBeVisible();
+  await expect(page.locator("#source-deadline")).toHaveAttribute("required", "");
+  await expect(page.locator("#source-form")).toContainText("Set the deadline of the assignment.");
+  await page.getByRole("button", { name: "Upload assignment" }).click();
+  await expect(page.locator("#source-title-error")).toContainText("Add a title for this assignment.");
+  await expect(page.locator("#source-course-error")).toContainText("Choose a course for this assignment.");
+  await expect(page.locator("#source-deadline-error")).toContainText("Set the assignment deadline before uploading.");
+  await expect(page.locator("#source-file-error")).toContainText("Choose a PDF file.");
   await page.route("**/api/sources/upload", async (route) => {
     await delay(300);
     await route.continue();
   });
+  await page.locator("#source-form input[name='title']").fill("E2E motion graphs assignment");
+  await page.locator("#source-course-select").selectOption({ index: 1 });
+  await page.locator("#source-deadline").fill("2026-07-10");
+  await page.locator("#source-file").setInputFiles({
+    name: "motion-graphs-assignment.pdf",
+    mimeType: "application/pdf",
+    buffer: buildPdfFixtureBuffer("Motion graphs assignment for StudentOS."),
+  });
+  await page.getByRole("button", { name: "Upload assignment" }).click();
+  await expect(page.locator("#source-result")).toContainText("Added to Academic Context.", { timeout: 15_000 });
+  const assignmentCard = page.locator(".academic-context-assignment-card").filter({ hasText: "E2E motion graphs assignment" });
+  await expect(assignmentCard).toContainText(/Mathematics|Physics/);
+  await expect(assignmentCard).toContainText("Due");
+  await expect(assignmentCard).toContainText("Manual upload");
+  await expect(assignmentCard.getByRole("img", { name: "PDF document preview placeholder" })).toBeVisible();
+
   await page.locator("#source-kind-select").selectOption("material");
+  await expect(page.locator("#source-deadline-field")).toBeHidden();
+  await expect(page.locator("#source-deadline")).not.toHaveAttribute("required", "");
   await page.locator("#source-form input[name='title']").fill("E2E quadratics note");
   await page.locator("#source-course-select").selectOption({ index: 1 });
   await page.locator("#source-file").setInputFiles({
@@ -1042,20 +1071,25 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await page.getByRole("button", { name: "Upload material" }).click();
   await expect(page.locator("#source-result")).toContainText("Adding this material to Academic Context");
   await expect(page.locator("#source-result")).toContainText("E2E quadratics note", { timeout: 15_000 });
-  await expect(page.locator("#source-result")).toContainText(/academic context/i);
+  await expect(page.locator("#source-result")).toContainText("Added to Academic Context.");
   await page.unroute("**/api/sources/upload");
   await expect(page.locator("#source-list")).toContainText("Materials");
   await expect(page.locator("#source-list")).toContainText(/Ready for study/i);
   await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
+  const visibleAcademicCopy = await page.locator("#view-memory").innerText();
+  expect(visibleAcademicCopy).not.toMatch(/\b(provider|model|token|storage|database|backend|vector|embedding|chunks?|debug|OAuth scope|source-grounded)\b/i);
   await expectNoVisibleExternalBranding(page, "academic context");
-  await page.locator("#source-list").getByRole("button", { name: "Ask StudentOS" }).first().click();
+  const uploadedCard = page.locator(".academic-context-card").filter({ hasText: "E2E quadratics note" });
+  await expect(uploadedCard).toContainText("Manual upload");
+  await expect(uploadedCard.getByRole("img", { name: "PDF document preview placeholder" })).toBeVisible();
+  await uploadedCard.getByRole("button", { name: /Ask StudentOS about E2E quadratics note/ }).click();
   await expect(page.locator("#ai-panel")).toBeVisible();
   await expect(page.locator("#ai-message")).toHaveValue(/Explain this source/i);
   await closeAiDrawer(page);
-  const uploadedCard = page.locator(".academic-context-card").filter({ hasText: "E2E quadratics note" });
-  await uploadedCard.getByRole("button", { name: "Delete" }).click();
+  await uploadedCard.getByRole("button", { name: "Delete E2E quadratics note" }).click();
   await expect(page.locator("#academic-context-delete-dialog")).toBeVisible();
   await expect(page.locator("#academic-context-delete-dialog")).toContainText("This will permanently delete this file from StudentOS.");
+  await expect(page.locator("#academic-context-delete-cancel")).toBeFocused();
   await page.getByRole("button", { name: "Keep it" }).click();
   await expect(uploadedCard).toBeVisible();
 
@@ -1217,6 +1251,71 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test("Academic Context respects Classroom review eligibility and no-course guidance", async ({ page }) => {
+  const baseState = await fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json());
+  let bootstrapPayload = structuredClone(baseState);
+  await page.route("**/api/bootstrap", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify(bootstrapPayload),
+  }));
+
+  const reviewItem = {
+    id: "classroom_review_task32",
+    itemType: "assignment",
+    title: "Review-only lab report",
+    courseTitle: "Physics",
+    dueAt: "2026-07-12T12:00:00.000Z",
+    source: "google_classroom",
+    selectionState: "discovered",
+    academicContextIncluded: false,
+    handedIn: false,
+  };
+  bootstrapPayload = {
+    ...structuredClone(baseState),
+    classroomItems: [reviewItem],
+    planAccess: {
+      ...(baseState.planAccess || {}),
+      entitlements: {
+        ...(baseState.planAccess?.entitlements || {}),
+        classroom: { courseOnly: false, courseworkReviewEnabled: true },
+      },
+    },
+  };
+  await page.goto(baseUrl);
+  await clickNav(page, "Academic Context");
+  await expect(page.getByRole("heading", { name: "Classroom work to review" })).toBeVisible();
+  await expect(page.locator(".academic-context-review-item")).toContainText("Review-only lab report");
+  await expect(page.locator(".academic-context-review-item").getByRole("button", { name: "Add to Academic Context" })).toBeVisible();
+  await expect(page.locator(".academic-context-review-item").getByRole("button", { name: "Ignore" })).toBeVisible();
+
+  bootstrapPayload = {
+    ...structuredClone(baseState),
+    classroomItems: [reviewItem],
+    planAccess: {
+      ...(baseState.planAccess || {}),
+      entitlements: {
+        ...(baseState.planAccess?.entitlements || {}),
+        classroom: { courseOnly: true, courseworkReviewEnabled: false },
+      },
+    },
+  };
+  await page.goto(baseUrl);
+  await clickNav(page, "Academic Context");
+  await expect(page.getByRole("heading", { name: "Classroom work to review" })).toHaveCount(0);
+  await expect(page.locator("#academic-context-classroom-guidance")).toContainText("Starter uses Classroom only to help set up your course list. Upload PDFs manually to add assignments or materials.");
+
+  bootstrapPayload = {
+    ...structuredClone(baseState),
+    courses: [],
+  };
+  await page.goto(baseUrl);
+  await clickNav(page, "Academic Context");
+  await expect(page.locator("#source-capacity-message")).toContainText("Add a course in Setup before uploading academic context.");
+  await expect(page.locator("#source-course-error")).toContainText("Add a course in Setup before uploading academic context.");
+  await expect(page.locator("#source-submit-button")).toBeDisabled();
+  await page.unroute("**/api/bootstrap");
+});
+
 test("responsive surfaces and AI drawer avoid horizontal overflow", async ({ page }) => {
   test.setTimeout(75_000);
   const widths = [1440, 1280, 1024, 768, 430, 390, 360];
@@ -1230,6 +1329,22 @@ test("responsive surfaces and AI drawer avoid horizontal overflow", async ({ pag
     for (const view of views) {
       await clickNav(page, view);
       await expectNoHorizontalOverflow(page, `${width}px ${view}`);
+      if (view === "Academic Context" && width <= 768) {
+        const stacked = await page.evaluate(() => {
+          const content = document.querySelector(".academic-context-content-panel")?.getBoundingClientRect();
+          const support = document.querySelector(".academic-context-support-column")?.getBoundingClientRect();
+          return Boolean(content && support && support.top >= content.bottom - 1);
+        });
+        expect(stacked, `${width}px Academic Context support column should stack after included work`).toBe(true);
+        await page.locator("#source-submit-button").scrollIntoViewIfNeeded();
+        const overlapsLauncher = await page.evaluate(() => {
+          const submit = document.querySelector("#source-submit-button")?.getBoundingClientRect();
+          const launcher = document.querySelector("#ai-launcher")?.getBoundingClientRect();
+          if (!submit || !launcher) return false;
+          return submit.left < launcher.right && submit.right > launcher.left && submit.top < launcher.bottom && submit.bottom > launcher.top;
+        });
+        expect(overlapsLauncher, `${width}px Ask StudentOS launcher should not cover upload`).toBe(false);
+      }
       await openAiDrawer(page);
       await expectAiDrawerWithinViewport(page, `${width}px ${view}`);
       await closeAiDrawer(page);
