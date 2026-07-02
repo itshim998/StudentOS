@@ -67,6 +67,7 @@ assertNoSecrets("/api/config", config.raw);
 const errors = [];
 if (health.body?.ok !== true) errors.push("/api/health did not return ok=true");
 if (config.body?.deploymentTarget !== "azure-container-apps") errors.push("/api/config deploymentTarget is not azure-container-apps");
+if (config.body?.aiProviders?.configured !== true) errors.push("/api/config reports no configured production AI provider");
 if (!["supabase", "mock"].includes(config.body?.persistence?.mode || config.body?.supabase?.mode || "")) {
   errors.push("/api/config persistence mode is neither supabase nor mock");
 }
@@ -89,6 +90,7 @@ const result = {
   config: {
     deploymentTarget: config.body?.deploymentTarget || null,
     persistenceMode: config.body?.persistence?.mode || config.body?.supabase?.mode || null,
+    aiConfigured: config.body?.aiProviders?.configured === true,
     classroomWriteScopesEnabled: Boolean(config.body?.classroom?.writeScopesEnabled),
     realSubmissionEnabled: Boolean(config.body?.realSubmissionEnabled),
   },

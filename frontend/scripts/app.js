@@ -3069,6 +3069,10 @@ function renderLesson(lesson) {
 
 function renderAiPayload(result) {
   const extra = [];
+  const usedMaterialSnippets = result.grounding?.uploadedMaterialUsed === true
+    ? result.grounding?.snippets || []
+    : [];
+  const usedSourceLabels = usedMaterialSnippets.length ? result.sourceLabels || [] : [];
   if (result.studyPlan?.blocks) {
     extra.push(`<strong>Study blocks</strong>${list(result.studyPlan.blocks)}`);
   }
@@ -3084,11 +3088,11 @@ function renderAiPayload(result) {
   if (result.explanation) {
     extra.push(`<p>${escapeHtml(result.explanation.concept)}</p><pre class="diagram-box">${escapeHtml(result.explanation.diagram)}</pre>`);
   }
-  if (result.grounding?.snippets?.length) {
+  if (usedMaterialSnippets.length) {
     extra.push(`
       <strong>Selected material</strong>
       <div class="source-snippets">
-        ${result.grounding.snippets.map((item) => `
+        ${usedMaterialSnippets.map((item) => `
           <blockquote>
             <p>${escapeHtml(item.snippet)}</p>
             <cite>${escapeHtml(item.citationLabel || item.sourceTitle || "Selected material")}</cite>
@@ -3107,7 +3111,7 @@ function renderAiPayload(result) {
       <div class="tag-row">
         ${result.coverage?.status ? tag(humanize(result.coverage.status), toneForCoverage(result.coverage.status)) : ""}
       ${result.grounding?.insufficientContext ? tag("not enough material yet", "urgent") : ""}
-      ${(result.sourceLabels || []).map((source) => tag(source.label, "source")).join("")}
+      ${usedSourceLabels.map((source) => tag(source.label, "source")).join("")}
     </div>
     ${result.grounding?.insufficiencyReason ? `<p>${escapeHtml(result.grounding.insufficiencyReason)}</p>` : ""}
     ${extra.join("")}

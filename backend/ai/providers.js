@@ -245,9 +245,11 @@ export async function runProviderFallback({ messages, config = getAiProviderConf
     providers.push(new PollinationsTextProvider({ config, fetchImpl }));
   }
   let lastError = null;
+  let configuredProviderCount = 0;
   const failures = [];
   for (const provider of providers) {
     if (!provider.isConfigured()) continue;
+    configuredProviderCount += 1;
     try {
       return { ...await provider.generate({ messages }), generationSucceeded: true, providerFailure: false };
     } catch (error) {
@@ -255,13 +257,23 @@ export async function runProviderFallback({ messages, config = getAiProviderConf
       failures.push(safeFailureCode(provider.name, error));
     }
   }
+  if (configuredProviderCount === 0) {
+    return {
+      provider: "none",
+      modelUsed: null,
+      text: "",
+      fallbackReason: "no_provider_configured",
+      generationSucceeded: false,
+      providerFailure: true,
+    };
+  }
   return {
-    provider: "mock",
-    modelUsed: "local_studentos_policy",
+    provider: "none",
+    modelUsed: null,
     text: "",
-    fallbackReason: failures.join(",") || sanitizeError(lastError || "no_provider_configured"),
-    generationSucceeded: !lastError,
-    providerFailure: Boolean(lastError),
+    fallbackReason: failures.join(",") || sanitizeError(lastError || "provider_unavailable"),
+    generationSucceeded: false,
+    providerFailure: true,
   };
 }
 

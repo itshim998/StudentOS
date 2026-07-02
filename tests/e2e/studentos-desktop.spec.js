@@ -1112,6 +1112,30 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await waitForNotLoading(page.locator("#ai-response"), "Preparing your answer");
   await expect(page.locator("#ai-response")).toContainText(/uploaded material|Cited snippets|source|reference/i, { timeout: 20_000 });
   await page.unroute("**/api/ai/verb");
+  await page.route("**/api/ai/verb", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        verb: "Ask",
+        answer: "Machine learning finds patterns in example data.",
+        sourceLabels: [{ label: "Unrelated syllabus" }],
+        grounding: {
+          uploadedMaterialUsed: false,
+          insufficientContext: false,
+          insufficiencyReason: null,
+          snippets: [{ citationLabel: "Unrelated syllabus", snippet: "This must remain hidden." }],
+        },
+      }),
+    });
+  });
+  await page.locator("#ai-message").fill("What is Machine Learning?");
+  await page.locator("#ai-form").getByRole("button", { name: "Ask" }).click();
+  await expect(page.locator("#ai-response")).toContainText("Machine learning finds patterns");
+  await expect(page.locator("#ai-response")).not.toContainText("Selected material");
+  await expect(page.locator("#ai-response")).not.toContainText("Unrelated syllabus");
+  await expect(page.locator("#ai-response")).not.toContainText("This must remain hidden");
+  await page.unroute("**/api/ai/verb");
   await closeAiDrawer(page);
 
   await clickNav(page, "Studio");

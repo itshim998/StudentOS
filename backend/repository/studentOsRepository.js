@@ -1,5 +1,5 @@
 import { confidenceLabel, createDeterministicEmbedding } from "../embeddings/embeddingService.js";
-import { createEmptyStudentState, retrieveGroundedSources } from "../domain/studentosDomain.js";
+import { createEmptyStudentState, MIN_GROUNDING_CONFIDENCE, retrieveGroundedSources } from "../domain/studentosDomain.js";
 import { publicShardRoute, routeUserToShard } from "../supabase/shardRouter.js";
 import { createInitialProductLifecycle, normalizeProductLifecycle } from "../domain/productLifecycleService.js";
 import { removeLegacyDemoArtifacts } from "../migrations/legacyDemoDataCleanup.js";
@@ -769,7 +769,7 @@ function rpcRowsToRetrieval(rows = [], { fallbackMode = "rpc-vector" } = {}) {
       embeddingStatus: row.embedding_status || "embedded",
       retrievalMode: row.retrieval_mode || fallbackMode,
     };
-  });
+  }).filter((chunk) => chunk.confidenceScore >= MIN_GROUNDING_CONFIDENCE);
   const bestConfidence = chunks[0]?.confidenceScore || 0;
   return {
     chunks,
@@ -789,7 +789,7 @@ function rpcRowsToRetrieval(rows = [], { fallbackMode = "rpc-vector" } = {}) {
     confidence: {
       score: Number(bestConfidence.toFixed(4)),
       label: confidenceLabel(bestConfidence),
-      lowConfidence: bestConfidence < 0.42,
+      lowConfidence: bestConfidence < MIN_GROUNDING_CONFIDENCE,
       semanticAvailable: chunks.length > 0,
     },
   };
@@ -1866,7 +1866,7 @@ class SupabaseStudentOsRepository {
         p_course_id: course?.id || null,
         p_topic_id: topic?.id || null,
         p_match_count: limit,
-        p_min_similarity: 0,
+        p_min_similarity: MIN_GROUNDING_CONFIDENCE,
       });
       return rpcRowsToRetrieval(rows, { fallbackMode: rows?.[0]?.retrieval_mode || "rpc-vector" });
     } catch (error) {

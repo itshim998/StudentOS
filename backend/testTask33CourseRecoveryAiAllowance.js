@@ -191,6 +191,8 @@ const providerFailure = await runStudentOsVerb({
 });
 assert.equal(providerFailure.generationSucceeded, false);
 assert.equal(providerFailure.answer, "I could not complete that answer right now. Please try again.");
+assert.deepEqual(providerFailure.sourceLabels, []);
+assert.deepEqual(providerFailure.grounding.snippets, []);
 assert.doesNotMatch(providerFailure.answer, /provider|model|token|backend|raw_provider_failure/i);
 
 const supportedProviderConfig = getAiProviderConfig({

@@ -126,13 +126,14 @@ Backend-only secret values:
 - `GOOGLE_CLIENT_ID` if Classroom OAuth is later enabled
 - `GOOGLE_CLIENT_SECRET` if Classroom OAuth is later enabled
 - `GOOGLE_REDIRECT_URI` if Classroom OAuth is later enabled
-- `GROQ_API_KEY` through `GROQ_API_KEY_5` if real AI is enabled
+- `GROQ_API_KEY` is required for the production Ask StudentOS route
+- `GROQ_API_KEY_2` through `GROQ_API_KEY_5` are optional rotation keys
 - `POLLINATIONS_API_KEY` if Pollinations paid/authenticated mode is enabled
 - `STUDENTOS_EMBEDDING_API_KEY` if real embeddings are enabled
 - billing provider secrets only after a billing launch review
 - operator/internal/deletion secrets only after an internal-ops launch review
 
-The `Azure Container Apps - StudentOS API` GitHub Actions workflow validates and maps the required Supabase values into Azure Container Apps as backend-only secret refs after the Bicep deployment. Missing required secret names cause the workflow to fail before deployment output is shown. Service-role keys stay in GitHub Actions and Azure Container Apps only; do not add them to Cloudflare Pages or any frontend runtime config.
+The `Azure Container Apps - StudentOS API` GitHub Actions workflow validates and maps the required Supabase values and primary `GROQ_API_KEY` into Azure Container Apps as backend-only secret refs after the Bicep deployment. Optional Groq rotation keys and Pollinations are mapped only when present. Missing required secret names cause the workflow to fail before deployment output is shown. Provider and service-role keys stay in GitHub Actions and Azure Container Apps only; do not add them to Cloudflare Pages or any frontend runtime config.
 
 For PASS 36.0 production auth gating, these `azure-dev` GitHub environment secrets must exist before rerunning the workflow:
 
@@ -147,9 +148,10 @@ STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3
 STUDENTOS_SUPABASE_URL_4
 STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4
 STUDENTOS_SUPABASE_JWT_SECRET
+GROQ_API_KEY
 ```
 
-The workflow sets `STUDENTOS_STORAGE_BUCKET`, `STUDENTOS_EXPORT_STORAGE_BUCKET`, and `STUDENTOS_AUTH_REDIRECT_URL` as non-secret Container App env vars.
+The workflow sets `STUDENTOS_AI_MODE=auto`, `STUDENTOS_STORAGE_BUCKET`, `STUDENTOS_EXPORT_STORAGE_BUCKET`, and `STUDENTOS_AUTH_REDIRECT_URL` as non-secret Container App env vars.
 
 ## Manual Local Deployment Command
 
@@ -250,7 +252,7 @@ npm.cmd run verify:azure-deployment
 Remove-Item Env:STUDENTOS_AZURE_API_URL
 ```
 
-The verifier checks `/api/health`, `/api/config`, cold-start timing, safe `deploymentTarget`, and dangerous toggles.
+The verifier checks `/api/health`, `/api/config`, cold-start timing, safe `deploymentTarget`, configured production AI, and dangerous toggles. A deployment fails verification when `/api/config.aiProviders.configured` is not `true`.
 
 ## Cloudflare Frontend Wiring
 

@@ -594,14 +594,19 @@ function publicAiResult(result = {}) {
     grounding = {},
     ...safeResult
   } = result;
+  const authoritativeSnippets = grounding.uploadedMaterialUsed === true &&
+    grounding.confidence?.lowConfidence !== true
+    ? grounding.snippets || []
+    : [];
   return {
     ...safeResult,
+    sourceLabels: authoritativeSnippets.length ? safeResult.sourceLabels || [] : [],
     engineLabel: "StudentOS AI",
     grounding: {
-      uploadedMaterialUsed: grounding.uploadedMaterialUsed === true,
+      uploadedMaterialUsed: authoritativeSnippets.length > 0,
       insufficientContext: grounding.insufficientContext === true,
       insufficiencyReason: grounding.insufficiencyReason || null,
-      snippets: (grounding.snippets || []).map((item) => ({
+      snippets: authoritativeSnippets.map((item) => ({
         citationLabel: item.citationLabel || null,
         sourceTitle: item.sourceTitle || null,
         snippet: item.snippet || "",

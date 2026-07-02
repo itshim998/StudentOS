@@ -61,7 +61,7 @@ export function buildGroundedMessages({ verb, message, state, baseAnswer, assist
   const snippets = baseAnswer.grounding?.snippets || [];
   const lowConfidence = baseAnswer.grounding?.confidence?.lowConfidence === true;
   const hasUploadedSnippets = Boolean(baseAnswer.grounding?.uploadedMaterialUsed && snippets.length && !lowConfidence);
-  const contextBlock = formatSnippets(snippets);
+  const contextBlock = hasUploadedSnippets ? formatSnippets(snippets) : "";
   const needsSpecificMaterial = /\b(?:this|my|the attached|the uploaded|selected)\b.{0,40}\b(?:pdf|file|material|notes?|assignment|rubric)\b/i.test(String(message || ""));
   const fallbackInstruction = hasUploadedSnippets
     ? "Use the uploaded source snippets as the primary evidence. Do not add citations beyond the supplied source labels."
@@ -111,17 +111,22 @@ export function buildGroundedMessages({ verb, message, state, baseAnswer, assist
 
 export function buildInsufficientContextNote(baseAnswer) {
   const labels = baseAnswer.sourceLabels || [];
+  const requiresSpecificMaterial = baseAnswer.grounding?.requiresSpecificMaterial === true;
+  const canAnswerGenerally = baseAnswer.verb === "Ask" && !requiresSpecificMaterial;
   if (baseAnswer.grounding?.contextUnavailable) {
-    return baseAnswer.grounding?.requiresSpecificMaterial
+    return requiresSpecificMaterial
       ? "Not enough material yet. I don’t have that material available. Add or select it in Academic Context, then ask again."
       : null;
   }
   if (baseAnswer.grounding?.confidence?.lowConfidence) {
-    return "Not enough material yet. Add or choose more relevant material, then ask again.";
+    return canAnswerGenerally
+      ? null
+      : "Not enough material yet. Add or choose more relevant material, then ask again.";
   }
   if (baseAnswer.grounding?.uploadedMaterialUsed && baseAnswer.grounding?.snippets?.length) {
     return null;
   }
+  if (canAnswerGenerally) return null;
   return labels.length
     ? "Not enough material yet. The selected material did not cover this request clearly enough."
     : "Not enough material yet. Add a source for this topic, then ask again.";

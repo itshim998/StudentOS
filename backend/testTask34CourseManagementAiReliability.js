@@ -152,6 +152,138 @@ assert.match(generalResult.answer, /AI helps computers learn patterns/i);
 assert.match(generalResult.answer, /answer generally for now/i);
 assert.equal(generalResult.courseId, null);
 
+resetProviderRuntimeForTests();
+const providerlessResult = await runStudentOsVerb({
+  verb: "Ask",
+  message: "What is Machine Learning?",
+  state: emptyState,
+  providerConfig: getAiProviderConfig({ STUDENTOS_AI_MODE: "auto" }),
+  retrievalOverride: {
+    chunks: [{
+      id: "chunk_unrelated",
+      sourceMaterialId: "source_unrelated",
+      snippet: "An unrelated algorithms syllabus fragment.",
+      citationLabel: "Unrelated syllabus #1",
+      source: { id: "source_unrelated", title: "Unrelated syllabus" },
+      confidenceScore: 0.1,
+      confidenceLabel: "low",
+    }],
+    sources: [],
+    memories: [],
+    labels: [{ label: "Unrelated syllabus #1", sourceId: "source_unrelated", chunkId: "chunk_unrelated" }],
+    hasUploadedMaterial: true,
+    retrievalMode: "test-low-confidence",
+    confidence: { score: 0.1, label: "low", lowConfidence: true, semanticAvailable: true },
+  },
+});
+assert.equal(providerlessResult.provider, "none");
+assert.equal(providerlessResult.internalFailureCode, "no_provider_configured");
+assert.equal(providerlessResult.generationSucceeded, false);
+assert.equal(providerlessResult.answer, "I could not complete that answer right now. Please try again.");
+assert.deepEqual(providerlessResult.sourceLabels, []);
+assert.deepEqual(providerlessResult.grounding.snippets, []);
+assert.equal(providerlessResult.grounding.uploadedMaterialUsed, false);
+
+const explicitMockResult = await runStudentOsVerb({
+  verb: "Ask",
+  message: "What is Machine Learning?",
+  state: emptyState,
+  providerConfig: getAiProviderConfig({ STUDENTOS_AI_MODE: "mock" }),
+});
+assert.equal(explicitMockResult.provider, "mock");
+assert.equal(explicitMockResult.generationSucceeded, true);
+
+const groundedRetrieval = {
+  chunks: [
+    {
+      id: "chunk_ml_1",
+      sourceMaterialId: "source_ml",
+      snippet: "Machine learning uses examples to learn patterns.",
+      citationLabel: "Machine Learning Notes #1",
+      source: { id: "source_ml", title: "Machine Learning Notes" },
+      confidenceScore: 0.9,
+      confidenceLabel: "high",
+    },
+    {
+      id: "chunk_ml_2",
+      sourceMaterialId: "source_ml",
+      snippet: "Supervised learning trains from labelled examples.",
+      citationLabel: "Machine Learning Notes #2",
+      source: { id: "source_ml", title: "Machine Learning Notes" },
+      confidenceScore: 0.88,
+      confidenceLabel: "high",
+    },
+  ],
+  sources: [],
+  memories: [],
+  labels: [
+    { label: "Machine Learning Notes #1", type: "uploaded_chunk", sourceId: "source_ml", chunkId: "chunk_ml_1" },
+    { label: "Machine Learning Notes #2", type: "uploaded_chunk", sourceId: "source_ml", chunkId: "chunk_ml_2" },
+  ],
+  hasUploadedMaterial: true,
+  retrievalMode: "test-high-confidence",
+  confidence: { score: 0.9, label: "high", lowConfidence: false, semanticAvailable: true },
+};
+
+resetProviderRuntimeForTests();
+const citedResult = await runStudentOsVerb({
+  verb: "Ask",
+  message: "Explain machine learning",
+  state: emptyState,
+  retrievalOverride: groundedRetrieval,
+  providerConfig: supportedConfig,
+  fetchImpl: async () => new Response(JSON.stringify({
+    choices: [{ message: { content: "Machine learning learns patterns from examples [S1]. Supervised learning uses labels [S2]. Ignore [S99]." } }],
+  }), { status: 200 }),
+});
+assert.equal(citedResult.generationSucceeded, true);
+assert.equal(citedResult.grounding.uploadedMaterialUsed, true);
+assert.equal(citedResult.grounding.snippets.length, 2);
+assert.equal(citedResult.sourceLabels.length, 1);
+assert.equal(citedResult.sourceLabels[0].label, "Machine Learning Notes");
+assert.doesNotMatch(citedResult.answer, /\[S99\]/);
+
+resetProviderRuntimeForTests();
+const uncitedResult = await runStudentOsVerb({
+  verb: "Ask",
+  message: "What is Machine Learning?",
+  state: emptyState,
+  retrievalOverride: groundedRetrieval,
+  providerConfig: supportedConfig,
+  fetchImpl: async () => new Response(JSON.stringify({
+    choices: [{ message: { content: "Machine learning is a way for computers to learn patterns from examples." } }],
+  }), { status: 200 }),
+});
+assert.equal(uncitedResult.generationSucceeded, true);
+assert.equal(uncitedResult.grounding.uploadedMaterialUsed, false);
+assert.deepEqual(uncitedResult.grounding.snippets, []);
+assert.deepEqual(uncitedResult.sourceLabels, []);
+
+resetProviderRuntimeForTests();
+let lowConfidencePrompt = "";
+const lowConfidenceResult = await runStudentOsVerb({
+  verb: "Ask",
+  message: "What is Machine Learning?",
+  state: emptyState,
+  retrievalOverride: {
+    ...groundedRetrieval,
+    chunks: [{ ...groundedRetrieval.chunks[0], snippet: "Irrelevant syllabus fragment." }],
+    confidence: { score: 0.2, label: "low", lowConfidence: true, semanticAvailable: true },
+  },
+  providerConfig: supportedConfig,
+  fetchImpl: async (_url, options) => {
+    lowConfidencePrompt = options.body;
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: "Machine learning finds patterns in example data." } }],
+    }), { status: 200 });
+  },
+});
+assert.doesNotMatch(lowConfidencePrompt, /Irrelevant syllabus fragment/i);
+assert.match(lowConfidenceResult.answer, /Machine learning finds patterns/i);
+assert.match(lowConfidenceResult.answer, /answer generally for now/i);
+assert.deepEqual(lowConfidenceResult.grounding.snippets, []);
+assert.deepEqual(lowConfidenceResult.sourceLabels, []);
+
 for (const message of ["Explain photosynthesis simply", "Make a study plan"]) {
   resetProviderRuntimeForTests();
   const result = await runStudentOsVerb({
@@ -198,7 +330,10 @@ const failedReservation = await repository.reserveAiWeeklyAllowance(session, {
   requestId: "task34_failed",
 });
 assert.equal(failedReservation.allowed, true);
-const refunded = await repository.settleAiWeeklyAllowance(session, { requestId: "task34_failed", status: "refunded" });
+const refunded = await repository.settleAiWeeklyAllowance(session, {
+  requestId: "task34_failed",
+  status: providerlessResult.generationSucceeded === false ? "refunded" : "charged",
+});
 assert.equal(refunded.used, task.creditCost);
 const exhausted = await repository.reserveAiWeeklyAllowance(session, {
   planTier: "unknown",
@@ -210,10 +345,14 @@ const exhausted = await repository.reserveAiWeeklyAllowance(session, {
 });
 assert.equal(exhausted.allowed, false);
 
-const [app, html, server, allowancePermissionsMigration] = await Promise.all([
+const [app, html, server, repositorySource, workflow, preflight, verifier, allowancePermissionsMigration] = await Promise.all([
   readFile(new URL("../frontend/scripts/app.js", import.meta.url), "utf8"),
   readFile(new URL("../frontend/index.html", import.meta.url), "utf8"),
   readFile(new URL("./server.js", import.meta.url), "utf8"),
+  readFile(new URL("./repository/studentOsRepository.js", import.meta.url), "utf8"),
+  readFile(new URL("../.github/workflows/azure-container-apps-studentos.yml", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/preflightAzure.js", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/verifyAzureDeployment.js", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/202607020001_studentos_task34_ai_allowance_permissions.sql", import.meta.url), "utf8"),
 ]);
 const courseMarkup = html.slice(html.indexOf('id="setup-courses"'), html.indexOf('id="onboarding-form"'));
@@ -227,6 +366,13 @@ assert.match(app, /Reconnect Classroom/);
 assert.match(app, /This course can now be used when uploading academic context\./);
 assert.match(server, /POST[^\n]+\/api\/courses|req\.method === "POST" && url\.pathname === "\/api\/courses"/);
 assert.match(server, /status: generated \? "charged" : "refunded"/);
+assert.match(server, /const authoritativeSnippets = grounding\.uploadedMaterialUsed === true/);
+assert.match(app, /const usedMaterialSnippets = result\.grounding\?\.uploadedMaterialUsed === true/);
+assert.match(repositorySource, /p_min_similarity: MIN_GROUNDING_CONFIDENCE/);
+assert.match(workflow, /GROQ_API_KEY=secretref:groq-api-key/);
+assert.match(workflow, /add_optional_provider_secret POLLINATIONS_API_KEY pollinations-api-key/);
+assert.match(preflight, /workflow requires and maps the primary Groq secret/);
+assert.match(verifier, /aiProviders\?\.configured !== true/);
 assert.match(allowancePermissionsMigration, /grant select, insert, update, delete on table public\.ai_usage_ledger to service_role/i);
 assert.match(allowancePermissionsMigration, /grant execute on function public\.reserve_ai_weekly_allowance[\s\S]*to service_role/i);
 assert.match(allowancePermissionsMigration, /grant execute on function public\.settle_ai_weekly_allowance[\s\S]*to service_role/i);

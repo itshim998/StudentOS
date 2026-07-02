@@ -78,6 +78,16 @@ Apply this migration to all three StudentOS data shards. Do not apply it to the 
 
 A read-only live schema check confirmed that the Task 3.3 ledger and functions exist on all three data shards, but object presence did not validate role privileges. Azure subsequently returned 403 from reservation, which identified the missing `service_role` grants fixed by the Task 3.4 permissions migration.
 
+## Production provider and grounding follow-up
+
+The next production test exposed a separate deployment defect after allowance reservation was repaired. The Azure workflow mapped Supabase secrets but not the AI provider secrets. With `STUDENTOS_AI_MODE=auto` and no configured provider, the provider boundary incorrectly returned the local policy response as a successful generation. That produced only the general-materials reminder and charged the reserved allowance.
+
+The production workflow now requires the primary `GROQ_API_KEY`, maps it through an Azure Container Apps secret reference, and conditionally maps optional rotation keys and Pollinations. Providerless automatic mode is a retryable generation failure, so the existing settlement path refunds the reservation and returns only the calm unavailable copy. Explicit mock mode remains available for controlled local tests.
+
+Retrieval now applies the existing `0.42` grounding threshold before snippets enter the model prompt. Real-provider responses expose only snippets referenced by validated `[S#]` or chunk citations, and source badges are deduplicated by material. Provider failures, uncited answers, and low-confidence retrieval return no public source labels or `Selected material` blocks.
+
+The browser console `400` from `/api/courses` is a separate course-form request and is not part of this AI fix.
+
 ## Validation
 
 - `npm.cmd run preflight` — passed.
@@ -92,3 +102,9 @@ A read-only live schema check confirmed that the Task 3.3 ledger and functions e
 - Task 3.4 migration regression assertions — passed for backend-only table and RPC privileges.
 - A redacted live Pollinations fallback request passed.
 - A redacted live `What is AI` StudentOS adapter request with empty academic context passed.
+- Providerless `auto` regression passed with a sanitized failure, cleared grounding, and refunded allowance settlement.
+- Citation-grounding regressions passed for low-confidence exclusion, validated citation selection, source deduplication, and uncited-source suppression.
+- Browser grounding regression passed; unused snippets and labels do not render as `Selected material`.
+- Azure workflow preflight passed with required primary Groq secret mapping, optional fallback mapping, and configured-AI deployment verification.
+
+Live Azure verification for this follow-up remains a post-deploy step. Configure `GROQ_API_KEY` in the `azure-dev` GitHub environment, run the manual workflow, and require `npm.cmd run verify:azure-deployment` to report `aiConfigured: true` before testing an authenticated general and grounded question.

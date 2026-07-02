@@ -2,6 +2,7 @@ import { confidenceLabel, cosineSimilarity, createDeterministicEmbedding } from 
 import { isAcademicContextRecord } from "../connectors/googleClassroom/mapper.js";
 
 export const AI_VERBS = Object.freeze(["Ask", "Plan", "Make", "Review"]);
+export const MIN_GROUNDING_CONFIDENCE = 0.42;
 
 export const ESSENTIAL_LEARNING_FEATURES = Object.freeze([
   "lucid_teaching",
@@ -324,6 +325,7 @@ export function retrieveGroundedSources({ state, message = "", topic, course, li
     .sort((left, right) => right.score - left.score)
     .slice(0, limit);
   const chunks = chunkMatches
+    .filter((chunk) => chunk.confidenceScore >= MIN_GROUNDING_CONFIDENCE)
     .sort((left, right) => right.score - left.score)
     .slice(0, limit);
   const memories = memoryMatches
@@ -362,7 +364,7 @@ export function retrieveGroundedSources({ state, message = "", topic, course, li
     confidence: {
       score: Number(bestConfidence.toFixed(4)),
       label: confidenceLabel(bestConfidence),
-      lowConfidence: bestConfidence < 0.42,
+      lowConfidence: bestConfidence < MIN_GROUNDING_CONFIDENCE,
       semanticAvailable: chunks.some((chunk) => chunk.embeddingStatus === "embedded"),
     },
   };
@@ -1234,6 +1236,7 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
         confidence: retrieved.confidence,
         snippets: retrieved.chunks.map((chunk) => ({
           chunkId: chunk.id,
+          sourceMaterialId: chunk.sourceMaterialId,
           citationLabel: chunk.citationLabel || chunk.source?.citationLabel,
           snippet: chunk.snippet,
           sourceTitle: chunk.source?.title,
@@ -1270,6 +1273,7 @@ export function answerFromStudentMaterials({ verb, message, state, retrievalOver
       confidence: retrieved.confidence,
       snippets: retrieved.chunks.map((chunk) => ({
         chunkId: chunk.id,
+        sourceMaterialId: chunk.sourceMaterialId,
         citationLabel: chunk.citationLabel || chunk.source?.citationLabel,
         snippet: chunk.snippet,
         sourceTitle: chunk.source?.title,

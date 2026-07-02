@@ -193,6 +193,27 @@ const requiredAzureSecretRefs = [
 ];
 addCheck("workflow validates Supabase backend secrets", requiredAzureSupabaseSecrets.every((name) => workflow.includes(`${name}: \${{ secrets.${name} }}`)) && workflow.includes("Missing required Azure backend secret"));
 addCheck("workflow maps Supabase backend secrets to ACA secret refs", includesAll(workflow, requiredAzureSecretRefs));
+addCheck(
+  "workflow requires and maps the primary Groq secret",
+  workflow.includes("GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}") &&
+    workflow.includes("GROQ_API_KEY; do") &&
+    workflow.includes('groq-api-key="$GROQ_API_KEY"') &&
+    workflow.includes("GROQ_API_KEY=secretref:groq-api-key") &&
+    workflow.includes("STUDENTOS_AI_MODE=auto"),
+);
+const optionalAzureAiSecrets = [
+  ["GROQ_API_KEY_2", "groq-api-key-2"],
+  ["GROQ_API_KEY_3", "groq-api-key-3"],
+  ["GROQ_API_KEY_4", "groq-api-key-4"],
+  ["GROQ_API_KEY_5", "groq-api-key-5"],
+  ["POLLINATIONS_API_KEY", "pollinations-api-key"],
+];
+addCheck(
+  "workflow conditionally maps optional AI provider secrets",
+  workflow.includes("add_optional_provider_secret") && optionalAzureAiSecrets.every(([name, secret]) =>
+    workflow.includes(`${name}: \${{ secrets.${name} }}`) &&
+      workflow.includes(`add_optional_provider_secret ${name} ${secret}`)),
+);
 addCheck("workflow configures production storage buckets", workflow.includes("STUDENTOS_STORAGE_BUCKET=studentos-source-materials") && workflow.includes("STUDENTOS_EXPORT_STORAGE_BUCKET=studentos-data-exports"));
 const runtimeConfigText = `${read("frontend/runtime-config.js")}\n${read("scripts/writeCloudflareFrontendConfig.js")}`;
 addCheck("frontend runtime config remains public-only", !/STUDENTOS_SUPABASE|SUPABASE_SERVICE_ROLE|SERVICE_ROLE_KEY|JWT_SECRET/i.test(runtimeConfigText));
@@ -219,6 +240,7 @@ addCheck("verify script checks health and config", verifier.includes("/api/healt
 addCheck("verify script checks AI JSON wiring", cloudflareVerifier.includes("/api/ai/verb") && cloudflareVerifier.includes("aiReturnedHtml"));
 addCheck("verify script rejects missing Azure URL", verifier.includes("STUDENTOS_AZURE_API_URL"));
 addCheck("verify script checks deployment target", verifier.includes("azure-container-apps"));
+addCheck("verify script requires configured production AI", verifier.includes("aiProviders?.configured !== true"));
 
 const failed = checks.filter((check) => !check.ok);
 const result = {

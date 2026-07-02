@@ -95,6 +95,9 @@ Configure these without values in documentation or commits:
 - `AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP`
 - `AZURE_LOCATION`
 - `GHCR_PULL_TOKEN`
+- `GROQ_API_KEY`
+
+The workflow requires `GROQ_API_KEY` in the `azure-dev` GitHub environment. `GROQ_API_KEY_2` through `GROQ_API_KEY_5` and `POLLINATIONS_API_KEY` are optional and are mapped only when configured.
 
 Safer future option: replace long-lived `AZURE_CREDENTIALS` with Azure OIDC/federated credentials and update `azure/login` to use `client-id`, `tenant-id`, and `subscription-id`.
 
@@ -132,6 +135,7 @@ Expected checks:
 - `GET /api/health` returns `ok: true`
 - `GET /api/config` returns safe public config
 - config reports `deploymentTarget: azure-container-apps`
+- config reports `aiProviders.configured: true`
 - no dangerous toggles are enabled
 - no secrets appear in responses
 
