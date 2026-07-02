@@ -22,6 +22,11 @@ import {
   hydrateSavedProductOnboarding,
 } from "./domain/onboardingService.js";
 import {
+  addManualCourse,
+  archiveManualCourse,
+  updateManualCourse,
+} from "./domain/courseManagementService.js";
+import {
   applyProductLifecycleAction,
   getProductFlowConfig,
   getProductLifecycleSnapshot,
@@ -585,6 +590,7 @@ function publicAiResult(result = {}) {
     fallback,
     citationValidation,
     webFallback,
+    internalFailureCode,
     grounding = {},
     ...safeResult
   } = result;
@@ -1828,6 +1834,41 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (req.method === "POST" && url.pathname === "/api/courses") {
+    const body = await readJsonBody(req);
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    const course = addManualCourse(state, body);
+    await repository.saveState(session, state);
+    sendJson(res, 201, {
+      course,
+      state: publicState(state, persistence),
+      message: "This course can now be used when uploading academic context.",
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  const manualCoursePath = url.pathname.match(/^\/api\/courses\/([^/]+)$/);
+  if (manualCoursePath && ["PATCH", "DELETE"].includes(req.method)) {
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    const courseId = decodeURIComponent(manualCoursePath[1]);
+    const course = req.method === "PATCH"
+      ? updateManualCourse(state, courseId, await readJsonBody(req))
+      : archiveManualCourse(state, courseId);
+    await repository.saveState(session, state);
+    sendJson(res, 200, {
+      course,
+      state: publicState(state, persistence),
+      message: req.method === "PATCH"
+        ? "Course details saved."
+        : "Course archived.",
+      secretsPrinted: false,
+    });
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/classroom/mock/assignments") {
     const { state } = await getStateContext(req);
     const classroomConnector = new MockGoogleClassroomConnector(state);
@@ -2303,6 +2344,12 @@ async function handleApi(req, res, url) {
       };
     }
     const generated = result.generationSucceeded !== false;
+    if (!generated) {
+      logger.warn("ai_generation.provider_unavailable", {
+        requestId: req.requestId,
+        failureCode: result.internalFailureCode || "provider_unavailable",
+      });
+    }
     const settlement = await repository.settleAiWeeklyAllowance(session, {
       requestId: req.requestId,
       status: generated ? "charged" : "refunded",

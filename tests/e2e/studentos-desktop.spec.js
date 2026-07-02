@@ -1261,10 +1261,34 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
 test("Academic Context respects Classroom review eligibility and no-course guidance", async ({ page }) => {
   const baseState = await fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json());
   let bootstrapPayload = structuredClone(baseState);
+  let manualCourseAdds = 0;
   await page.route("**/api/bootstrap", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify(bootstrapPayload),
   }));
+  await page.route("**/api/courses", async (route) => {
+    const request = route.request().postDataJSON();
+    manualCourseAdds += 1;
+    const course = {
+      id: "course_manual_e2e_physics",
+      title: request.courseName,
+      courseCode: request.courseCode || null,
+      department: request.department || "Science",
+      term: request.term || null,
+      source: "manual",
+      subjectIds: [],
+    };
+    bootstrapPayload = { ...bootstrapPayload, courses: [...(bootstrapPayload.courses || []), course] };
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        course,
+        state: bootstrapPayload,
+        message: "This course can now be used when uploading academic context.",
+      }),
+    });
+  });
 
   const reviewItem = {
     id: "classroom_review_task32",
@@ -1321,19 +1345,27 @@ test("Academic Context respects Classroom review eligibility and no-course guida
   await expect(page.locator("#academic-context-course-recovery")).toContainText("Refresh your Classroom course list or add a course in Setup before uploading academic context.");
   await expect(page.locator("#academic-context-course-recovery")).toContainText("StudentOS will only refresh your course names. It will not import assignments or materials.");
   await expect(page.locator("#academic-context-course-recovery").getByRole("button", { name: "Refresh course list" })).toBeVisible();
-  await expect(page.locator("#academic-context-course-recovery").getByRole("button", { name: "Open Setup" })).toBeVisible();
+  const addCourseManually = page.locator("#academic-context-course-recovery").getByRole("button", { name: "Add course manually" });
+  await expect(addCourseManually).toBeVisible();
   await expect(page.locator("#source-course-error")).toContainText("Add a course in Setup before uploading academic context.");
   await expect(page.locator("#source-submit-button")).toBeDisabled();
-
-  bootstrapPayload = {
-    ...bootstrapPayload,
-    courses: [structuredClone(baseState.courses[0])],
-  };
-  await page.goto(baseUrl);
+  await addCourseManually.click();
+  await expect(page.locator("#view-title")).toHaveText("Setup");
+  await expect(page.getByRole("heading", { name: "Courses", exact: true })).toBeVisible();
+  await expect(page.locator("#course-name")).toBeFocused();
+  await page.locator("#course-name").fill("E2E Physics");
+  await page.locator("#course-code").fill("PHY 101");
+  await page.locator("#course-term").fill("Semester 1");
+  await page.getByRole("button", { name: "Add course", exact: true }).click();
+  await expect(page.locator("#course-result")).toContainText("This course can now be used when uploading academic context.");
+  await expect(page.locator("#saved-courses")).toContainText("E2E Physics");
+  expect(manualCourseAdds).toBe(1);
   await clickNav(page, "Academic Context");
   await expect(page.locator("#academic-context-course-recovery")).toBeHidden();
   await expect(page.locator("#source-course-select")).toBeEnabled();
+  await expect(page.locator("#source-course-select")).toContainText("E2E Physics");
   await expect(page.locator("#source-submit-button")).toBeEnabled();
+  await page.unroute("**/api/courses");
   await page.unroute("**/api/bootstrap");
 });
 

@@ -21,7 +21,11 @@ function sanitizeError(error) {
 async function parseProviderText(response) {
   const body = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(`provider_http_${response.status}`);
+    const detail = body?.error?.message || body?.message || `provider_http_${response.status}`;
+    const error = new Error(`provider_http_${response.status}:${sanitizeError(detail)}`);
+    error.status = response.status;
+    error.providerCode = body?.error?.code || body?.error?.type || null;
+    throw error;
   }
   const messageContent = body?.choices?.[0]?.message?.content;
   if (typeof messageContent === "string") return messageContent.trim();
@@ -49,6 +53,33 @@ function markGroqKeyUnhealthy(keyName) {
   groqUnhealthyUntil.set(keyName, Date.now() + GROQ_FAILED_COOLDOWN_MS);
 }
 
+export function groqSupportsReasoningEffort(model) {
+  return /^openai\/gpt-oss-(?:20b|120b)$/i.test(String(model || "").trim());
+}
+
+export function buildGroqRequestBody({ model, messages, maxTokens, reasoningEffort, includeReasoningEffort = groqSupportsReasoningEffort(model) }) {
+  return {
+    model,
+    messages: Array.isArray(messages) ? messages : [],
+    temperature: 0.45,
+    top_p: 0.9,
+    max_completion_tokens: maxTokens,
+    ...(includeReasoningEffort && reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+    stream: false,
+  };
+}
+
+function isRequestCompatibilityError(error) {
+  return [400, 422].includes(Number(error?.status || 0));
+}
+
+function safeFailureCode(providerName, error) {
+  const status = Number(error?.status || 0);
+  if (status) return `${providerName}:http_${status}`;
+  if (error?.name === "AbortError") return `${providerName}:timeout`;
+  return `${providerName}:request_failed`;
+}
+
 export class GroqGroundedProvider {
   constructor({ config = getAiProviderConfig(), fetchImpl = globalThis.fetch } = {}) {
     this.name = "groq_grounded";
@@ -66,44 +97,63 @@ export class GroqGroundedProvider {
     }
     const keys = orderedGroqKeys(this.config.keys);
     let lastError = null;
+    const includeReasoningEffort = groqSupportsReasoningEffort(this.config.model);
     for (const key of keys) {
       try {
-        const timeout = timeoutSignal(this.config.timeoutMs);
+        const request = async (body) => {
+          const timeout = timeoutSignal(this.config.timeoutMs);
+          try {
+            const response = await this.fetch(this.config.endpoint, {
+              method: "POST",
+              signal: timeout.signal,
+              headers: {
+                Authorization: `Bearer ${key.value}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(body),
+            });
+            const text = await parseProviderText(response);
+            if (!text) throw new Error("groq_empty_response");
+            return text;
+          } finally {
+            timeout.clear();
+          }
+        };
+        const initialBody = buildGroqRequestBody({
+          model: this.config.model,
+          messages,
+          maxTokens,
+          reasoningEffort,
+          includeReasoningEffort,
+        });
+        let text;
         try {
-          const response = await this.fetch(this.config.endpoint, {
-            method: "POST",
-            signal: timeout.signal,
-            headers: {
-              Authorization: `Bearer ${key.value}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: this.config.model,
-              messages,
-              temperature: 0.45,
-              top_p: 0.9,
-              max_completion_tokens: maxTokens,
-              reasoning_effort: reasoningEffort,
-              stream: false,
-            }),
-          });
-          const text = await parseProviderText(response);
-          if (!text) throw new Error("groq_empty_response");
-          return {
-            provider: this.name,
-            modelUsed: this.config.model,
-            keyIndexUsed: key.index,
-            text,
-          };
-        } finally {
-          timeout.clear();
+          text = await request(initialBody);
+        } catch (error) {
+          if (!includeReasoningEffort || !isRequestCompatibilityError(error)) throw error;
+          text = await request(buildGroqRequestBody({
+            model: this.config.model,
+            messages,
+            maxTokens,
+            reasoningEffort,
+            includeReasoningEffort: false,
+          }));
         }
+        return {
+          provider: this.name,
+          modelUsed: this.config.model,
+          keyIndexUsed: key.index,
+          text,
+        };
       } catch (error) {
         lastError = error;
+        if (isRequestCompatibilityError(error)) break;
         markGroqKeyUnhealthy(key.name);
       }
     }
-    throw new Error(`groq_failed:${sanitizeError(lastError)}`);
+    const failure = new Error(`groq_failed:${sanitizeError(lastError)}`);
+    failure.status = lastError?.status || null;
+    throw failure;
   }
 }
 
@@ -160,7 +210,9 @@ export class PollinationsTextProvider {
         lastError = error;
       }
     }
-    throw new Error(`pollinations_failed:${sanitizeError(lastError)}`);
+    const failure = new Error(`pollinations_failed:${sanitizeError(lastError)}`);
+    failure.status = lastError?.status || null;
+    throw failure;
   }
 }
 
@@ -193,19 +245,21 @@ export async function runProviderFallback({ messages, config = getAiProviderConf
     providers.push(new PollinationsTextProvider({ config, fetchImpl }));
   }
   let lastError = null;
+  const failures = [];
   for (const provider of providers) {
     if (!provider.isConfigured()) continue;
     try {
       return { ...await provider.generate({ messages }), generationSucceeded: true, providerFailure: false };
     } catch (error) {
       lastError = error;
+      failures.push(safeFailureCode(provider.name, error));
     }
   }
   return {
     provider: "mock",
     modelUsed: "local_studentos_policy",
     text: "",
-    fallbackReason: sanitizeError(lastError || "no_provider_configured"),
+    fallbackReason: failures.join(",") || sanitizeError(lastError || "no_provider_configured"),
     generationSucceeded: !lastError,
     providerFailure: Boolean(lastError),
   };

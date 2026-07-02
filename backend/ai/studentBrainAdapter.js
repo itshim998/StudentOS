@@ -140,6 +140,7 @@ export async function runStudentOsVerb({
       mode: "provider_unavailable",
       provider: providerResult.provider,
       modelUsed: providerResult.modelUsed,
+      internalFailureCode: providerResult.fallbackReason || "provider_unavailable",
       generationSucceeded: false,
       retryable: true,
       answer: "I could not complete that answer right now. Please try again.",

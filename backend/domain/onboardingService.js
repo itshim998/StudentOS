@@ -263,7 +263,7 @@ export function generateAcademicRoadmap(state, { now = new Date() } = {}) {
 export function applyStudentOnboarding(state, payload = {}, { now = new Date() } = {}) {
   const normalized = normalizeOnboardingPayload(payload, now);
   const timestamp = nowIso(now);
-  const courses = normalized.courses.map((course) => ({
+  const onboardingCourses = normalized.courses.map((course) => ({
     id: course.id,
     title: course.title,
     term: course.term,
@@ -272,8 +272,17 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date() }
     color: course.color,
     syllabusId: `syllabus_${slug(course.title)}`,
     subjectIds: [],
+    source: "onboarding",
     createdAt: timestamp,
   }));
+  const onboardingIds = new Set(onboardingCourses.map((course) => course.id));
+  const onboardingTitles = new Set(onboardingCourses.map((course) => course.title.toLowerCase()));
+  const preservedCourses = (state.courses || []).filter((course) =>
+    isAcademicContextRecord(course) &&
+    ["manual", "google_classroom"].includes(course.source) &&
+    !onboardingIds.has(course.id) &&
+    !onboardingTitles.has(String(course.title || "").toLowerCase()));
+  const courses = [...onboardingCourses, ...preservedCourses];
   const topics = [];
   const weakTopicRecords = [];
   for (const course of normalized.courses) {

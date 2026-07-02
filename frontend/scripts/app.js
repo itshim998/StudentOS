@@ -55,6 +55,17 @@ const els = {
   dashboardSummary: document.getElementById("dashboard-summary"),
   onboardingForm: document.getElementById("onboarding-form"),
   onboardingResult: document.getElementById("onboarding-result"),
+  setupCourses: document.getElementById("setup-courses"),
+  courseForm: document.getElementById("course-form"),
+  courseId: document.getElementById("course-id"),
+  courseName: document.getElementById("course-name"),
+  courseCode: document.getElementById("course-code"),
+  courseDepartment: document.getElementById("course-department"),
+  courseTerm: document.getElementById("course-term"),
+  courseSubmitButton: document.getElementById("course-submit-button"),
+  courseEditCancel: document.getElementById("course-edit-cancel"),
+  courseResult: document.getElementById("course-result"),
+  savedCourses: document.getElementById("saved-courses"),
   roadmapList: document.getElementById("roadmap-list"),
   timetableList: document.getElementById("timetable-list"),
   assignmentList: document.getElementById("assignment-list"),
@@ -1436,7 +1447,7 @@ function renderAcademicContextCourseRecovery(noCourses) {
     <p class="muted-copy">StudentOS will only refresh your course names. It will not import assignments or materials.</p>
     <div class="inline-actions">
       ${connectionAction}
-      <button class="text-button" type="button" data-open-setup>Open Setup</button>
+      <button class="text-button" type="button" data-open-courses>Add course manually</button>
     </div>
   `;
 }
@@ -1863,7 +1874,7 @@ function setupFieldValue(name, value) {
 
 function derivedSubjectLines() {
   return (state.courses || [])
-    .filter((course) => course.source !== "google_classroom")
+    .filter((course) => !["google_classroom", "manual"].includes(course.source))
     .map((course) => {
       const topics = (state.topics || []).filter((topic) => topic.courseId === course.id).map((topic) => topic.title);
       const parts = [course.title || "", course.examDate ? String(course.examDate).slice(0, 10) : "", topics.join(", ")];
@@ -1889,6 +1900,107 @@ function derivedTimetableLines() {
     const time = Number.isNaN(startsAt.getTime()) ? "" : startsAt.toTimeString().slice(0, 5);
     return [item.location || "", time, item.title || "", courseById(item.courseId)?.title || ""].join("|");
   }).join("\n");
+}
+
+function courseSourceLabel(course = {}) {
+  if (course.source === "google_classroom") return "From Classroom";
+  if (course.source === "manual") return "Added manually";
+  return "From Setup";
+}
+
+function courseManagementErrorCopy(error) {
+  const message = String(error?.message || "");
+  if (/course name|already in your saved courses|could not be found|original setup|assignments and materials/i.test(message)) return message;
+  return "StudentOS could not save this course right now. Please try again.";
+}
+
+function resetCourseForm() {
+  if (!els.courseForm) return;
+  els.courseForm.reset();
+  els.courseId.value = "";
+  els.courseSubmitButton.textContent = "Add course";
+  els.courseEditCancel.hidden = true;
+}
+
+function renderCourseManagement() {
+  if (!els.savedCourses) return;
+  const courses = state?.courses || [];
+  if (!courses.length) {
+    els.savedCourses.innerHTML = `
+      <article class="saved-course-item">
+        <strong>No saved courses yet</strong>
+        <p>Add your first course above. It will be ready in Academic Context immediately.</p>
+      </article>
+    `;
+    return;
+  }
+  els.savedCourses.innerHTML = courses.map((course) => {
+    const details = [course.courseCode, course.department, course.term].filter(Boolean).join(" / ");
+    const manualActions = course.source === "manual" ? `
+      <div class="inline-actions">
+        <button class="mini-action" type="button" data-edit-course-id="${escapeHtml(course.id)}">Edit</button>
+        <button class="mini-action" type="button" data-archive-course-id="${escapeHtml(course.id)}">Archive</button>
+      </div>
+    ` : "";
+    return `
+      <article class="saved-course-item">
+        <div>
+          <strong>${escapeHtml(course.title)}</strong>
+          <p>${escapeHtml(details || courseSourceLabel(course))}</p>
+          ${details ? `<span class="muted-copy">${escapeHtml(courseSourceLabel(course))}</span>` : ""}
+        </div>
+        ${manualActions}
+      </article>
+    `;
+  }).join("");
+}
+
+function openCourseSetup() {
+  setView("setup");
+  window.requestAnimationFrame(() => {
+    els.setupCourses?.scrollIntoView({ behavior: "smooth", block: "start" });
+    els.courseName?.focus({ preventScroll: true });
+  });
+}
+
+function beginCourseEdit(courseId) {
+  const course = courseById(courseId);
+  if (!course || course.source !== "manual") return;
+  openCourseSetup();
+  els.courseId.value = course.id;
+  els.courseName.value = course.title || "";
+  els.courseCode.value = course.courseCode || "";
+  els.courseDepartment.value = course.department || "";
+  els.courseTerm.value = course.term || "";
+  els.courseSubmitButton.textContent = "Save course";
+  els.courseEditCancel.hidden = false;
+  els.courseName.focus();
+}
+
+async function saveCourse(form) {
+  const values = Object.fromEntries(new FormData(form).entries());
+  const courseId = String(values.courseId || "").trim();
+  const result = await api(courseId ? `/api/courses/${encodeURIComponent(courseId)}` : "/api/courses", {
+    method: courseId ? "PATCH" : "POST",
+    body: JSON.stringify(values),
+  });
+  state = result.state || state;
+  resetCourseForm();
+  render();
+  setView("setup");
+  setResult(els.courseResult, `<strong>${courseId ? "Course details saved." : "Course added."}</strong><p>${escapeHtml(result.message || "This course can now be used when uploading academic context.")}</p>`);
+}
+
+async function archiveCourse(courseId) {
+  const course = courseById(courseId);
+  if (!course || course.source !== "manual") return;
+  if (!window.confirm(`Archive ${course.title}?`)) return;
+  const result = await api(`/api/courses/${encodeURIComponent(courseId)}`, { method: "DELETE" });
+  state = result.state || state;
+  resetCourseForm();
+  render();
+  setView("setup");
+  setResult(els.courseResult, `<strong>Course archived.</strong><p>You can add it again later if you need it.</p>`);
 }
 
 function populateSetupFormFromState() {
@@ -1925,6 +2037,7 @@ function render() {
   const backendPersistence = runtimeConfig.persistence || {};
   els.connectorStatus.textContent = backendModeLabel(backendPersistence.mode || state.persistence?.mode || "unknown mode");
   populateSetupFormFromState();
+  renderCourseManagement();
   renderClassroomPanel();
   renderDashboardSummary();
   renderRoadmap();
@@ -4068,9 +4181,24 @@ function wireEvents() {
       });
       return;
     }
-    const openSetupButton = event.target.closest("[data-open-setup]");
-    if (openSetupButton) {
-      setView("setup");
+    const openCoursesButton = event.target.closest("[data-open-courses]");
+    if (openCoursesButton) {
+      openCourseSetup();
+      return;
+    }
+    const editCourseButton = event.target.closest("[data-edit-course-id]");
+    if (editCourseButton) {
+      beginCourseEdit(editCourseButton.dataset.editCourseId);
+      return;
+    }
+    const archiveCourseButton = event.target.closest("[data-archive-course-id]");
+    if (archiveCourseButton) {
+      withButtonLoading(archiveCourseButton, "Archiving...", () => archiveCourse(archiveCourseButton.dataset.archiveCourseId), {
+        timeoutTarget: els.courseResult,
+        timeoutCopy: "Archiving this course is taking longer than expected. Please try again.",
+      }).catch((error) => {
+        setResult(els.courseResult, `<p>${escapeHtml(courseManagementErrorCopy(error))}</p>`);
+      });
       return;
     }
     const classroomItemButton = event.target.closest("[data-classroom-item-id]");
@@ -4211,6 +4339,16 @@ function wireEvents() {
     event.preventDefault();
     closeAcademicContextDeleteConfirmation();
   });
+  els.courseForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    withButtonLoading(event.submitter || els.courseSubmitButton, els.courseId.value ? "Saving..." : "Adding...", () => saveCourse(event.currentTarget), {
+      timeoutTarget: els.courseResult,
+      timeoutCopy: "Saving this course is taking longer than expected. Please try again.",
+    }).catch((error) => {
+      setResult(els.courseResult, `<p>${escapeHtml(courseManagementErrorCopy(error))}</p>`);
+    });
+  });
+  els.courseEditCancel?.addEventListener("click", resetCourseForm);
   document.querySelectorAll("[data-auth-mode]").forEach((button) => {
     button.addEventListener("click", () => setAuthShellMode(button.dataset.authMode));
   });

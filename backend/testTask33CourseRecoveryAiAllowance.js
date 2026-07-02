@@ -193,9 +193,14 @@ assert.equal(providerFailure.generationSucceeded, false);
 assert.equal(providerFailure.answer, "I could not complete that answer right now. Please try again.");
 assert.doesNotMatch(providerFailure.answer, /provider|model|token|backend|raw_provider_failure/i);
 
+const supportedProviderConfig = getAiProviderConfig({
+  STUDENTOS_AI_MODE: "auto",
+  GROQ_API_KEY: "test-only-key",
+  GROQ_CHAT_MODEL: "openai/gpt-oss-120b",
+});
 let providerBody = null;
 const provider = new GroqGroundedProvider({
-  config: failingProviderConfig,
+  config: supportedProviderConfig,
   fetchImpl: async (_url, options) => {
     providerBody = JSON.parse(options.body);
     return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "A safe response" } }] }) };

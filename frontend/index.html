@@ -279,6 +279,43 @@
                 <h3>StudentOS Setup</h3>
               </div>
             </div>
+            <section id="setup-courses" class="setup-courses-card" aria-labelledby="setup-courses-title" tabindex="-1">
+              <div class="section-heading tight">
+                <div>
+                  <p class="eyebrow">Courses</p>
+                  <h3 id="setup-courses-title">Courses</h3>
+                  <p>Add your courses so StudentOS can organize assignments and materials.</p>
+                </div>
+              </div>
+              <form id="course-form" class="form-grid course-management-form" novalidate>
+                <input id="course-id" name="courseId" type="hidden">
+                <label for="course-name">
+                  Course name
+                  <input id="course-name" name="courseName" type="text" placeholder="Course name" autocomplete="off" required>
+                </label>
+                <label for="course-code">
+                  Course code <span class="muted-copy">(optional)</span>
+                  <input id="course-code" name="courseCode" type="text" placeholder="For example, PHY 101" autocomplete="off">
+                </label>
+                <label for="course-department">
+                  Department or stream <span class="muted-copy">(optional)</span>
+                  <input id="course-department" name="department" type="text" placeholder="Uses your profile when left blank" autocomplete="off">
+                </label>
+                <label for="course-term">
+                  Term, semester, or year <span class="muted-copy">(optional)</span>
+                  <input id="course-term" name="term" type="text" placeholder="For example, Semester 1" autocomplete="off">
+                </label>
+                <div class="course-form-actions">
+                  <button id="course-submit-button" class="primary-button" type="submit">Add course</button>
+                  <button id="course-edit-cancel" class="text-button" type="button" hidden>Cancel edit</button>
+                </div>
+              </form>
+              <div id="course-result" class="result-box" aria-live="polite"></div>
+              <div class="saved-courses-heading">
+                <strong>Saved courses</strong>
+              </div>
+              <div id="saved-courses" class="saved-courses-list"></div>
+            </section>
             <form id="onboarding-form" class="form-grid onboarding-form">
               <fieldset class="setup-section">
                 <legend>Identity</legend>

@@ -1275,6 +1275,70 @@ input[type="file"] {
   box-shadow: var(--shadow);
 }
 
+.setup-courses-card {
+  scroll-margin-top: 24px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.setup-courses-card:focus {
+  outline: 2px solid var(--mint);
+  outline-offset: 3px;
+}
+
+.course-management-form {
+  max-width: none;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.course-management-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.course-form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.saved-courses-heading {
+  padding-top: 2px;
+}
+
+.saved-courses-list {
+  display: grid;
+  gap: 9px;
+}
+
+.saved-course-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 12px;
+}
+
+.saved-course-item > div:first-child {
+  min-width: 0;
+}
+
+.saved-course-item p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .onboarding-form {
   max-width: none;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1721,6 +1785,12 @@ textarea:focus {
   }
   .app-shell {
     grid-template-columns: 1fr;
+  }
+  .course-management-form {
+    grid-template-columns: 1fr;
+  }
+  .course-form-actions {
+    grid-column: auto;
   }
   .rail {
     min-height: auto;

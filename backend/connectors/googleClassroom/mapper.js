@@ -94,7 +94,7 @@ export function isClassroomRecord(item = {}) {
 }
 
 export function isAcademicContextRecord(item = {}) {
-  if (item.archived === true || item.deletedAt) return false;
+  if (item.archived === true || item.archivedAt || item.deletedAt) return false;
   if (!isClassroomRecord(item)) return true;
   return item.academicContextIncluded === true && item.selectionState === "imported";
 }
