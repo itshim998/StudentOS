@@ -70,9 +70,13 @@ Regression coverage verifies successful `What is AI` accounting, failure refund 
 
 ## Migration note
 
-No migration was added. Manual course fields are stored in the existing course payload. There is nothing new to apply to the StudentOS data shards or the Auth project.
+Manual course fields still use the existing course payload and need no schema change.
 
-A read-only live schema check confirmed that the existing Task 3.3 `ai_usage_ledger`, reserve function, and settlement function are present on all three StudentOS data shards.
+The production 403 exposed a missing permission step in the Task 3.3 allowance migration. Migration `supabase/migrations/202607020001_studentos_task34_ai_allowance_permissions.sql` grants the backend `service_role` access to `ai_usage_ledger` and execute permission on the reserve and settlement RPCs. It explicitly removes direct access from `public`, `anon`, and `authenticated`, leaving weekly allowance accounting backend-only.
+
+Apply this migration to all three StudentOS data shards. Do not apply it to the Auth project.
+
+A read-only live schema check confirmed that the Task 3.3 ledger and functions exist on all three data shards, but object presence did not validate role privileges. Azure subsequently returned 403 from reservation, which identified the missing `service_role` grants fixed by the Task 3.4 permissions migration.
 
 ## Validation
 
@@ -85,5 +89,6 @@ A read-only live schema check confirmed that the existing Task 3.3 `ai_usage_led
 - `git diff --check` — passed with only existing line-ending normalization warnings.
 - `npm.cmd run verify:ai` — passed against the configured Groq GPT-OSS model with secrets excluded from output.
 - Read-only weekly-allowance schema check — passed on all three StudentOS data shards.
+- Task 3.4 migration regression assertions — passed for backend-only table and RPC privileges.
 - A redacted live Pollinations fallback request passed.
 - A redacted live `What is AI` StudentOS adapter request with empty academic context passed.

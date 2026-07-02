@@ -37,9 +37,10 @@ const additionalShardMigrations = [
   "supabase/migrations/202606290001_studentos_pass35_4_plan_entitlements.sql",
   "supabase/migrations/202607010001_studentos_task2_classroom_selection_truth.sql",
   "supabase/migrations/202607010002_studentos_task33_ai_weekly_allowance.sql",
+  "supabase/migrations/202607020001_studentos_task34_ai_allowance_permissions.sql",
 ];
 
-console.log("StudentOS migration plan through Task 3.3");
+console.log("StudentOS migration plan through Task 3.4");
 for (const [index, step] of steps.entries()) {
   console.log(`${index + 1}. ${step.project}: ${step.migration}`);
 }

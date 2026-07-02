@@ -210,10 +210,11 @@ const exhausted = await repository.reserveAiWeeklyAllowance(session, {
 });
 assert.equal(exhausted.allowed, false);
 
-const [app, html, server] = await Promise.all([
+const [app, html, server, allowancePermissionsMigration] = await Promise.all([
   readFile(new URL("../frontend/scripts/app.js", import.meta.url), "utf8"),
   readFile(new URL("../frontend/index.html", import.meta.url), "utf8"),
   readFile(new URL("./server.js", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/202607020001_studentos_task34_ai_allowance_permissions.sql", import.meta.url), "utf8"),
 ]);
 const courseMarkup = html.slice(html.indexOf('id="setup-courses"'), html.indexOf('id="onboarding-form"'));
 for (const copy of ["Courses", "Add course", "Course name", "Course code", "Saved courses", "Add your courses so StudentOS can organize assignments and materials."]) {
@@ -226,6 +227,12 @@ assert.match(app, /Reconnect Classroom/);
 assert.match(app, /This course can now be used when uploading academic context\./);
 assert.match(server, /POST[^\n]+\/api\/courses|req\.method === "POST" && url\.pathname === "\/api\/courses"/);
 assert.match(server, /status: generated \? "charged" : "refunded"/);
+assert.match(allowancePermissionsMigration, /grant select, insert, update, delete on table public\.ai_usage_ledger to service_role/i);
+assert.match(allowancePermissionsMigration, /grant execute on function public\.reserve_ai_weekly_allowance[\s\S]*to service_role/i);
+assert.match(allowancePermissionsMigration, /grant execute on function public\.settle_ai_weekly_allowance[\s\S]*to service_role/i);
+assert.match(allowancePermissionsMigration, /revoke all on table public\.ai_usage_ledger from public, anon, authenticated/i);
+assert.doesNotMatch(allowancePermissionsMigration, /grant\s+(?:all|execute|select|insert|update|delete)[^;]*\bto\s+(?:anon|authenticated)\b/i);
+assert.match(allowancePermissionsMigration, /Apply to all three StudentOS data shards only/i);
 assert.doesNotMatch(courseMarkup, /\b(table|row|shard|backend|database|debug|schema)\b/i);
 assert.doesNotMatch(`${html}\n${app}`, /Plan Free/i);
 
