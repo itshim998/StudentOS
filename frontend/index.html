@@ -182,7 +182,7 @@
             </article>
           </div>
 
-          <div class="overview-grid today-grid">
+          <div id="today-dashboard-panels" class="overview-grid today-grid">
             <section class="focus-board today-board today-study-board">
               <div class="section-heading">
                 <div>
@@ -442,10 +442,14 @@
             <div class="academic-context-hero-copy">
               <p class="eyebrow">Academic Context</p>
               <h3>Academic Context</h3>
-              <p>Assignments, materials, and Classroom work StudentOS can use for your semester.</p>
+              <p>Courses, syllabus, exam dates, assignments, and materials StudentOS can use for your semester.</p>
             </div>
-            <button id="academic-context-add-button" class="primary-button academic-context-add-action" type="button">Add PDF</button>
+            <div class="academic-context-hero-actions">
+              <button id="academic-context-prepare-button" class="secondary-button" type="button">Prepare Academic Context</button>
+              <button id="academic-context-add-button" class="primary-button academic-context-add-action" type="button">Add PDF</button>
+            </div>
           </section>
+          <div id="academic-context-preparation-status" class="academic-context-preparation-status" aria-live="polite"></div>
           <div id="academic-context-summary" class="academic-context-summary" aria-label="Academic Context summary"></div>
 
           <div class="memory-layout academic-context-layout">
@@ -454,14 +458,57 @@
             </section>
 
             <aside class="academic-context-support-column" aria-label="Academic Context controls and guidance">
+              <section class="memory-upload-panel academic-context-exam-panel" aria-labelledby="academic-context-exam-title">
+                <div class="section-heading">
+                  <div>
+                    <p class="eyebrow">Exam schedule</p>
+                    <h3 id="academic-context-exam-title">Add an exam date</h3>
+                  </div>
+                </div>
+                <p class="surface-intro">Add each exam so Today can plan around the nearest dates.</p>
+                <form id="exam-form" class="form-grid exam-entry-form" novalidate>
+                  <input id="exam-id" name="examId" type="hidden">
+                  <label for="exam-course-select">
+                    <span>Course</span>
+                    <select id="exam-course-select" name="courseId" required></select>
+                  </label>
+                  <label for="exam-name">
+                    <span>Exam name</span>
+                    <input id="exam-name" name="examName" type="text" placeholder="Semester exam" required>
+                  </label>
+                  <label for="exam-date">
+                    <span>Exam date</span>
+                    <input id="exam-date" name="examDate" type="date" required>
+                  </label>
+                  <label for="exam-time">
+                    <span>Exam time <small>Optional</small></span>
+                    <input id="exam-time" name="examTime" type="time">
+                  </label>
+                  <label for="exam-weightage">
+                    <span>Marks or weightage <small>Optional</small></span>
+                    <input id="exam-weightage" name="marksWeightage" type="text" placeholder="100 marks or 40%">
+                  </label>
+                  <label for="exam-notes">
+                    <span>Notes <small>Optional</small></span>
+                    <textarea id="exam-notes" name="notes" rows="3" placeholder="Room, format, or revision focus"></textarea>
+                  </label>
+                  <div class="inline-actions exam-form-actions">
+                    <button id="exam-submit-button" class="primary-button" type="submit">Add exam</button>
+                    <button id="exam-edit-cancel" class="text-button" type="button" hidden>Cancel edit</button>
+                  </div>
+                </form>
+                <div id="exam-result" class="result-box compact-result" aria-live="polite"></div>
+                <div id="exam-list" class="exam-list" aria-live="polite"></div>
+              </section>
+
               <section id="academic-context-upload-panel" class="memory-upload-panel academic-context-upload-panel">
                 <div class="section-heading">
                   <div>
                     <p class="eyebrow">Add PDF</p>
-                    <h3>Add an assignment or material</h3>
+                    <h3>Add a syllabus, assignment, or material</h3>
                   </div>
                 </div>
-                <p class="surface-intro">Choose what to add, then match the PDF to a course.</p>
+                <p class="surface-intro">Choose what to add, then match the PDF to a course when needed.</p>
                 <p id="source-capacity-message" class="academic-context-form-notice muted-copy" aria-live="polite"></p>
                 <div id="academic-context-course-recovery" class="academic-context-course-recovery" aria-live="polite" hidden></div>
                 <form id="source-form" class="form-grid source-upload-form" novalidate>
@@ -469,9 +516,11 @@
                     <span>Type</span>
                     <select name="artifactKind" id="source-kind-select" aria-describedby="source-kind-help">
                       <option value="assignment">Assignment</option>
-                      <option value="material">Material</option>
+                      <option value="material">Study material</option>
+                      <option value="syllabus">Syllabus</option>
+                      <option value="exam_schedule">Exam schedule</option>
                     </select>
-                    <small id="source-kind-help" class="form-field-help">Assignments have deadlines. Materials are kept ready for study.</small>
+                    <small id="source-kind-help" class="form-field-help">Assignments have deadlines. Other PDFs stay ready for study.</small>
                   </label>
                   <label for="source-title">
                     <span>Title</span>

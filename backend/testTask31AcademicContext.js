@@ -154,7 +154,7 @@ assert.match(academicText, /Academic Context/);
 assert.doesNotMatch(academicText, /\bMemory\b/);
 assert.match(app, /memory: "Academic Context"/);
 assert.match(renderSource, />Assignments</);
-assert.match(renderSource, />Materials</);
+assert.match(renderSource, />Study materials</);
 assert.match(renderSource, /New Classroom work found/);
 assert.match(renderSource, /data-classroom-ignore-id/);
 assert.match(html, /accept="\.pdf,application\/pdf"/);

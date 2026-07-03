@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isAcademicContextRecord } from "../connectors/googleClassroom/mapper.js";
+import { markAcademicContextNeedsPreparation } from "./academicContextService.js";
 
 const COURSE_COLORS = ["mint", "amber", "violet", "sky"];
 
@@ -112,6 +113,7 @@ export function addManualCourse(state, input = {}, { now = new Date(), idFactory
   };
   state.courses.push(course);
   auditCourseChange(state, course, "created", now);
+  markAcademicContextNeedsPreparation(state, "course_added", { now });
   return course;
 }
 
@@ -128,6 +130,7 @@ export function updateManualCourse(state, courseId, input = {}, { now = new Date
     updatedAt: now.toISOString(),
   });
   auditCourseChange(state, course, "updated", now);
+  markAcademicContextNeedsPreparation(state, "course_updated", { now });
   return course;
 }
 
@@ -139,5 +142,6 @@ export function archiveManualCourse(state, courseId, { now = new Date() } = {}) 
   course.archivedAt = now.toISOString();
   course.updatedAt = now.toISOString();
   auditCourseChange(state, course, "archived", now);
+  markAcademicContextNeedsPreparation(state, "course_removed", { now });
   return course;
 }

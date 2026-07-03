@@ -579,7 +579,7 @@ test.describe("StudentOS live Supabase E2E", () => {
       mimeType: "application/pdf",
       buffer: buildPdfFixtureBuffer("Quadratics vertex form and worked examples for StudentOS."),
     });
-    await page.getByRole("button", { name: "Upload material" }).click();
+    await page.getByRole("button", { name: "Upload study material" }).click();
     const uploadResultText = await waitForUploadSettled(page);
     if (!uploadResultText.includes("Live E2E quadratics note")) {
       await testInfo.attach("masked-source-upload-response", {

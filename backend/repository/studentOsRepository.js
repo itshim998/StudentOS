@@ -1075,7 +1075,7 @@ class MockStudentOsRepository {
       .map(clone);
   }
 
-  async hardDeleteSourceArtifacts(session, { sourceId, storageBucket, storagePath, assignmentIds = [] } = {}) {
+  async hardDeleteSourceArtifacts(session, { sourceId, storageBucket, storagePath, assignmentIds = [], syllabusIds = [] } = {}) {
     const state = await this.loadState(session);
     if (storageBucket && storagePath) await this.deleteStorageObject(session, { bucket: storageBucket, path: storagePath });
     const assignments = new Set(assignmentIds);
@@ -1088,8 +1088,17 @@ class MockStudentOsRepository {
       state.jobEvents = (state.jobEvents || []).filter((item) => item.sourceId !== sourceId);
     }
     state.assignments = (state.assignments || []).filter((item) => !assignments.has(item.id));
+    const syllabi = new Set(syllabusIds);
+    state.syllabi = (state.syllabi || []).filter((item) => !syllabi.has(item.id));
     await this.saveState(session, state);
     return { hardDeleted: true, mode: "mock", storageObjectDeleteRequested: Boolean(storagePath) };
+  }
+
+  async deleteAcademicExam(session, examId) {
+    const state = await this.loadState(session);
+    state.exams = (state.exams || []).filter((item) => item.id !== examId);
+    await this.saveState(session, state);
+    return { deleted: true, mode: "mock" };
   }
 
   async deleteStorageObject() {
@@ -1347,7 +1356,7 @@ class SupabaseStudentOsRepository {
   }
 
   async saveSourceIngestion(session, state) {
-    await this.saveChangedCollections(session, state, ["assignments", "sourceMaterials", "sourceChunks", "memoryItems", "embeddingsMetadata", "backgroundJobs", "jobEvents", "auditLog"]);
+    await this.saveChangedCollections(session, state, ["assignments", "syllabi", "sourceMaterials", "sourceChunks", "memoryItems", "embeddingsMetadata", "backgroundJobs", "jobEvents", "auditLog"]);
   }
 
   async saveBackgroundJobs(session, state) {
@@ -1802,6 +1811,7 @@ class SupabaseStudentOsRepository {
     jobIds = [],
     jobEventIds = [],
     assignmentIds = [],
+    syllabusIds = [],
   } = {}) {
     if (!sourceId && !assignmentIds.length) throw new Error("academic_context_record_required");
     const route = this.route(session);
@@ -1828,6 +1838,8 @@ class SupabaseStudentOsRepository {
     if (eventFilter) deletes.unshift(["job_events", { user_id: userFilter, id: eventFilter }]);
     const assignmentFilter = inFilter(assignmentIds);
     if (assignmentFilter) deletes.unshift(["assignments", { user_id: userFilter, id: assignmentFilter }]);
+    const syllabusFilter = inFilter(syllabusIds);
+    if (syllabusFilter) deletes.unshift(["syllabi", { user_id: userFilter, id: syllabusFilter }]);
     for (const [table, filters] of deletes) {
       await route.client.deleteRows(table, { filters });
     }
@@ -1836,6 +1848,17 @@ class SupabaseStudentOsRepository {
       mode: "supabase",
       storageObjectDeleteRequested: Boolean(storagePath),
     };
+  }
+
+  async deleteAcademicExam(session, examId) {
+    const route = this.route(session);
+    await route.client.deleteRows("exams", {
+      filters: {
+        user_id: `eq.${session.user.id}`,
+        id: `eq.${examId}`,
+      },
+    });
+    return { deleted: true, mode: "supabase" };
   }
 
   async saveAiConversation(session, conversation, messages) {
@@ -2184,6 +2207,12 @@ export class StudentOsRepository {
     return this.useSupabase(session)
       ? this.supabase.hardDeleteSourceArtifacts(session, cleanup)
       : this.mock.hardDeleteSourceArtifacts(session, cleanup);
+  }
+
+  async deleteAcademicExam(session, examId) {
+    return this.useSupabase(session)
+      ? this.supabase.deleteAcademicExam(session, examId)
+      : this.mock.deleteAcademicExam(session, examId);
   }
 
   async uploadStorageObject(session, storageObject) {

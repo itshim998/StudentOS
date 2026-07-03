@@ -1026,11 +1026,11 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
 
   await clickNav(page, "Academic Context");
   await expect(page.getByRole("button", { name: "Memory", exact: true })).toHaveCount(0);
-  await expect(page.locator("#view-memory")).toContainText("Assignments, materials, and Classroom work StudentOS can use for your semester.");
-  await expect(page.locator("#view-memory")).toContainText("Assignments included");
-  await expect(page.locator("#view-memory")).toContainText("Materials included");
+  await expect(page.locator("#view-memory")).toContainText("Courses, syllabus, exam dates, assignments, and materials StudentOS can use for your semester.");
+  await expect(page.locator("#view-memory")).toContainText("Exam dates");
+  await expect(page.locator("#view-memory")).toContainText("PDFs");
   await expect(page.getByRole("heading", { name: "Assignments", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Materials", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Study materials", exact: true })).toBeVisible();
   await expect(page.locator("#source-deadline-field")).toBeVisible();
   await expect(page.locator("#source-deadline")).toHaveAttribute("required", "");
   await expect(page.locator("#source-form")).toContainText("Set the deadline of the assignment.");
@@ -1069,12 +1069,12 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
     mimeType: "application/pdf",
     buffer: buildPdfFixtureBuffer("Quadratics vertex form and worked examples for StudentOS."),
   });
-  await page.getByRole("button", { name: "Upload material" }).click();
-  await expect(page.locator("#source-result")).toContainText("Adding this material to Academic Context");
+  await page.getByRole("button", { name: "Upload study material" }).click();
+  await expect(page.locator("#source-result")).toContainText("Adding this study material to Academic Context");
   await expect(page.locator("#source-result")).toContainText("E2E quadratics note", { timeout: 15_000 });
   await expect(page.locator("#source-result")).toContainText("Added to Academic Context.");
   await page.unroute("**/api/sources/upload");
-  await expect(page.locator("#source-list")).toContainText("Materials");
+  await expect(page.locator("#source-list")).toContainText("Study materials");
   await expect(page.locator("#source-list")).toContainText(/Ready for study/i);
   await expect(page.locator("#source-list")).toContainText("E2E quadratics note");
   const visibleAcademicCopy = await page.locator("#view-memory").innerText();
@@ -1338,6 +1338,10 @@ test("Academic Context respects Classroom review eligibility and no-course guida
   };
   await page.goto(baseUrl);
   await clickNav(page, "Academic Context");
+  await expect(page.locator("#source-kind-select")).toContainText("Syllabus");
+  await expect(page.locator("#source-kind-select")).toContainText("Exam schedule");
+  await expect(page.locator("#exam-form")).toContainText("Exam name");
+  await expect(page.locator("#exam-form")).toContainText("Exam date");
   await expect(page.getByRole("heading", { name: "Classroom work to review" })).toBeVisible();
   await expect(page.locator(".academic-context-review-item")).toContainText("Review-only lab report");
   await expect(page.locator(".academic-context-review-item").getByRole("button", { name: "Add to Academic Context" })).toBeVisible();
@@ -1391,6 +1395,160 @@ test("Academic Context respects Classroom review eligibility and no-course guida
   await expect(page.locator("#source-submit-button")).toBeEnabled();
   await page.unroute("**/api/courses");
   await page.unroute("**/api/bootstrap");
+});
+
+test("Starter Today follows academic context preparation before generating a structured TO-DO", async ({ page }) => {
+  const baseState = await fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json());
+  const starterPlanAccess = {
+    ...baseState.planAccess,
+    activePlanKey: "starter",
+    selectedPlanKey: "starter",
+    dashboardAccess: true,
+    entitlements: {
+      ...(baseState.planAccess?.entitlements || {}),
+      classroom: {
+        ...(baseState.planAccess?.entitlements?.classroom || {}),
+        courseOnly: true,
+        courseworkReviewEnabled: false,
+        automaticChecksEnabled: false,
+      },
+    },
+  };
+  let starterState = {
+    ...structuredClone(baseState),
+    courses: [],
+    topics: [],
+    syllabi: [],
+    exams: [],
+    assignments: [],
+    sourceMaterials: [],
+    roadmap: [],
+    classroomDueWork: [],
+    todayNextActions: [],
+    todayDoNow: null,
+    todayPlan: null,
+    academicContext: {
+      status: "context_empty",
+      hasContext: false,
+      hasUsefulContext: false,
+      canPrepare: false,
+      canGenerateTodo: false,
+      message: "Add your academic context first.",
+    },
+    planAccess: starterPlanAccess,
+    productLifecycle: {
+      ...baseState.productLifecycle,
+      selectedPlanId: "starter",
+      dashboardActive: true,
+    },
+  };
+  await page.route("**/api/bootstrap", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify(starterState),
+  }));
+  await page.route("**/api/academic-context/prepare", (route) => {
+    starterState = {
+      ...starterState,
+      academicContext: {
+        ...starterState.academicContext,
+        status: "context_preparing",
+        hasContext: true,
+        hasUsefulContext: true,
+        canPrepare: false,
+        canGenerateTodo: false,
+        message: "Setting things up for you.",
+      },
+    };
+    return route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ state: starterState, academicContext: starterState.academicContext }),
+    });
+  });
+  await page.route("**/api/academic-context/status", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ state: starterState, academicContext: starterState.academicContext }),
+  }));
+
+  await page.goto(baseUrl);
+  await expect(page.locator("#dashboard-summary")).toContainText("Add your academic context first.");
+  await expect(page.locator("#dashboard-summary")).not.toContainText(/Quadratics worksheet|Sources ready|default roadmap/i);
+  await expect(page.locator("#today-dashboard-panels")).toBeHidden();
+
+  starterState = {
+    ...starterState,
+    courses: [{ id: "course_starter_physics", title: "Physics", source: "manual" }],
+    sourceMaterials: [{
+      id: "source_starter_syllabus",
+      courseId: "course_starter_physics",
+      title: "Physics syllabus",
+      artifactKind: "syllabus",
+      status: "indexed",
+      academicContextIncluded: true,
+      selectionState: "imported",
+    }],
+    academicContext: {
+      status: "context_needs_preparation",
+      hasContext: true,
+      hasUsefulContext: true,
+      canPrepare: true,
+      canGenerateTodo: false,
+      message: "Your academic context is ready to prepare.",
+    },
+  };
+  await page.reload();
+  await expect(page.locator("#dashboard-summary")).toContainText("Your academic context is ready to prepare.");
+  await expect(page.getByRole("button", { name: "Prepare Academic Context" })).toBeVisible();
+  await page.getByRole("button", { name: "Prepare Academic Context" }).click();
+  await expect(page.locator("#dashboard-summary")).toContainText("Setting things up for you.");
+  await expect(page.locator("#dashboard-summary .starter-context-spinner")).toBeVisible();
+
+  starterState = {
+    ...starterState,
+    academicContext: {
+      ...starterState.academicContext,
+      status: "context_ready",
+      canPrepare: true,
+      canGenerateTodo: true,
+      preparedAt: "2026-07-03T12:00:00.000Z",
+      message: "Your academic context is ready.",
+    },
+  };
+  await page.reload();
+  await expect(page.locator("#dashboard-summary")).toContainText("Generate a focused TO-DO list for the rest of today.");
+
+  let generationClock = null;
+  await page.route("**/api/today/todo", async (route) => {
+    generationClock = route.request().postDataJSON();
+    const plan = {
+      date: generationClock.currentDate,
+      generated_at: new Date().toISOString(),
+      timezone: generationClock.timezone,
+      summary: "A focused plan for the rest of today.",
+      items: [{
+        title: "Review motion and forces",
+        time_hint: "45 minutes",
+        reason: "The Physics exam is approaching.",
+        related_course: "Physics",
+        related_context: "Physics syllabus",
+        priority: "high",
+      }],
+    };
+    starterState = { ...starterState, todayPlan: plan };
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ generated: true, plan, state: starterState }),
+    });
+  });
+  await page.getByRole("button", { name: "Generate todayâ€™s TO-DO list" }).click();
+  await expect(page.getByRole("heading", { name: "Todayâ€™s focused plan" })).toBeVisible();
+  await expect(page.locator(".today-todo-item")).toContainText("Review motion and forces");
+  await expect(page.locator(".today-todo-item")).toContainText("45 minutes");
+  expect(generationClock.currentDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  expect(generationClock.currentTime).toMatch(/^\d{2}:\d{2}$/);
+  expect(generationClock.timezone).toBeTruthy();
+  const visibleToday = await page.locator("#view-today").innerText();
+  expect(visibleToday).not.toMatch(/\b(provider|model|token|storage|database|backend|vector|embedding|chunks?|debug|OAuth scope)\b/i);
 });
 
 test("responsive surfaces and AI drawer avoid horizontal overflow", async ({ page }) => {

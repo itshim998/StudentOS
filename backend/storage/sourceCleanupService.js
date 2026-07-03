@@ -19,6 +19,9 @@ export function buildSourceCleanupPlan(state, sourceId) {
   const assignmentIds = (state.assignments || [])
     .filter((item) => item.sourceMaterialId === sourceId || (item.sourceMaterialIds || []).includes(sourceId))
     .map((item) => item.id);
+  const syllabusIds = (state.syllabi || [])
+    .filter((item) => item.sourceMaterialId === sourceId)
+    .map((item) => item.id);
   return {
     sourceId,
     material,
@@ -30,6 +33,7 @@ export function buildSourceCleanupPlan(state, sourceId) {
     jobIds,
     jobEventIds,
     assignmentIds,
+    syllabusIds,
   };
 }
 
@@ -64,6 +68,12 @@ export function softDeleteSourceState(state, sourceId, timestamp = new Date().to
       job.updatedAt = timestamp;
     }
   }
+  for (const syllabus of state.syllabi || []) {
+    if (syllabus.sourceMaterialId !== material.id) continue;
+    syllabus.archivedAt = timestamp;
+    syllabus.academicContextIncluded = false;
+    syllabus.updatedAt = timestamp;
+  }
   return material;
 }
 
@@ -78,5 +88,6 @@ export function hardDeleteSourceState(state, sourceId) {
   state.jobEvents = (state.jobEvents || []).filter((item) => item.sourceId !== sourceId);
   state.assignments = (state.assignments || []).filter((item) =>
     item.sourceMaterialId !== sourceId && !(item.sourceMaterialIds || []).includes(sourceId));
+  state.syllabi = (state.syllabi || []).filter((item) => item.sourceMaterialId !== sourceId);
   return plan;
 }

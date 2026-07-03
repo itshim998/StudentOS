@@ -13,28 +13,30 @@ const navHtml = html.slice(html.indexOf('aria-label="Views"'), html.indexOf('cla
 const academicHtml = html.slice(html.indexOf('id="view-memory"'), html.indexOf('id="view-studio"'));
 const academicText = academicHtml.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
 const renderSources = app.slice(app.indexOf("function renderSources"), app.indexOf("function renderSelects"));
-const assignmentMarkup = renderSources.slice(renderSources.indexOf("const assignmentCards"), renderSources.indexOf("const materialCards"));
-const materialMarkup = renderSources.slice(renderSources.indexOf("const materialCards"), renderSources.indexOf("const classroomReview ="));
-const materialStatus = app.slice(app.indexOf("function academicContextMaterialStatus"), app.indexOf("function academicContextRoomLabel"));
+const assignmentMarkup = renderSources.slice(renderSources.indexOf("const assignmentCards"), renderSources.indexOf("const materialCardMarkup"));
+const materialMarkup = renderSources.slice(renderSources.indexOf("const materialCardMarkup"), renderSources.indexOf("const classroomReview ="));
+const materialStatus = app.slice(app.indexOf("function academicContextMaterialStatus"), app.indexOf("function isIncludedAcademicContextItem"));
 
 assert.match(navHtml, />\s*Academic Context\s*</);
 assert.doesNotMatch(navHtml, />\s*Memory\s*</);
 assert.match(academicText, /Academic Context/);
-assert.match(academicText, /Assignments, materials, and Classroom work StudentOS can use for your semester\./);
+assert.match(academicText, /Courses, syllabus, exam dates, assignments, and materials StudentOS can use for your semester\./);
 assert.match(academicHtml, /id="academic-context-add-button"[^>]*>Add PDF</);
 assert(academicHtml.indexOf('class="memory-library-panel academic-context-content-panel"') < academicHtml.indexOf('class="academic-context-support-column"'));
 
-for (const summary of ["Assignments included", "Materials included", "Classroom", "Context room"]) {
+for (const summary of ["Courses", "Exam dates", "Assignments", "PDFs"]) {
   assert.match(renderSources, new RegExp(summary));
 }
 assert.match(renderSources, /id="academic-context-assignments-title">Assignments</);
-assert.match(renderSources, /id="academic-context-materials-title">Materials</);
+assert.match(renderSources, /id="academic-context-materials-title">Study materials</);
 assert.match(renderSources, /isIncludedAcademicContextItem\(assignment\)/);
 assert.match(renderSources, /isIncludedAcademicContextItem\(source\)/);
 assert.match(renderSources, /No assignments added yet\./);
 assert.match(renderSources, /Upload an assignment PDF with a deadline so StudentOS can plan it\./);
 assert.match(renderSources, /No study materials added yet\./);
-assert.match(renderSources, /Upload a PDF handout, syllabus, or reading to help StudentOS understand your course\./);
+assert.match(renderSources, /Upload a PDF handout or reading to help StudentOS understand your course\./);
+assert.match(renderSources, /No syllabus added yet\./);
+assert.match(renderSources, /No exam schedule PDF added\./);
 
 assert.match(academicHtml, /id="source-form"[^>]*novalidate/);
 assert.match(academicHtml, /name="artifactKind"/);

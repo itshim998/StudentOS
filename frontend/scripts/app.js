@@ -27,6 +27,9 @@ let productUploadTail = Promise.resolve();
 let productUploadsPending = 0;
 let productClassroomRefreshAttempted = false;
 let pendingAcademicContextDeletion = null;
+let academicContextPreparationPoll = null;
+let todayTodoGenerating = false;
+let todayTodoMessage = "";
 const productUploadResults = new Map();
 const ACTION_LOADING_TIMEOUT_MS = 30000;
 const LONG_ACTION_LOADING_TIMEOUT_MS = 60000;
@@ -53,6 +56,7 @@ const els = {
   classroomSyncBtn: document.getElementById("classroom-sync-btn"),
   classroomDisconnectBtn: document.getElementById("classroom-disconnect-btn"),
   dashboardSummary: document.getElementById("dashboard-summary"),
+  todayDashboardPanels: document.getElementById("today-dashboard-panels"),
   onboardingForm: document.getElementById("onboarding-form"),
   onboardingResult: document.getElementById("onboarding-result"),
   setupCourses: document.getElementById("setup-courses"),
@@ -73,6 +77,8 @@ const els = {
   sourceSearchInput: document.getElementById("source-search-input"),
   sourceList: document.getElementById("source-list"),
   academicContextSummary: document.getElementById("academic-context-summary"),
+  academicContextPrepareButton: document.getElementById("academic-context-prepare-button"),
+  academicContextPreparationStatus: document.getElementById("academic-context-preparation-status"),
   academicContextAddButton: document.getElementById("academic-context-add-button"),
   academicContextUploadPanel: document.getElementById("academic-context-upload-panel"),
   academicContextCourseRecovery: document.getElementById("academic-context-course-recovery"),
@@ -92,6 +98,18 @@ const els = {
   sourceFileError: document.getElementById("source-file-error"),
   sourceCapacityMessage: document.getElementById("source-capacity-message"),
   sourceResult: document.getElementById("source-result"),
+  examForm: document.getElementById("exam-form"),
+  examId: document.getElementById("exam-id"),
+  examCourseSelect: document.getElementById("exam-course-select"),
+  examName: document.getElementById("exam-name"),
+  examDate: document.getElementById("exam-date"),
+  examTime: document.getElementById("exam-time"),
+  examWeightage: document.getElementById("exam-weightage"),
+  examNotes: document.getElementById("exam-notes"),
+  examSubmitButton: document.getElementById("exam-submit-button"),
+  examEditCancel: document.getElementById("exam-edit-cancel"),
+  examResult: document.getElementById("exam-result"),
+  examList: document.getElementById("exam-list"),
   academicContextDeleteDialog: document.getElementById("academic-context-delete-dialog"),
   academicContextDeleteCancel: document.getElementById("academic-context-delete-cancel"),
   academicContextDeleteConfirm: document.getElementById("academic-context-delete-confirm"),
@@ -1378,6 +1396,19 @@ function clearAcademicContextFieldMessages(field = "") {
   fields.forEach((name) => setAcademicContextFieldMessage(name));
 }
 
+function sourceKindRequiresCourse(kind) {
+  return kind !== "exam_schedule";
+}
+
+function sourceKindLabel(kind) {
+  return {
+    assignment: "assignment",
+    material: "study material",
+    syllabus: "syllabus",
+    exam_schedule: "exam schedule",
+  }[kind] || "PDF";
+}
+
 function validateAcademicContextUploadForm(form, kind, file) {
   clearAcademicContextFieldMessages();
   const invalid = [];
@@ -1385,11 +1416,12 @@ function validateAcademicContextUploadForm(form, kind, file) {
     setAcademicContextFieldMessage("title", `Add a title for this ${kind}.`);
     invalid.push(els.sourceTitle);
   }
-  if (!state.courses?.length) {
+  const label = sourceKindLabel(kind);
+  if (sourceKindRequiresCourse(kind) && !state.courses?.length) {
     setAcademicContextFieldMessage("course", "Add a course in Setup before uploading academic context.");
     invalid.push(els.sourceCourseSelect);
-  } else if (!form.get("courseId")) {
-    setAcademicContextFieldMessage("course", `Choose a course for this ${kind}.`);
+  } else if (sourceKindRequiresCourse(kind) && !form.get("courseId")) {
+    setAcademicContextFieldMessage("course", `Choose a course for this ${label}.`);
     invalid.push(els.sourceCourseSelect);
   }
   if (kind === "assignment" && !form.get("deadline")) {
@@ -1408,21 +1440,31 @@ function academicContextUploadErrorCopy(error, kind) {
   const message = String(error?.message || "");
   const lower = message.toLowerCase();
   if (lower.includes("pdf") || lower.includes("file")) return "Choose a PDF file and try again.";
-  if (lower.includes("course")) return `Choose a course for this ${kind}.`;
+  if (lower.includes("course")) return `Choose a course for this ${sourceKindLabel(kind)}.`;
   if (kind === "assignment" && (lower.includes("deadline") || lower.includes("due"))) return "Set the assignment deadline before uploading.";
   if (lower.includes("room") || lower.includes("limit") || lower.includes("plan")) return currentAcademicContextCapacity().message;
   return `StudentOS could not add this ${kind}. Check the details and try again.`;
 }
 
 function syncAcademicContextUploadType() {
-  const assignment = (els.sourceKindSelect?.value || "assignment") === "assignment";
+  const kind = els.sourceKindSelect?.value || "assignment";
+  const assignment = kind === "assignment";
   if (els.sourceDeadlineField) els.sourceDeadlineField.hidden = !assignment;
   if (els.sourceDeadline) {
     els.sourceDeadline.required = assignment;
     if (!assignment) els.sourceDeadline.value = "";
   }
   if (!assignment) clearAcademicContextFieldMessages("deadline");
-  if (els.sourceSubmitButton) els.sourceSubmitButton.textContent = assignment ? "Upload assignment" : "Upload material";
+  const kindHelp = document.getElementById("source-kind-help");
+  if (kindHelp) {
+    kindHelp.textContent = assignment
+      ? "Assignments require a course and deadline."
+      : kind === "exam_schedule"
+        ? "Exam schedule PDFs can cover one course or the whole semester."
+        : `${sourceKindLabel(kind).replace(/^./, (letter) => letter.toUpperCase())} PDFs require a course and no deadline.`;
+  }
+  if (els.sourceCourseSelect) els.sourceCourseSelect.required = sourceKindRequiresCourse(kind);
+  if (els.sourceSubmitButton) els.sourceSubmitButton.textContent = `Upload ${sourceKindLabel(kind)}`;
 }
 
 function renderAcademicContextCourseRecovery(noCourses) {
@@ -1455,7 +1497,8 @@ function renderAcademicContextCourseRecovery(noCourses) {
 function updateProductFeatureControls() {
   const capacity = currentAcademicContextCapacity();
   const noCourses = !(state?.courses || []).length;
-  const blockMaterialAdd = capacity.canAdd !== true || noCourses;
+  const courseRequired = sourceKindRequiresCourse(els.sourceKindSelect?.value || "assignment");
+  const blockMaterialAdd = capacity.canAdd !== true || (courseRequired && noCourses);
   if (els.sourceFile) els.sourceFile.disabled = blockMaterialAdd;
   if (els.sourceCourseSelect) els.sourceCourseSelect.disabled = blockMaterialAdd;
   if (els.sourceKindSelect) els.sourceKindSelect.disabled = blockMaterialAdd;
@@ -1468,16 +1511,22 @@ function updateProductFeatureControls() {
   }
   if (els.sourceForm) els.sourceForm.setAttribute("aria-disabled", blockMaterialAdd ? "true" : "false");
   if (els.sourceCapacityMessage) {
-    els.sourceCapacityMessage.textContent = noCourses
+    els.sourceCapacityMessage.textContent = noCourses && courseRequired
       ? "No courses found yet. Refresh your Classroom course list or add a course in Setup before uploading academic context."
       : capacity.message;
     els.sourceCapacityMessage.classList.toggle("warning-copy", capacity.status === "full");
   }
   if (els.academicContextRoomStatus) els.academicContextRoomStatus.textContent = capacity.message;
-  if (noCourses) setAcademicContextFieldMessage("course", "Add a course in Setup before uploading academic context.");
+  if (noCourses && courseRequired) setAcademicContextFieldMessage("course", "Add a course in Setup before uploading academic context.");
   else if (els.sourceCourseError?.textContent === "Add a course in Setup before uploading academic context.") clearAcademicContextFieldMessages("course");
-  renderAcademicContextCourseRecovery(noCourses);
+  renderAcademicContextCourseRecovery(noCourses && courseRequired);
   syncAcademicContextUploadType();
+  if (els.examForm) {
+    for (const control of els.examForm.querySelectorAll("input:not([type='hidden']), select, textarea, button")) {
+      control.disabled = noCourses;
+    }
+    if (els.examSubmitButton) els.examSubmitButton.title = noCourses ? "Add a course in Setup before adding an exam." : "";
+  }
 
   const capabilities = currentProductCapabilities();
   const assignmentCoachEnabled = capabilities?.features?.assignmentCoach === true;
@@ -2050,7 +2099,159 @@ function render() {
   updateProductFeatureControls();
 }
 
+function currentActivePlanKey() {
+  return String(state?.planAccess?.activePlanKey || state?.planAccess?.selectedPlanKey || state?.productLifecycle?.selectedPlanId || "").toLowerCase();
+}
+
+function usesStarterTodayFlow() {
+  return currentActivePlanKey() === "starter";
+}
+
+function localDateOnly(now = new Date()) {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function academicContextReadiness() {
+  if (state?.academicContext?.status) return state.academicContext;
+  const hasContext = Boolean((state?.courses || []).length || (state?.exams || []).length || (state?.assignments || []).length || (state?.sourceMaterials || []).length);
+  return {
+    status: hasContext ? "context_needs_preparation" : "context_empty",
+    hasContext,
+    hasUsefulContext: Boolean((state?.exams || []).length || (state?.assignments || []).length || (state?.sourceMaterials || []).length),
+    canPrepare: hasContext,
+    canGenerateTodo: false,
+    message: hasContext ? "Your academic context is ready to prepare." : "Add your academic context first.",
+  };
+}
+
+function todayTodoItemMarkup(item) {
+  const related = [item.related_course, item.related_context].filter(Boolean);
+  return `
+    <li class="today-todo-item" data-priority="${escapeHtml(item.priority || "medium")}">
+      <div class="today-todo-item-copy">
+        <div class="today-todo-title-row">
+          <h4>${escapeHtml(item.title)}</h4>
+          ${tag(humanize(item.priority || "medium"), item.priority === "high" ? "urgent" : item.priority || "medium")}
+        </div>
+        <p>${escapeHtml(item.reason)}</p>
+        ${related.length ? `<small>${escapeHtml(related.join(" / "))}</small>` : ""}
+      </div>
+      <strong class="today-todo-time">${escapeHtml(item.time_hint)}</strong>
+    </li>
+  `;
+}
+
+function renderStarterToday() {
+  const readiness = academicContextReadiness();
+  const currentPlan = state.todayPlan?.date === localDateOnly() ? state.todayPlan : null;
+  if (els.todayDashboardPanels) els.todayDashboardPanels.hidden = true;
+  document.getElementById("view-today")?.classList.add("starter-today-flow");
+
+  if (todayTodoGenerating) {
+    setResult(els.dashboardSummary, `
+      <article class="starter-today-state starter-today-waiting" role="status" aria-live="polite">
+        <span class="starter-context-spinner" aria-hidden="true"></span>
+        <h3>Planning the rest of today.</h3>
+        <p>StudentOS is using your prepared academic context and the time you have left today.</p>
+      </article>
+    `);
+    return;
+  }
+
+  if (readiness.status === "context_preparing") {
+    setResult(els.dashboardSummary, `
+      <article class="starter-today-state starter-today-waiting" role="status" aria-live="polite">
+        <span class="starter-context-spinner" aria-hidden="true"></span>
+        <h3>Setting things up for you.</h3>
+        <p>StudentOS is preparing your academic context so your study plan can use your courses, syllabus, assignments, and materials.</p>
+        <small>${escapeHtml(readiness.someMaterialPreparing ? "Some material is still being prepared." : "Organizing your courses and checking assignments and dates")}</small>
+      </article>
+    `);
+    return;
+  }
+
+  if (readiness.status === "context_empty") {
+    setResult(els.dashboardSummary, `
+      <article class="starter-today-state">
+        <p class="eyebrow">Today</p>
+        <h3>Add your academic context first.</h3>
+        <p>Add your courses, syllabus, exam dates, assignments, and materials so StudentOS can plan your day properly.</p>
+        <div class="starter-today-actions"><button class="primary-button" type="button" data-today-action="academic-context">Go to Academic Context</button></div>
+      </article>
+    `);
+    return;
+  }
+
+  if (readiness.status === "context_needs_preparation") {
+    setResult(els.dashboardSummary, `
+      <article class="starter-today-state">
+        <p class="eyebrow">Today</p>
+        <h3>Your academic context is ready to prepare.</h3>
+        <p>StudentOS can organize your courses, PDFs, exam dates, and assignments before planning your day.</p>
+        ${todayTodoMessage ? `<p class="starter-today-message">${escapeHtml(todayTodoMessage)}</p>` : ""}
+        <div class="starter-today-actions">
+          <button class="primary-button" type="button" data-today-action="prepare-context">Prepare Academic Context</button>
+          <button class="text-button" type="button" data-today-action="academic-context">Review Academic Context</button>
+        </div>
+      </article>
+    `);
+    return;
+  }
+
+  if (readiness.status === "context_failed") {
+    setResult(els.dashboardSummary, `
+      <article class="starter-today-state">
+        <p class="eyebrow">Today</p>
+        <h3>StudentOS could not prepare everything.</h3>
+        <p>Review Academic Context and try again.</p>
+        <div class="starter-today-actions">
+          <button class="primary-button" type="button" data-today-action="academic-context">Review Academic Context</button>
+          <button class="text-button" type="button" data-today-action="prepare-context">Try again</button>
+        </div>
+      </article>
+    `);
+    return;
+  }
+
+  if (!currentPlan) {
+    setResult(els.dashboardSummary, `
+      <article class="starter-today-state">
+        <p class="eyebrow">Today</p>
+        <h3>Your academic context is ready.</h3>
+        <p>Generate a focused TO-DO list for the rest of today.</p>
+        ${todayTodoMessage ? `<p class="starter-today-message">${escapeHtml(todayTodoMessage)}</p>` : ""}
+        <div class="starter-today-actions"><button class="primary-button" type="button" data-today-action="generate-todo">Generate todayâ€™s TO-DO list</button></div>
+      </article>
+    `);
+    return;
+  }
+
+  setResult(els.dashboardSummary, `
+    <article class="starter-today-state starter-today-plan">
+      <div class="starter-today-plan-header">
+        <div>
+          <p class="eyebrow">Today</p>
+          <h3>Todayâ€™s focused plan</h3>
+          <p>${escapeHtml(currentPlan.summary || "A focused plan for the rest of today.")}</p>
+        </div>
+        <span>Generated ${escapeHtml(formatTime(currentPlan.generated_at))}</span>
+      </div>
+      <ol class="today-todo-list">${(currentPlan.items || []).map(todayTodoItemMarkup).join("")}</ol>
+      <div class="starter-today-actions"><button class="secondary-button" type="button" data-today-action="generate-todo">Regenerate</button></div>
+    </article>
+  `);
+}
+
 function renderDashboardSummary() {
+  if (usesStarterTodayFlow()) {
+    renderStarterToday();
+    return;
+  }
+  if (els.todayDashboardPanels) els.todayDashboardPanels.hidden = false;
+  document.getElementById("view-today")?.classList.remove("starter-today-flow");
   const preferences = state.studentProfile?.preferences || {};
   const upcomingExams = [...(state.exams || [])]
     .sort((left, right) => timestampFor(left.examDate) - timestampFor(right.examDate))
@@ -2487,24 +2688,70 @@ function academicContextMaterialStatus(source) {
   return "Preparing";
 }
 
-function academicContextRoomLabel(capacity) {
-  if (capacity.status === "available") return "Room available";
-  if (capacity.status === "almost_full") return "Nearly full";
-  if (capacity.status === "full") return "Full";
-  return "Setup needed";
-}
-
 function isIncludedAcademicContextItem(item) {
   return item?.academicContextIncluded === true || ["selected", "imported"].includes(String(item?.selectionState || "").toLowerCase());
+}
+
+function renderAcademicContextPreparationStatus() {
+  const readiness = academicContextReadiness();
+  if (els.academicContextPreparationStatus) {
+    const detail = readiness.status === "context_ready" && readiness.preparedAt
+      ? `Prepared ${formatDate(readiness.preparedAt)}`
+      : readiness.message;
+    els.academicContextPreparationStatus.innerHTML = `
+      <span class="status-dot" aria-hidden="true"></span>
+      <p><strong>${escapeHtml(readiness.message)}</strong>${detail !== readiness.message ? `<small>${escapeHtml(detail)}</small>` : ""}</p>
+    `;
+    els.academicContextPreparationStatus.dataset.status = readiness.status;
+  }
+  if (els.academicContextPrepareButton) {
+    els.academicContextPrepareButton.disabled = readiness.status === "context_preparing" || !readiness.hasUsefulContext;
+    els.academicContextPrepareButton.textContent = readiness.status === "context_preparing"
+      ? "Preparing..."
+      : readiness.status === "context_ready"
+        ? "Prepare again"
+        : readiness.status === "context_failed"
+          ? "Try preparing again"
+          : "Prepare Academic Context";
+  }
+}
+
+function renderExamSchedule() {
+  if (!els.examList) return;
+  const exams = [...(state.exams || [])]
+    .filter((exam) => !exam.archived)
+    .sort((left, right) => timestampFor(left.examDate) - timestampFor(right.examDate));
+  els.examList.innerHTML = exams.length ? exams.map((exam) => {
+    const course = courseById(exam.courseId);
+    const editable = !exam.source || exam.source === "manual";
+    const detail = [formatDate(exam.examDate), exam.examTime || "", exam.marksWeightage || exam.weight || ""].filter(Boolean).join(" / ");
+    return `
+      <article class="exam-entry-card">
+        <div>
+          <strong>${escapeHtml(exam.title)}</strong>
+          <p>${escapeHtml(course?.title || "Course")}</p>
+          <small>${escapeHtml(detail)}</small>
+          ${exam.notes ? `<p>${escapeHtml(exam.notes)}</p>` : ""}
+        </div>
+        ${editable ? `<div class="inline-actions">
+          <button class="mini-action" type="button" data-edit-exam-id="${escapeHtml(exam.id)}">Edit</button>
+          <button class="mini-action danger-action" type="button" data-delete-exam-id="${escapeHtml(exam.id)}">Delete</button>
+        </div>` : ""}
+      </article>
+    `;
+  }).join("") : `<p class="muted-copy">No exam dates added yet.</p>`;
 }
 
 function renderSources() {
   const assignments = [...(state.assignments || [])]
     .filter((assignment) => !assignment.archived && isIncludedAcademicContextItem(assignment))
     .sort(sortStudentWork);
-  const materials = (state.sourceMaterials || [])
+  const allMaterials = (state.sourceMaterials || [])
     .filter((source) => !source.deletedAt && source.artifactKind !== "assignment" && isIncludedAcademicContextItem(source))
     .sort((left, right) => classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left));
+  const syllabi = allMaterials.filter((source) => source.artifactKind === "syllabus");
+  const examSchedules = allMaterials.filter((source) => source.artifactKind === "exam_schedule");
+  const materials = allMaterials.filter((source) => !["syllabus", "exam_schedule"].includes(source.artifactKind));
   const courseOnly = starterCourseOnlyClassroom();
   const reviewEnabled = currentClassroomPolicy().courseworkReviewEnabled === true;
   const classroomReviewItems = reviewEnabled
@@ -2513,24 +2760,16 @@ function renderSources() {
       .sort((left, right) => classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left))
       .slice(0, 12)
     : [];
-  const capacity = currentAcademicContextCapacity();
-  const connector = activeClassroomConnector();
-  const classroomStatusCopy = courseOnly
-    ? "Course list only"
-    : classroomReviewItems.length
-      ? `${classroomReviewItems.length} to review`
-      : normalizedClassroomState(connector) === "connected"
-        ? "Up to date"
-        : "Optional";
-
   if (els.academicContextSummary) {
     els.academicContextSummary.innerHTML = `
-      <article data-summary-kind="assignments"><span>Assignments included</span><strong>${assignments.length}</strong></article>
-      <article data-summary-kind="materials"><span>Materials included</span><strong>${materials.length}</strong></article>
-      <article data-summary-kind="classroom"><span>Classroom</span><strong>${escapeHtml(classroomStatusCopy)}</strong></article>
-      <article data-summary-kind="room"><span>Context room</span><strong>${escapeHtml(academicContextRoomLabel(capacity))}</strong></article>
+      <article data-summary-kind="courses"><span>Courses</span><strong>${(state.courses || []).length}</strong></article>
+      <article data-summary-kind="exams"><span>Exam dates</span><strong>${(state.exams || []).length}</strong></article>
+      <article data-summary-kind="assignments"><span>Assignments</span><strong>${assignments.length}</strong></article>
+      <article data-summary-kind="materials"><span>PDFs</span><strong>${allMaterials.length}</strong></article>
     `;
   }
+  renderAcademicContextPreparationStatus();
+  renderExamSchedule();
   if (els.academicContextClassroomGuidance) {
     els.academicContextClassroomGuidance.innerHTML = courseOnly
       ? `<p><strong>Starter and Classroom</strong><span>Starter uses Classroom only to help set up your course list. Upload PDFs manually to add assignments or materials.</span></p>`
@@ -2571,7 +2810,7 @@ function renderSources() {
     `;
   }).join("") || `<article class="source-card source-empty-card"><strong>No assignments added yet.</strong><p>Upload an assignment PDF with a deadline so StudentOS can plan it.</p></article>`;
 
-  const materialCards = materials.map((source) => {
+  const materialCardMarkup = (sources, emptyTitle, emptyCopy) => sources.map((source) => {
     const course = courseById(source.courseId);
     const origin = academicContextOrigin(source);
     const prompt = buildSourceAiPrompt(source, course);
@@ -2597,7 +2836,11 @@ function renderSources() {
         </div>
       </article>
     `;
-  }).join("") || `<article class="source-card source-empty-card"><strong>No study materials added yet.</strong><p>Upload a PDF handout, syllabus, or reading to help StudentOS understand your course.</p></article>`;
+  }).join("") || `<article class="source-card source-empty-card"><strong>${escapeHtml(emptyTitle)}</strong><p>${escapeHtml(emptyCopy)}</p></article>`;
+
+  const syllabusCards = materialCardMarkup(syllabi, "No syllabus added yet.", "Upload a course syllabus PDF so StudentOS can plan from the course outline.");
+  const materialCards = materialCardMarkup(materials, "No study materials added yet.", "Upload a PDF handout or reading to help StudentOS understand your course.");
+  const examScheduleCards = materialCardMarkup(examSchedules, "No exam schedule PDF added.", "Manual exam dates above are enough. Add a PDF only if it helps.");
 
   const classroomReview = classroomReviewItems.length ? `
     <section class="academic-context-group classroom-review-card" aria-label="Classroom work to review">
@@ -2634,8 +2877,16 @@ function renderSources() {
       <div class="academic-context-card-grid">${assignmentCards}</div>
     </section>
     <section class="academic-context-group" aria-labelledby="academic-context-materials-title">
-      <div class="section-heading"><div><p class="eyebrow">Ready for study</p><h3 id="academic-context-materials-title">Materials</h3></div></div>
+      <div class="section-heading"><div><p class="eyebrow">Course outline</p><h3>Syllabus</h3></div></div>
+      <div class="academic-context-card-grid">${syllabusCards}</div>
+    </section>
+    <section class="academic-context-group" aria-labelledby="academic-context-materials-title">
+      <div class="section-heading"><div><p class="eyebrow">Ready for study</p><h3 id="academic-context-materials-title">Study materials</h3></div></div>
       <div class="academic-context-card-grid">${materialCards}</div>
+    </section>
+    <section class="academic-context-group" aria-labelledby="academic-context-exam-pdfs-title">
+      <div class="section-heading"><div><p class="eyebrow">Optional PDF</p><h3 id="academic-context-exam-pdfs-title">Exam schedules</h3></div></div>
+      <div class="academic-context-card-grid">${examScheduleCards}</div>
     </section>
     ${classroomReview}
   `;
@@ -2646,6 +2897,7 @@ function renderSelects() {
   const topicOptions = state.topics.map((topic) => `<option value="${topic.id}">${escapeHtml(topic.title)}</option>`).join("");
   const assignmentOptions = state.assignments.filter(assignmentNeedsAction).map((assignment) => `<option value="${assignment.id}">${escapeHtml(assignment.title)}</option>`).join("");
   els.sourceCourseSelect.innerHTML = `<option value="">Choose a course</option>${courseOptions}`;
+  if (els.examCourseSelect) els.examCourseSelect.innerHTML = `<option value="">Choose a course</option>${courseOptions}`;
   els.scoreTopicSelect.innerHTML = topicOptions;
   els.extensionAssignmentSelect.innerHTML = assignmentOptions;
   els.flowAssignmentSelect.innerHTML = assignmentOptions;
@@ -3038,6 +3290,7 @@ async function loadBootstrap(options = {}) {
     state = await api("/api/bootstrap");
     bootstrapLoaded = true;
     render();
+    if (academicContextReadiness().status === "context_preparing") scheduleAcademicContextPreparationPoll();
     if (lifecycleDashboardReady() && (authSession?.access_token || !runtimeConfig.auth?.enabled)) {
       await loadAccountSnapshot();
       await loadClassroomStatus();
@@ -3292,6 +3545,120 @@ async function draftExtension(event) {
   }, { timeoutTarget: els.extensionResult, timeoutCopy: "Drafting is taking longer than expected. You can try again." });
 }
 
+function resetExamForm() {
+  els.examForm?.reset();
+  if (els.examId) els.examId.value = "";
+  if (els.examSubmitButton) els.examSubmitButton.textContent = "Add exam";
+  if (els.examEditCancel) els.examEditCancel.hidden = true;
+}
+
+function beginExamEdit(examId) {
+  const exam = (state.exams || []).find((item) => item.id === examId);
+  if (!exam || !els.examForm) return;
+  els.examId.value = exam.id;
+  els.examCourseSelect.value = exam.courseId || "";
+  els.examName.value = exam.title || "";
+  els.examDate.value = String(exam.examDate || "").slice(0, 10);
+  els.examTime.value = exam.examTime || "";
+  els.examWeightage.value = exam.marksWeightage || exam.weight || "";
+  els.examNotes.value = exam.notes || "";
+  els.examSubmitButton.textContent = "Save exam";
+  els.examEditCancel.hidden = false;
+  els.examName.focus();
+}
+
+async function saveExam(event) {
+  event.preventDefault();
+  const formElement = event.currentTarget;
+  if (!formElement.reportValidity()) return;
+  const values = Object.fromEntries(new FormData(formElement).entries());
+  const examId = String(values.examId || "");
+  await withButtonLoading(event.submitter || els.examSubmitButton, examId ? "Saving..." : "Adding...", async () => {
+    const result = await api(examId ? `/api/academic-context/exams/${encodeURIComponent(examId)}` : "/api/academic-context/exams", {
+      method: examId ? "PATCH" : "POST",
+      body: JSON.stringify(values),
+    });
+    state = result.state || state;
+    resetExamForm();
+    render();
+    setView("memory");
+    setResult(els.examResult, `<strong>${escapeHtml(result.message || "Exam date saved.")}</strong>`);
+  }, { timeoutTarget: els.examResult, timeoutCopy: "Saving this exam is taking longer than expected. Please try again." });
+}
+
+async function deleteExam(examId) {
+  const result = await api(`/api/academic-context/exams/${encodeURIComponent(examId)}`, { method: "DELETE" });
+  state = result.state || state;
+  resetExamForm();
+  render();
+  setView("memory");
+  setResult(els.examResult, `<strong>${escapeHtml(result.message || "Exam removed from Academic Context.")}</strong>`);
+}
+
+function scheduleAcademicContextPreparationPoll(delayMs = 900) {
+  if (academicContextPreparationPoll) window.clearTimeout(academicContextPreparationPoll);
+  academicContextPreparationPoll = window.setTimeout(() => {
+    academicContextPreparationPoll = null;
+    pollAcademicContextPreparation().catch((error) => {
+      todayTodoMessage = error.message;
+      render();
+    });
+  }, delayMs);
+}
+
+async function pollAcademicContextPreparation() {
+  const result = await api("/api/academic-context/status");
+  state = result.state || state;
+  render();
+  if (academicContextReadiness().status === "context_preparing") scheduleAcademicContextPreparationPoll(1200);
+}
+
+async function prepareAcademicContext() {
+  todayTodoMessage = "";
+  state.academicContext = { ...academicContextReadiness(), status: "context_preparing", message: "Setting things up for you." };
+  setView("today");
+  render();
+  try {
+    const result = await api("/api/academic-context/prepare", { method: "POST", body: JSON.stringify({}) });
+    state = result.state || state;
+    render();
+    scheduleAcademicContextPreparationPoll();
+  } catch (error) {
+    todayTodoMessage = error.message;
+    await loadBootstrap();
+    setView("today");
+  }
+}
+
+function browserTodoClock() {
+  const now = new Date();
+  return {
+    currentDate: localDateOnly(now),
+    currentTime: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+  };
+}
+
+async function generateTodayTodo() {
+  todayTodoGenerating = true;
+  todayTodoMessage = "";
+  render();
+  try {
+    const result = await api("/api/today/todo", {
+      method: "POST",
+      body: JSON.stringify(browserTodoClock()),
+    });
+    state = result.state || state;
+    if (!result.generated) todayTodoMessage = result.message || "StudentOS could not generate todayâ€™s plan. Please try again.";
+  } catch (error) {
+    todayTodoMessage = error.message;
+  } finally {
+    todayTodoGenerating = false;
+    render();
+    setView("today");
+  }
+}
+
 async function addSource(event) {
   event.preventDefault();
   const formElement = event.currentTarget;
@@ -3302,13 +3669,14 @@ async function addSource(event) {
   }
   const form = new FormData(formElement);
   const kind = String(form.get("artifactKind") || "assignment");
+  const kindLabel = sourceKindLabel(kind);
   const file = form.get("file");
   if (!validateAcademicContextUploadForm(form, kind, file)) {
     setResult(els.sourceResult, `<p>Check the highlighted details before uploading.</p>`);
     return;
   }
-  await withButtonLoading(event.submitter, kind === "assignment" ? "Uploading assignment..." : "Uploading material...", async () => {
-    setLoading(els.sourceResult, `Adding this ${kind} to Academic Context...`);
+  await withButtonLoading(event.submitter, `Uploading ${kindLabel}...`, async () => {
+    setLoading(els.sourceResult, `Adding this ${kindLabel} to Academic Context...`);
     try {
       const result = await api("/api/sources/upload", {
         method: "POST",
@@ -4161,6 +4529,46 @@ function wireEvents() {
   });
   window.addEventListener("hashchange", handleAuthLocationChange);
   document.addEventListener("click", (event) => {
+    const todayAction = event.target.closest("[data-today-action]");
+    if (todayAction) {
+      const action = todayAction.dataset.todayAction;
+      if (action === "academic-context") setView("memory");
+      if (action === "prepare-context") {
+        withButtonLoading(todayAction, "Preparing...", prepareAcademicContext, {
+          timeoutTarget: els.dashboardSummary,
+          timeoutCopy: "Academic Context preparation is taking longer than expected. Please try again.",
+          timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+        }).catch((error) => {
+          todayTodoMessage = error.message;
+          render();
+        });
+      }
+      if (action === "generate-todo") {
+        withButtonLoading(todayAction, "Generating...", generateTodayTodo, {
+          timeoutTarget: els.dashboardSummary,
+          timeoutCopy: "Todayâ€™s plan is taking longer than expected. Please try again.",
+          timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+        }).catch((error) => {
+          todayTodoMessage = error.message;
+          todayTodoGenerating = false;
+          render();
+        });
+      }
+      return;
+    }
+    const editExamButton = event.target.closest("[data-edit-exam-id]");
+    if (editExamButton) {
+      beginExamEdit(editExamButton.dataset.editExamId);
+      return;
+    }
+    const deleteExamButton = event.target.closest("[data-delete-exam-id]");
+    if (deleteExamButton) {
+      withButtonLoading(deleteExamButton, "Deleting...", () => deleteExam(deleteExamButton.dataset.deleteExamId), {
+        timeoutTarget: els.examResult,
+        timeoutCopy: "Removing this exam is taking longer than expected. Please try again.",
+      }).catch((error) => setResult(els.examResult, `<p>${escapeHtml(error.message)}</p>`));
+      return;
+    }
     const courseRefreshButton = event.target.closest("[data-course-refresh]");
     if (courseRefreshButton) {
       withButtonLoading(courseRefreshButton, "Refreshing...", refreshClassroomCourses, {
@@ -4279,14 +4687,24 @@ function wireEvents() {
       firstControl?.focus({ preventScroll: true });
     }, 250);
   });
+  els.academicContextPrepareButton?.addEventListener("click", () => {
+    withButtonLoading(els.academicContextPrepareButton, "Preparing...", prepareAcademicContext, {
+      timeoutTarget: els.academicContextPreparationStatus,
+      timeoutCopy: "Academic Context preparation is taking longer than expected. Please try again.",
+      timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
+    }).catch((error) => setResult(els.academicContextPreparationStatus, `<p>${escapeHtml(error.message)}</p>`));
+  });
   els.sourceKindSelect?.addEventListener("change", () => {
     syncAcademicContextUploadType();
     clearAcademicContextFieldMessages("deadline");
+    updateProductFeatureControls();
   });
   els.sourceTitle?.addEventListener("input", () => clearAcademicContextFieldMessages("title"));
   els.sourceCourseSelect?.addEventListener("change", () => clearAcademicContextFieldMessages("course"));
   els.sourceDeadline?.addEventListener("input", () => clearAcademicContextFieldMessages("deadline"));
   els.sourceFile?.addEventListener("change", () => clearAcademicContextFieldMessages("file"));
+  els.examForm?.addEventListener("submit", saveExam);
+  els.examEditCancel?.addEventListener("click", resetExamForm);
   els.sourceSearchInput?.addEventListener("input", (event) => {
     sourceSearchQuery = event.currentTarget.value;
     renderSources();

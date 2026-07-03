@@ -52,9 +52,16 @@ import {
   getPublicProductCapabilities,
 } from "./domain/productFeatureAccessService.js";
 import {
+  addManualExam,
+  advanceAcademicContextPreparation,
   applyAcademicContextDeletion,
+  beginAcademicContextPreparation,
   buildAcademicContextDeletionPlan,
+  getAcademicContextReadiness,
   linkManualAcademicContextUpload,
+  markAcademicContextNeedsPreparation,
+  removeManualExam,
+  updateManualExam,
   validateManualAcademicContextContract,
 } from "./domain/academicContextService.js";
 import { getRequestSession } from "./auth/session.js";
@@ -94,6 +101,7 @@ import {
 } from "./connectors/googleClassroom/mapper.js";
 import { savePersistentClassroomToken } from "./connectors/googleClassroom/tokenStore.js";
 import { runStudentOsVerb } from "./ai/studentBrainAdapter.js";
+import { generateDailyTodoPlan } from "./ai/dailyTodoService.js";
 import { getSafeAiProviderStatus, getAiProviderConfig } from "./ai/providerConfig.js";
 import {
   AI_ALLOWANCE_COPY,
@@ -539,6 +547,8 @@ function publicState(state, persistence) {
     creditBalance,
     assignmentInsights: getAssignmentInsights(state),
     todayNextActions: getTodayNextActions(state),
+    academicContext: getAcademicContextReadiness(state),
+    todayPlan: state.studentProfile?.dailyTodoPlan || null,
     classroomDueWork: dueWork,
     todayDoNow: getClassroomTodayAction(state, {
       includeDiscoveredReview: classroomPolicy.courseworkReviewEnabled === true && classroomPolicy.autoCheckEnabled === true,
@@ -1777,7 +1787,171 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
     const { session, state, persistence } = await getStateContext(req);
     await maybeRunAutomaticClassroomCheck({ state, session });
+    const preparation = advanceAcademicContextPreparation(state);
+    if (preparation.changed) await repository.saveState(session, state);
     sendJson(res, 200, publicState(state, persistence));
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/academic-context/status") {
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    const preparation = advanceAcademicContextPreparation(state);
+    if (preparation.changed) await repository.saveState(session, state);
+    sendJson(res, 200, {
+      academicContext: preparation.readiness,
+      state: publicState(state, persistence),
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/academic-context/prepare") {
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    const academicContext = beginAcademicContextPreparation(state);
+    await repository.saveState(session, state);
+    sendJson(res, 202, {
+      academicContext,
+      state: publicState(state, persistence),
+      message: "Setting things up for you.",
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/academic-context/exams") {
+    const body = await readJsonBody(req);
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    const exam = addManualExam(state, body);
+    await repository.saveState(session, state);
+    sendJson(res, 201, {
+      exam,
+      state: publicState(state, persistence),
+      message: "Exam date added to Academic Context.",
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  const manualExamPath = url.pathname.match(/^\/api\/academic-context\/exams\/([^/]+)$/);
+  if (manualExamPath && ["PATCH", "DELETE"].includes(req.method)) {
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    const examId = decodeURIComponent(manualExamPath[1]);
+    const exam = req.method === "PATCH"
+      ? updateManualExam(state, examId, await readJsonBody(req))
+      : removeManualExam(state, examId);
+    if (req.method === "DELETE") await repository.deleteAcademicExam(session, examId);
+    await repository.saveState(session, state);
+    sendJson(res, 200, {
+      exam,
+      state: publicState(state, persistence),
+      message: req.method === "PATCH" ? "Exam details saved." : "Exam removed from Academic Context.",
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/today/todo") {
+    const body = await readJsonBody(req);
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    assertProductFeatureAccess(state, FEATURE_KEYS.ASSISTANT);
+    enforceRateLimit(req, session, "ai_call");
+    const readiness = getAcademicContextReadiness(state);
+    if (!readiness.canGenerateTodo) {
+      const error = new Error("Prepare Academic Context before generating todayâ€™s TO-DO list.");
+      error.status = 409;
+      error.code = "academic_context_not_ready";
+      throw error;
+    }
+    const activePlanKey = resolveEntitlements(state).activePlanKey;
+    const allowance = getAiWeeklyAllowance(activePlanKey);
+    const period = getAiWeeklyPeriod();
+    const task = classifyAiTask({ verb: "Plan", message: "Generate today's TO-DO list" });
+    let reservation;
+    try {
+      reservation = await repository.reserveAiWeeklyAllowance(session, {
+        planTier: activePlanKey,
+        periodKey: period.periodKey,
+        allowance,
+        actionType: task.actionType,
+        creditCost: task.creditCost,
+        requestId: req.requestId,
+        metadata: { workflow: "daily_todo" },
+      });
+    } catch (error) {
+      logger.warn("daily_todo.allowance_reservation_failed", { requestId: req.requestId, status: error.status || 500 });
+      sendJson(res, 200, {
+        generated: false,
+        retryable: true,
+        message: AI_ALLOWANCE_COPY.unavailable,
+        state: publicState(state, persistence),
+        secretsPrinted: false,
+      });
+      return;
+    }
+    if (!reservation.allowed) {
+      sendJson(res, 200, {
+        generated: false,
+        allowanceLimited: true,
+        message: `${AI_ALLOWANCE_COPY.exhausted} ${AI_ALLOWANCE_COPY.exhaustedNextStep}`,
+        weeklyAiHelp: buildPublicAiAllowance({ ...reservation, refreshesAt: period.refreshesAt, blocked: true }),
+        state: publicState(state, persistence),
+        secretsPrinted: false,
+      });
+      return;
+    }
+    let result;
+    try {
+      result = await generateDailyTodoPlan({
+        state,
+        currentDate: body.currentDate,
+        currentTime: body.currentTime,
+        timezone: body.timezone,
+        planTier: activePlanKey,
+      });
+    } catch (error) {
+      await repository.settleAiWeeklyAllowance(session, { requestId: req.requestId, status: "refunded" }).catch(() => null);
+      throw error;
+    }
+    const generated = result.generationSucceeded === true && Boolean(result.plan);
+    const settlement = await repository.settleAiWeeklyAllowance(session, {
+      requestId: req.requestId,
+      status: generated ? "charged" : "refunded",
+    }).catch((error) => {
+      logger.warn("daily_todo.allowance_settlement_failed", { requestId: req.requestId, status: error.status || 500 });
+      return null;
+    });
+    const usedAfterSettlement = settlement?.used ?? (generated ? reservation.used : Math.max(0, reservation.used - task.creditCost));
+    const weeklyAiHelp = buildPublicAiAllowance({
+      allowance,
+      used: usedAfterSettlement,
+      remaining: Math.max(0, allowance - usedAfterSettlement),
+      refreshesAt: period.refreshesAt,
+    });
+    if (!generated) {
+      sendJson(res, 200, {
+        generated: false,
+        retryable: true,
+        message: "StudentOS could not generate todayâ€™s plan. Please try again.",
+        weeklyAiHelp,
+        state: publicState(state, persistence),
+        secretsPrinted: false,
+      });
+      return;
+    }
+    state.studentProfile.dailyTodoPlan = result.plan;
+    await repository.saveState(session, state);
+    sendJson(res, 200, {
+      generated: true,
+      plan: result.plan,
+      weeklyAiHelp,
+      state: publicState(state, persistence),
+      secretsPrinted: false,
+    });
     return;
   }
 
@@ -1791,7 +1965,8 @@ async function handleApi(req, res, url) {
       if (classroomPolicy.courseworkReviewEnabled === true) {
         const classroomIds = new Set((state.classroomItems || []).map((item) => String(item.id)));
         const selectedClassroomIds = (body.payload?.materialIds || []).map(String).filter((id) => classroomIds.has(id));
-        selectClassroomItemsForAcademicContext(state, selectedClassroomIds, { replace: true });
+        const selected = selectClassroomItemsForAcademicContext(state, selectedClassroomIds, { replace: true });
+        if (selected.imported.length) markAcademicContextNeedsPreparation(state, "classroom_context_selected");
       } else {
         const classroomIds = new Set((state.classroomItems || []).map((item) => String(item.id)));
         body.payload.materialIds = (body.payload?.materialIds || []).map(String).filter((id) => !classroomIds.has(id));
@@ -1830,6 +2005,7 @@ async function handleApi(req, res, url) {
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
     const onboarding = applyStudentOnboarding(state, body);
+    markAcademicContextNeedsPreparation(state, "profile_or_academic_context_updated");
     await repository.saveState(session, state);
     sendJson(res, 200, {
       onboarding,
@@ -2096,6 +2272,9 @@ async function handleApi(req, res, url) {
       config: googleClassroomConfig,
       courseOnly: true,
     });
+    if ((result.summary?.importedCourses || 0) + (result.summary?.updatedCourses || 0) > 0) {
+      markAcademicContextNeedsPreparation(state, "classroom_courses_updated");
+    }
     await repository.saveState(session, state);
     sendJson(res, 200, {
       ...result,
@@ -2147,6 +2326,9 @@ async function handleApi(req, res, url) {
       config: googleClassroomConfig,
       courseOnly: classroomPolicy.courseOnly === true,
     });
+    if ((result.summary?.importedCourses || 0) + (result.summary?.updatedCourses || 0) > 0) {
+      markAcademicContextNeedsPreparation(state, "classroom_courses_updated");
+    }
     await repository.saveState(session, state);
     sendJson(res, 200, {
       ...result,
@@ -2195,6 +2377,7 @@ async function handleApi(req, res, url) {
     const mergedIds = [...new Set([...(lifecycle.selectedMaterialIds || []), ...currentlyImportedIds, ...requestedIds])];
     assertAcademicContextSelection(state, mergedIds);
     const selection = selectClassroomItemsForAcademicContext(state, requestedIds, { replace: false });
+    if (selection.imported.length) markAcademicContextNeedsPreparation(state, "classroom_context_selected");
     const importedLabels = selection.imported.map((item) => item.title);
     state.studentProfile.productLifecycle.selectedMaterialIds = mergedIds;
     state.studentProfile.productLifecycle.selectedMaterialLabels = [...new Set([
@@ -2278,15 +2461,22 @@ async function handleApi(req, res, url) {
       sendJson(res, 200, publicAiResult(result));
       return;
     }
-    const groundingContext = getGroundingContext(state, body.message || "");
+    const activePlanKey = resolveEntitlements(state).activePlanKey;
+    const starterContextReady = activePlanKey !== "starter" || getAcademicContextReadiness(state).canGenerateTodo;
+    const assistantState = starterContextReady ? state : {
+      ...state,
+      sourceMaterials: [],
+      sourceChunks: [],
+      memoryItems: [],
+    };
+    const groundingContext = getGroundingContext(assistantState, body.message || "");
     const retrievalOverride = await repository.retrieveGroundedChunks(session, {
-      state,
+      state: assistantState,
       message: body.message || "",
       topic: groundingContext.topic,
       course: groundingContext.course,
       limit: assistantPolicy.retrievalLimit,
     });
-    const activePlanKey = resolveEntitlements(state).activePlanKey;
     const allowance = getAiWeeklyAllowance(activePlanKey);
     const period = getAiWeeklyPeriod();
     const task = classifyAiTask({ verb: requestedVerb, message: body.message || "", retrieval: retrievalOverride });
@@ -2332,7 +2522,7 @@ async function handleApi(req, res, url) {
       result = await runStudentOsVerb({
         verb: requestedVerb,
         message: body.message || "",
-        state,
+        state: assistantState,
         retrievalOverride,
         assistantPolicy,
       });
@@ -2707,7 +2897,7 @@ async function handleApi(req, res, url) {
       material.indexedAt = material.status === "indexed" ? new Date().toISOString() : null;
       material.failedAt = material.status === "failed" || material.status === "needs_ocr" ? new Date().toISOString() : null;
       material.chunkCount = sourceChunks.length;
-      const { assignment } = linkManualAcademicContextUpload(state, material, contract);
+      const { assignment, syllabus } = linkManualAcademicContextUpload(state, material, contract);
       const memoryItem = material.status === "indexed"
         ? createMemoryItemForSource({ material, course })
         : null;
@@ -2715,6 +2905,7 @@ async function handleApi(req, res, url) {
       state.sourceChunks.push(...sourceChunks);
       if (memoryItem) state.memoryItems.push(memoryItem);
       state.embeddingsMetadata.push(...embeddingRows);
+      markAcademicContextNeedsPreparation(state, `${contract.kind}_uploaded`);
       const completedUploadJob = {
         ...createBackgroundJob({
           userId: session.user.id,
@@ -2799,6 +2990,12 @@ async function handleApi(req, res, url) {
           source: assignment.source,
           sourceMaterialId: assignment.sourceMaterialId,
           handedIn: false,
+        } : null,
+        syllabus: syllabus ? {
+          id: syllabus.id,
+          courseId: syllabus.courseId,
+          title: syllabus.title,
+          sourceMaterialId: syllabus.sourceMaterialId,
         } : null,
         memoryItem: memoryItem
           ? {
@@ -2900,6 +3097,8 @@ async function handleApi(req, res, url) {
     if (hardDelete) {
       await repository.hardDeleteSourceArtifacts(session, cleanupPlan);
       hardDeleteSourceState(state, sourceId);
+      markAcademicContextNeedsPreparation(state, "material_removed");
+      await repository.saveState(session, state);
       sendJson(res, 200, {
         deleted: true,
         hardDeleted: true,
@@ -2923,6 +3122,7 @@ async function handleApi(req, res, url) {
       });
     }
     softDeleteSourceState(state, sourceId);
+    markAcademicContextNeedsPreparation(state, "material_removed");
     state.auditLog.push({
       id: `audit_delete_${material.id}_${Date.now()}`,
       actorId: state.studentProfile.id,
