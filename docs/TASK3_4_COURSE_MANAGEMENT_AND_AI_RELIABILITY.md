@@ -84,6 +84,8 @@ The next production test exposed a separate deployment defect after allowance re
 
 The production workflow now requires at least one of `GROQ_API_KEY` or `GROQ_API_KEY_1` through `GROQ_API_KEY_5`, maps every configured key through Azure Container Apps secret references, and conditionally maps Pollinations. The backend prefers the numbered pool, ignores empty values, deduplicates matching keys, and keeps `GROQ_API_KEY` as a backward-compatible fallback. Providerless automatic mode is a retryable generation failure, so the existing settlement path refunds the reservation and returns only the calm unavailable copy. Explicit mock mode remains available for controlled local tests.
 
+A subsequent workflow run showed that the ACA secret names were already lowercase and hyphen-safe. The mapping step exited before Azure CLI because its optional-secret helper called `printenv` for an unset Pollinations key under fail-fast shell behavior. The helper now treats missing optional values as empty, preserves the safe Groq env-to-secretRef mapping, and reports only redacted Azure CLI command categories and exit codes.
+
 Retrieval now applies the existing `0.42` grounding threshold before snippets enter the model prompt. Real-provider responses expose only snippets referenced by validated `[S#]` or chunk citations, and source badges are deduplicated by material. Provider failures, uncited answers, and low-confidence retrieval return no public source labels or `Selected material` blocks.
 
 The browser console `400` from `/api/courses` is a separate course-form request and is not part of this AI fix.

@@ -101,6 +101,8 @@ For the minimum configuration, add `GROQ_API_KEY` to the `azure-dev` GitHub envi
 
 Do not comma-separate values in `GROQ_API_KEY`; `GROQ_API_KEYS` is not supported. Groq secrets are backend-only Azure secrets and must never be added to Cloudflare Pages or public frontend configuration.
 
+The workflow keeps runtime env names uppercase but maps them to lowercase ACA secret refs such as `GROQ_API_KEY_1=secretref:groq-api-key-1`. An unset optional provider secret must be skipped; it must not stop the mapping step. Mapping failures report only `containerapp_secret_set` or `containerapp_env_update` plus the Azure CLI exit code.
+
 Safer future option: replace long-lived `AZURE_CREDENTIALS` with Azure OIDC/federated credentials and update `azure/login` to use `client-id`, `tenant-id`, and `subscription-id`.
 
 ## 7. GHCR Pull Credentials

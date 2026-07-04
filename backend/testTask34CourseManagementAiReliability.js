@@ -30,7 +30,13 @@ import {
 } from "./ai/providers.js";
 import { runStudentOsVerb } from "./ai/studentBrainAdapter.js";
 import { initialStateForUser, StudentOsRepository } from "./repository/studentOsRepository.js";
-import { AZURE_GROQ_SECRET_NAMES, reportAzureGroqValidation, validateAzureGroqSecrets } from "../scripts/validateAzureGroqSecrets.js";
+import {
+  AZURE_GROQ_SECRET_MAPPINGS,
+  AZURE_GROQ_SECRET_NAMES,
+  isAzureContainerAppSafeSecretName,
+  reportAzureGroqValidation,
+  validateAzureGroqSecrets,
+} from "../scripts/validateAzureGroqSecrets.js";
 
 const now = new Date("2026-07-02T08:00:00.000Z");
 
@@ -77,6 +83,18 @@ assert.deepEqual(AZURE_GROQ_SECRET_NAMES, [
   "GROQ_API_KEY_4",
   "GROQ_API_KEY_5",
 ]);
+assert.deepEqual(AZURE_GROQ_SECRET_MAPPINGS, [
+  { envName: "GROQ_API_KEY", secretName: "groq-api-key" },
+  { envName: "GROQ_API_KEY_1", secretName: "groq-api-key-1" },
+  { envName: "GROQ_API_KEY_2", secretName: "groq-api-key-2" },
+  { envName: "GROQ_API_KEY_3", secretName: "groq-api-key-3" },
+  { envName: "GROQ_API_KEY_4", secretName: "groq-api-key-4" },
+  { envName: "GROQ_API_KEY_5", secretName: "groq-api-key-5" },
+]);
+assert(AZURE_GROQ_SECRET_MAPPINGS.every(({ envName, secretName }) =>
+  /^GROQ_API_KEY(?:_[1-5])?$/.test(envName) &&
+    isAzureContainerAppSafeSecretName(secretName) &&
+    !/[A-Z_]/.test(secretName)));
 
 const singleGroqConfig = getAiProviderConfig({ GROQ_API_KEY: "single-test-key" });
 assert.equal(singleGroqConfig.groq.configured, true);
@@ -436,7 +454,13 @@ assert.match(repositorySource, /p_min_similarity: MIN_GROUNDING_CONFIDENCE/);
 assert.match(workflow, /node scripts\/validateAzureGroqSecrets\.js/);
 assert.match(workflow, /add_optional_provider_secret GROQ_API_KEY groq-api-key/);
 assert.match(workflow, /add_optional_provider_secret GROQ_API_KEY_1 groq-api-key-1/);
+assert.match(workflow, /add_optional_provider_secret GROQ_API_KEY_5 groq-api-key-5/);
 assert.match(workflow, /add_optional_provider_secret POLLINATIONS_API_KEY pollinations-api-key/);
+assert.match(workflow, /printenv "\$env_name" 2>\/dev\/null \|\| true/);
+assert.match(workflow, /run_redacted_az_step containerapp_secret_set/);
+assert.match(workflow, /run_redacted_az_step containerapp_env_update/);
+assert.doesNotMatch(workflow, /cat\s+["']?\$?log_path/);
+assert.doesNotMatch(workflow, /echo[^\n]*\$value/);
 assert.match(preflight, /workflow validates either legacy or numbered Groq secrets/);
 assert.match(verifier, /aiProviders\?\.configured !== true/);
 assert.match(allowancePermissionsMigration, /grant select, insert, update, delete on table public\.ai_usage_ledger to service_role/i);

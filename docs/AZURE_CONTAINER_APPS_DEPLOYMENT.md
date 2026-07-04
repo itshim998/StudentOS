@@ -136,6 +136,8 @@ Backend-only secret values:
 
 The `Azure Container Apps - StudentOS API` GitHub Actions workflow validates and maps the required Supabase values plus every configured Groq key into Azure Container Apps as backend-only secret refs after the Bicep deployment. Validation accepts `GROQ_API_KEY` or any non-empty numbered key; it does not require all five numbered keys. Pollinations is mapped only when present. Missing required secret names cause the workflow to fail before deployment output is shown. Provider and service-role keys stay in GitHub Actions and Azure Container Apps only; do not add them to Cloudflare Pages or any frontend runtime config.
 
+Azure secret names remain lowercase and hyphen-safe while backend runtime env names remain unchanged: `GROQ_API_KEY` maps to `groq-api-key`, and `GROQ_API_KEY_1` through `_5` map to `groq-api-key-1` through `groq-api-key-5`. Empty optional secrets are skipped without stopping the fail-fast workflow. If Azure CLI mapping fails, the workflow prints only the safe command category and exit code; raw CLI output is withheld because it may contain secret-bearing command arguments.
+
 The backend loads non-empty numbered keys first in `_1` through `_5` order, deduplicates matching values, and then adds a distinct `GROQ_API_KEY` as the backward-compatible fallback. `GROQ_API_KEYS` and comma-separated values are not supported. Do not place multiple keys inside `GROQ_API_KEY`.
 
 For PASS 36.0 production auth gating, these Supabase secrets must exist in the `azure-dev` GitHub environment before rerunning the workflow:

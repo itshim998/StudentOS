@@ -1,7 +1,12 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { AZURE_GROQ_SECRET_NAMES, validateAzureGroqSecrets } from "./validateAzureGroqSecrets.js";
+import {
+  AZURE_GROQ_SECRET_MAPPINGS,
+  AZURE_GROQ_SECRET_NAMES,
+  isAzureContainerAppSafeSecretName,
+  validateAzureGroqSecrets,
+} from "./validateAzureGroqSecrets.js";
 
 const ROOT = process.cwd();
 const checks = [];
@@ -201,12 +206,7 @@ addCheck(
     workflow.includes("STUDENTOS_AI_MODE=auto"),
 );
 const optionalAzureAiSecrets = [
-  ["GROQ_API_KEY", "groq-api-key"],
-  ["GROQ_API_KEY_1", "groq-api-key-1"],
-  ["GROQ_API_KEY_2", "groq-api-key-2"],
-  ["GROQ_API_KEY_3", "groq-api-key-3"],
-  ["GROQ_API_KEY_4", "groq-api-key-4"],
-  ["GROQ_API_KEY_5", "groq-api-key-5"],
+  ...AZURE_GROQ_SECRET_MAPPINGS.map((item) => [item.envName, item.secretName]),
   ["POLLINATIONS_API_KEY", "pollinations-api-key"],
 ];
 addCheck(
@@ -214,6 +214,25 @@ addCheck(
   workflow.includes("add_optional_provider_secret") && optionalAzureAiSecrets.every(([name, secret]) =>
     workflow.includes(`${name}: \${{ secrets.${name} }}`) &&
       workflow.includes(`add_optional_provider_secret ${name} ${secret}`)),
+);
+addCheck(
+  "Groq runtime env names map to ACA-safe secret refs",
+  AZURE_GROQ_SECRET_MAPPINGS.every(({ envName, secretName }) =>
+    /^GROQ_API_KEY(?:_[1-5])?$/.test(envName) &&
+      isAzureContainerAppSafeSecretName(secretName) &&
+      !/[A-Z_]/.test(secretName)),
+);
+addCheck(
+  "workflow tolerates empty optional provider secrets",
+  workflow.includes('value="$(printenv "$env_name" 2>/dev/null || true)"'),
+);
+addCheck(
+  "workflow emits redacted Azure CLI failure categories",
+  workflow.includes("run_redacted_az_step containerapp_secret_set") &&
+    workflow.includes("run_redacted_az_step containerapp_env_update") &&
+    workflow.includes("Raw CLI output was withheld to protect secret values.") &&
+    !/cat\s+["']?\$?log_path/.test(workflow) &&
+    !/echo[^\n]*\$value/.test(workflow),
 );
 const legacyGroqValidation = validateAzureGroqSecrets({ GROQ_API_KEY: "legacy-probe-key" });
 const numberedGroqValidation = validateAzureGroqSecrets({
