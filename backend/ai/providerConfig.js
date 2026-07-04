@@ -1,10 +1,11 @@
-const GROQ_KEY_NAMES = [
-  "GROQ_API_KEY",
+const GROQ_NUMBERED_KEY_NAMES = [
+  "GROQ_API_KEY_1",
   "GROQ_API_KEY_2",
   "GROQ_API_KEY_3",
   "GROQ_API_KEY_4",
   "GROQ_API_KEY_5",
 ];
+const GROQ_KEY_NAMES = [...GROQ_NUMBERED_KEY_NAMES, "GROQ_API_KEY"];
 
 function readValue(env, key, fallback = "") {
   return String(env[key] || fallback).trim();
@@ -16,13 +17,14 @@ function readPositiveInteger(env, key, fallback) {
 }
 
 export function getAiProviderConfig(env = process.env) {
-  const groqKeys = GROQ_KEY_NAMES
-    .map((name, index) => ({
-      name,
-      index: index + 1,
-      value: readValue(env, name),
-    }))
-    .filter((item) => item.value);
+  const seenGroqKeys = new Set();
+  const groqKeys = [];
+  for (const name of GROQ_KEY_NAMES) {
+    const value = readValue(env, name);
+    if (!value || seenGroqKeys.has(value)) continue;
+    seenGroqKeys.add(value);
+    groqKeys.push({ name, index: groqKeys.length + 1, value });
+  }
   const pollinationsBaseUrl = readValue(env, "POLLINATIONS_BASE_URL", "https://gen.pollinations.ai");
   return {
     requestedMode: readValue(env, "STUDENTOS_AI_MODE", "auto").toLowerCase(),

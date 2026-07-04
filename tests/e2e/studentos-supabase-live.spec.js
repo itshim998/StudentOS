@@ -640,6 +640,11 @@ test.describe("StudentOS live Supabase E2E", () => {
       ...config.shards.map((shard) => shard.serviceRoleKey),
       config.jwtSecret,
       process.env.GROQ_API_KEY,
+      process.env.GROQ_API_KEY_1,
+      process.env.GROQ_API_KEY_2,
+      process.env.GROQ_API_KEY_3,
+      process.env.GROQ_API_KEY_4,
+      process.env.GROQ_API_KEY_5,
       process.env.POLLINATIONS_API_KEY,
       process.env.GOOGLE_CLIENT_SECRET,
     ]);

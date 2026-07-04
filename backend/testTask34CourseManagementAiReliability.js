@@ -21,6 +21,7 @@ import {
 import { getProductFlowConfig } from "./domain/productLifecycleService.js";
 import { classifyAiTask, getDeterministicAiResponse } from "./ai/aiWeeklyAllowanceService.js";
 import { getAiProviderConfig } from "./ai/providerConfig.js";
+import { redactSecrets } from "./observability/logger.js";
 import {
   GroqGroundedProvider,
   PollinationsTextProvider,
@@ -29,6 +30,7 @@ import {
 } from "./ai/providers.js";
 import { runStudentOsVerb } from "./ai/studentBrainAdapter.js";
 import { initialStateForUser, StudentOsRepository } from "./repository/studentOsRepository.js";
+import { AZURE_GROQ_SECRET_NAMES, reportAzureGroqValidation, validateAzureGroqSecrets } from "../scripts/validateAzureGroqSecrets.js";
 
 const now = new Date("2026-07-02T08:00:00.000Z");
 
@@ -67,6 +69,68 @@ assert(onboardingState.courses.some((course) => course.title === "Mathematics" &
 assert.equal(getDeterministicAiResponse("Hello").actionType, "deterministic_help");
 assert.equal(groqSupportsReasoningEffort("openai/gpt-oss-120b"), true);
 assert.equal(groqSupportsReasoningEffort("llama-3.3-70b-versatile"), false);
+assert.deepEqual(AZURE_GROQ_SECRET_NAMES, [
+  "GROQ_API_KEY",
+  "GROQ_API_KEY_1",
+  "GROQ_API_KEY_2",
+  "GROQ_API_KEY_3",
+  "GROQ_API_KEY_4",
+  "GROQ_API_KEY_5",
+]);
+
+const singleGroqConfig = getAiProviderConfig({ GROQ_API_KEY: "single-test-key" });
+assert.equal(singleGroqConfig.groq.configured, true);
+assert.equal(singleGroqConfig.groq.keyCount, 1);
+assert.deepEqual(singleGroqConfig.groq.keys.map((key) => key.name), ["GROQ_API_KEY"]);
+
+const numberedGroqPoolConfig = getAiProviderConfig({
+  GROQ_API_KEY_1: "pool-test-key-1",
+  GROQ_API_KEY_2: "pool-test-key-2",
+  GROQ_API_KEY_3: "pool-test-key-3",
+  GROQ_API_KEY_4: "pool-test-key-4",
+  GROQ_API_KEY_5: "pool-test-key-5",
+});
+assert.equal(numberedGroqPoolConfig.groq.keyCount, 5);
+assert.deepEqual(numberedGroqPoolConfig.groq.keys.map((key) => key.name), [
+  "GROQ_API_KEY_1",
+  "GROQ_API_KEY_2",
+  "GROQ_API_KEY_3",
+  "GROQ_API_KEY_4",
+  "GROQ_API_KEY_5",
+]);
+
+const deduplicatedGroqConfig = getAiProviderConfig({
+  GROQ_API_KEY: "shared-test-key",
+  GROQ_API_KEY_1: "shared-test-key",
+  GROQ_API_KEY_2: "",
+  GROQ_API_KEY_3: "unique-test-key",
+  GROQ_API_KEY_4: "  ",
+  GROQ_API_KEY_5: "shared-test-key",
+});
+assert.equal(deduplicatedGroqConfig.groq.keyCount, 2);
+assert.deepEqual(deduplicatedGroqConfig.groq.keys.map((key) => key.name), ["GROQ_API_KEY_1", "GROQ_API_KEY_3"]);
+assert.equal(getAiProviderConfig({ GROQ_API_KEYS: "comma,key,list" }).groq.configured, false);
+assert.equal(getAiProviderConfig({}).groq.configured, false);
+
+const legacyAzureValidation = validateAzureGroqSecrets({ GROQ_API_KEY: "legacy-deploy-test-key" });
+const poolAzureValidation = validateAzureGroqSecrets({ GROQ_API_KEY_2: "pool-deploy-test-key" });
+const missingAzureValidation = validateAzureGroqSecrets({});
+assert.equal(legacyAzureValidation.ok, true);
+assert.equal(poolAzureValidation.ok, true);
+assert.equal(missingAzureValidation.ok, false);
+assert.equal(missingAzureValidation.errorCode, "groq_backend_key_missing");
+assert.doesNotMatch(JSON.stringify([legacyAzureValidation, poolAzureValidation]), /deploy-test-key/);
+
+const validationOutput = [];
+reportAzureGroqValidation({ GROQ_API_KEY_1: "output-secret-should-not-print" }, {
+  log: (message) => validationOutput.push(message),
+  error: (message) => validationOutput.push(message),
+});
+assert.doesNotMatch(validationOutput.join("\n"), /output-secret-should-not-print/);
+assert.doesNotMatch(
+  redactSecrets("GROQ_API_KEY_1=logger-secret-should-not-print"),
+  /logger-secret-should-not-print/,
+);
 
 const supportedConfig = getAiProviderConfig({
   STUDENTOS_AI_MODE: "auto",
@@ -369,9 +433,11 @@ assert.match(server, /status: generated \? "charged" : "refunded"/);
 assert.match(server, /const authoritativeSnippets = grounding\.uploadedMaterialUsed === true/);
 assert.match(app, /const usedMaterialSnippets = result\.grounding\?\.uploadedMaterialUsed === true/);
 assert.match(repositorySource, /p_min_similarity: MIN_GROUNDING_CONFIDENCE/);
-assert.match(workflow, /GROQ_API_KEY=secretref:groq-api-key/);
+assert.match(workflow, /node scripts\/validateAzureGroqSecrets\.js/);
+assert.match(workflow, /add_optional_provider_secret GROQ_API_KEY groq-api-key/);
+assert.match(workflow, /add_optional_provider_secret GROQ_API_KEY_1 groq-api-key-1/);
 assert.match(workflow, /add_optional_provider_secret POLLINATIONS_API_KEY pollinations-api-key/);
-assert.match(preflight, /workflow requires and maps the primary Groq secret/);
+assert.match(preflight, /workflow validates either legacy or numbered Groq secrets/);
 assert.match(verifier, /aiProviders\?\.configured !== true/);
 assert.match(allowancePermissionsMigration, /grant select, insert, update, delete on table public\.ai_usage_ledger to service_role/i);
 assert.match(allowancePermissionsMigration, /grant execute on function public\.reserve_ai_weekly_allowance[\s\S]*to service_role/i);

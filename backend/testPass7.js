@@ -156,10 +156,13 @@ const noCitationAnswer = await runStudentOsVerb({
     throw new Error("fetch_should_not_run_without_keys");
   },
 });
-assert.equal(noCitationAnswer.provider, "mock");
+assert.equal(noCitationAnswer.provider, "none");
+assert.equal(noCitationAnswer.generationSucceeded, false);
+assert.equal(noCitationAnswer.internalFailureCode, "no_provider_configured");
+assert.equal(noCitationAnswer.answer, "I could not complete that answer right now. Please try again.");
 assert.equal(noCitationAnswer.sourceLabels.length, 0);
 assert.equal(noCitationAnswer.grounding.snippets.length, 0);
-assert.equal(noCitationAnswer.grounding.insufficientContext, true);
+assert.equal(noCitationAnswer.grounding.insufficientContext, false);
 
 resetProviderRuntimeForTests();
 const groqConfig = getAiProviderConfig({

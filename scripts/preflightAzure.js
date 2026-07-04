@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { AZURE_GROQ_SECRET_NAMES, validateAzureGroqSecrets } from "./validateAzureGroqSecrets.js";
 
 const ROOT = process.cwd();
 const checks = [];
@@ -194,14 +195,14 @@ const requiredAzureSecretRefs = [
 addCheck("workflow validates Supabase backend secrets", requiredAzureSupabaseSecrets.every((name) => workflow.includes(`${name}: \${{ secrets.${name} }}`)) && workflow.includes("Missing required Azure backend secret"));
 addCheck("workflow maps Supabase backend secrets to ACA secret refs", includesAll(workflow, requiredAzureSecretRefs));
 addCheck(
-  "workflow requires and maps the primary Groq secret",
-  workflow.includes("GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}") &&
-    workflow.includes("GROQ_API_KEY; do") &&
-    workflow.includes('groq-api-key="$GROQ_API_KEY"') &&
-    workflow.includes("GROQ_API_KEY=secretref:groq-api-key") &&
+  "workflow validates either legacy or numbered Groq secrets",
+  AZURE_GROQ_SECRET_NAMES.every((name) => workflow.includes(`${name}: \${{ secrets.${name} }}`)) &&
+    workflow.includes("node scripts/validateAzureGroqSecrets.js") &&
     workflow.includes("STUDENTOS_AI_MODE=auto"),
 );
 const optionalAzureAiSecrets = [
+  ["GROQ_API_KEY", "groq-api-key"],
+  ["GROQ_API_KEY_1", "groq-api-key-1"],
   ["GROQ_API_KEY_2", "groq-api-key-2"],
   ["GROQ_API_KEY_3", "groq-api-key-3"],
   ["GROQ_API_KEY_4", "groq-api-key-4"],
@@ -213,6 +214,19 @@ addCheck(
   workflow.includes("add_optional_provider_secret") && optionalAzureAiSecrets.every(([name, secret]) =>
     workflow.includes(`${name}: \${{ secrets.${name} }}`) &&
       workflow.includes(`add_optional_provider_secret ${name} ${secret}`)),
+);
+const legacyGroqValidation = validateAzureGroqSecrets({ GROQ_API_KEY: "legacy-probe-key" });
+const numberedGroqValidation = validateAzureGroqSecrets({
+  GROQ_API_KEY_1: "pool-probe-key-1",
+  GROQ_API_KEY_4: "pool-probe-key-4",
+});
+const missingGroqValidation = validateAzureGroqSecrets({});
+addCheck("Azure Groq validation accepts GROQ_API_KEY", legacyGroqValidation.ok && legacyGroqValidation.keyCount === 1);
+addCheck("Azure Groq validation accepts a numbered pool", numberedGroqValidation.ok && numberedGroqValidation.keyCount === 2);
+addCheck("Azure Groq validation fails without keys", !missingGroqValidation.ok && missingGroqValidation.errorCode === "groq_backend_key_missing");
+addCheck(
+  "Azure Groq validation never prints secret values",
+  !JSON.stringify([legacyGroqValidation, numberedGroqValidation, missingGroqValidation]).includes("probe-key"),
 );
 addCheck("workflow configures production storage buckets", workflow.includes("STUDENTOS_STORAGE_BUCKET=studentos-source-materials") && workflow.includes("STUDENTOS_EXPORT_STORAGE_BUCKET=studentos-data-exports"));
 const runtimeConfigText = `${read("frontend/runtime-config.js")}\n${read("scripts/writeCloudflareFrontendConfig.js")}`;

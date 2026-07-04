@@ -99,11 +99,13 @@ assert.equal(limiter.check("student_1").allowed, true);
 const redactedString = redactSecrets([
   "Authorization: Bearer token_should_not_print",
   "GROQ_API_KEY=groq_secret_should_not_print",
+  "GROQ_API_KEY_1=groq_pool_secret_should_not_print",
   "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2=supabase_secret_should_not_print",
   "apikey: pollinations_secret_should_not_print",
 ].join("\n"));
 assert.equal(redactedString.includes("token_should_not_print"), false);
 assert.equal(redactedString.includes("groq_secret_should_not_print"), false);
+assert.equal(redactedString.includes("groq_pool_secret_should_not_print"), false);
 assert.equal(redactedString.includes("supabase_secret_should_not_print"), false);
 assert.equal(redactedString.includes("pollinations_secret_should_not_print"), false);
 

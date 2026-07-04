@@ -97,7 +97,9 @@ Configure these without values in documentation or commits:
 - `GHCR_PULL_TOKEN`
 - `GROQ_API_KEY`
 
-The workflow requires `GROQ_API_KEY` in the `azure-dev` GitHub environment. `GROQ_API_KEY_2` through `GROQ_API_KEY_5` and `POLLINATIONS_API_KEY` are optional and are mapped only when configured.
+For the minimum configuration, add `GROQ_API_KEY` to the `azure-dev` GitHub environment. For the recommended pool, set `GROQ_API_KEY` to the same value as `GROQ_API_KEY_1`, then add `GROQ_API_KEY_1` through `GROQ_API_KEY_5`. The workflow accepts any one of these Groq secrets, maps only non-empty values, and does not require all five numbered keys. `POLLINATIONS_API_KEY` remains optional.
+
+Do not comma-separate values in `GROQ_API_KEY`; `GROQ_API_KEYS` is not supported. Groq secrets are backend-only Azure secrets and must never be added to Cloudflare Pages or public frontend configuration.
 
 Safer future option: replace long-lived `AZURE_CREDENTIALS` with Azure OIDC/federated credentials and update `azure/login` to use `client-id`, `tenant-id`, and `subscription-id`.
 

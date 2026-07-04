@@ -45,14 +45,20 @@ az containerapp secret set --resource-group $ResourceGroup --name $ContainerAppN
   studentos-supabase-jwt-secret="<supabase-jwt-secret>" `
   studentos-storage-bucket="studentos-source-materials" `
   studentos-export-storage-bucket="studentos-data-exports" `
-  groq-api-key="<optional-groq-key>" `
+  groq-api-key="<backward-compatible-groq-key>" `
+  groq-api-key-1="<recommended-groq-key-1>" `
+  groq-api-key-2="<optional-groq-key-2>" `
+  groq-api-key-3="<optional-groq-key-3>" `
+  groq-api-key-4="<optional-groq-key-4>" `
+  groq-api-key-5="<optional-groq-key-5>" `
   pollinations-api-key="<optional-pollinations-key>" `
   google-client-id="<later-google-client-id>" `
   google-client-secret="<later-google-client-secret>" `
   google-redirect-uri="https://<azure-app-url>/api/classroom/oauth/callback" `
   studentos-google-classroom-token-encryption-secret="<later-classroom-token-secret>"
 
-# Map secrets to environment variables. Keep Google/Classroom disabled for first deploy unless redirect URI is configured.
+# Map secrets to environment variables. Keep only the Groq lines whose secrets were configured; one key is enough.
+# Keep Google/Classroom disabled for first deploy unless redirect URI is configured.
 az containerapp update --resource-group $ResourceGroup --name $ContainerAppName --set-env-vars `
   STUDENTOS_SUPABASE_URL_1=secretref:studentos-supabase-url-1 `
   STUDENTOS_SUPABASE_ANON_KEY_1=secretref:studentos-supabase-anon-key-1 `
@@ -67,4 +73,9 @@ az containerapp update --resource-group $ResourceGroup --name $ContainerAppName 
   STUDENTOS_STORAGE_BUCKET=secretref:studentos-storage-bucket `
   STUDENTOS_EXPORT_STORAGE_BUCKET=secretref:studentos-export-storage-bucket `
   GROQ_API_KEY=secretref:groq-api-key `
+  GROQ_API_KEY_1=secretref:groq-api-key-1 `
+  GROQ_API_KEY_2=secretref:groq-api-key-2 `
+  GROQ_API_KEY_3=secretref:groq-api-key-3 `
+  GROQ_API_KEY_4=secretref:groq-api-key-4 `
+  GROQ_API_KEY_5=secretref:groq-api-key-5 `
   POLLINATIONS_API_KEY=secretref:pollinations-api-key

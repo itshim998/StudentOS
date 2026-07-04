@@ -82,7 +82,7 @@ A read-only live schema check confirmed that the Task 3.3 ledger and functions e
 
 The next production test exposed a separate deployment defect after allowance reservation was repaired. The Azure workflow mapped Supabase secrets but not the AI provider secrets. With `STUDENTOS_AI_MODE=auto` and no configured provider, the provider boundary incorrectly returned the local policy response as a successful generation. That produced only the general-materials reminder and charged the reserved allowance.
 
-The production workflow now requires the primary `GROQ_API_KEY`, maps it through an Azure Container Apps secret reference, and conditionally maps optional rotation keys and Pollinations. Providerless automatic mode is a retryable generation failure, so the existing settlement path refunds the reservation and returns only the calm unavailable copy. Explicit mock mode remains available for controlled local tests.
+The production workflow now requires at least one of `GROQ_API_KEY` or `GROQ_API_KEY_1` through `GROQ_API_KEY_5`, maps every configured key through Azure Container Apps secret references, and conditionally maps Pollinations. The backend prefers the numbered pool, ignores empty values, deduplicates matching keys, and keeps `GROQ_API_KEY` as a backward-compatible fallback. Providerless automatic mode is a retryable generation failure, so the existing settlement path refunds the reservation and returns only the calm unavailable copy. Explicit mock mode remains available for controlled local tests.
 
 Retrieval now applies the existing `0.42` grounding threshold before snippets enter the model prompt. Real-provider responses expose only snippets referenced by validated `[S#]` or chunk citations, and source badges are deduplicated by material. Provider failures, uncited answers, and low-confidence retrieval return no public source labels or `Selected material` blocks.
 
@@ -93,7 +93,7 @@ The browser console `400` from `/api/courses` is a separate course-form request 
 - `npm.cmd run preflight` — passed.
 - `npm.cmd run smoke` — passed.
 - `npm.cmd run test` — passed, including Task 3.3 and Task 3.4 backend regressions and the browser suite.
-- `npm.cmd run test:e2e` — 12 passed, 1 optional live Supabase case skipped because live E2E was not enabled.
+- `npm.cmd run test:e2e` — 13 passed, 1 optional live Supabase case skipped because live E2E was not enabled.
 - `node --check backend/server.js` — passed.
 - `node --check frontend/scripts/app.js` — passed.
 - `git diff --check` — passed with only existing line-ending normalization warnings.
@@ -105,6 +105,6 @@ The browser console `400` from `/api/courses` is a separate course-form request 
 - Providerless `auto` regression passed with a sanitized failure, cleared grounding, and refunded allowance settlement.
 - Citation-grounding regressions passed for low-confidence exclusion, validated citation selection, source deduplication, and uncited-source suppression.
 - Browser grounding regression passed; unused snippets and labels do not render as `Selected material`.
-- Azure workflow preflight passed with required primary Groq secret mapping, optional fallback mapping, and configured-AI deployment verification.
+- Azure workflow preflight passed with legacy single-key and numbered-pool validation, conditional secret mapping, missing-key failure, and configured-AI deployment verification.
 
-Live Azure verification for this follow-up remains a post-deploy step. Configure `GROQ_API_KEY` in the `azure-dev` GitHub environment, run the manual workflow, and require `npm.cmd run verify:azure-deployment` to report `aiConfigured: true` before testing an authenticated general and grounded question.
+Live Azure verification for this follow-up remains a post-deploy step. Configure `GROQ_API_KEY` or at least one numbered key in the `azure-dev` GitHub environment, run the manual workflow, and require `npm.cmd run verify:azure-deployment` to report `aiConfigured: true` before testing an authenticated general and grounded question.

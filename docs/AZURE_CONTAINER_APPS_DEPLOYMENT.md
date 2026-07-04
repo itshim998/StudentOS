@@ -126,16 +126,19 @@ Backend-only secret values:
 - `GOOGLE_CLIENT_ID` if Classroom OAuth is later enabled
 - `GOOGLE_CLIENT_SECRET` if Classroom OAuth is later enabled
 - `GOOGLE_REDIRECT_URI` if Classroom OAuth is later enabled
-- `GROQ_API_KEY` is required for the production Ask StudentOS route
-- `GROQ_API_KEY_2` through `GROQ_API_KEY_5` are optional rotation keys
+- at least one Groq key is required for the production Ask StudentOS route: `GROQ_API_KEY` or any of `GROQ_API_KEY_1` through `GROQ_API_KEY_5`
+- `GROQ_API_KEY` is the backward-compatible single-key fallback
+- `GROQ_API_KEY_1` through `GROQ_API_KEY_5` are the preferred production key pool
 - `POLLINATIONS_API_KEY` if Pollinations paid/authenticated mode is enabled
 - `STUDENTOS_EMBEDDING_API_KEY` if real embeddings are enabled
 - billing provider secrets only after a billing launch review
 - operator/internal/deletion secrets only after an internal-ops launch review
 
-The `Azure Container Apps - StudentOS API` GitHub Actions workflow validates and maps the required Supabase values and primary `GROQ_API_KEY` into Azure Container Apps as backend-only secret refs after the Bicep deployment. Optional Groq rotation keys and Pollinations are mapped only when present. Missing required secret names cause the workflow to fail before deployment output is shown. Provider and service-role keys stay in GitHub Actions and Azure Container Apps only; do not add them to Cloudflare Pages or any frontend runtime config.
+The `Azure Container Apps - StudentOS API` GitHub Actions workflow validates and maps the required Supabase values plus every configured Groq key into Azure Container Apps as backend-only secret refs after the Bicep deployment. Validation accepts `GROQ_API_KEY` or any non-empty numbered key; it does not require all five numbered keys. Pollinations is mapped only when present. Missing required secret names cause the workflow to fail before deployment output is shown. Provider and service-role keys stay in GitHub Actions and Azure Container Apps only; do not add them to Cloudflare Pages or any frontend runtime config.
 
-For PASS 36.0 production auth gating, these `azure-dev` GitHub environment secrets must exist before rerunning the workflow:
+The backend loads non-empty numbered keys first in `_1` through `_5` order, deduplicates matching values, and then adds a distinct `GROQ_API_KEY` as the backward-compatible fallback. `GROQ_API_KEYS` and comma-separated values are not supported. Do not place multiple keys inside `GROQ_API_KEY`.
+
+For PASS 36.0 production auth gating, these Supabase secrets must exist in the `azure-dev` GitHub environment before rerunning the workflow:
 
 ```text
 STUDENTOS_SUPABASE_URL_1
@@ -148,8 +151,20 @@ STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3
 STUDENTOS_SUPABASE_URL_4
 STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4
 STUDENTOS_SUPABASE_JWT_SECRET
-GROQ_API_KEY
 ```
+
+In addition, the minimum Groq configuration is the single `GROQ_API_KEY`. The recommended production pool is:
+
+```text
+GROQ_API_KEY       # same value as GROQ_API_KEY_1 for fallback compatibility
+GROQ_API_KEY_1
+GROQ_API_KEY_2
+GROQ_API_KEY_3
+GROQ_API_KEY_4
+GROQ_API_KEY_5
+```
+
+One non-empty key is enough to deploy. Empty numbered secrets are ignored, and duplicate values are deduplicated by the backend. Never add these names or values to Cloudflare Pages, frontend files, or public runtime configuration.
 
 The workflow sets `STUDENTOS_AI_MODE=auto`, `STUDENTOS_STORAGE_BUCKET`, `STUDENTOS_EXPORT_STORAGE_BUCKET`, and `STUDENTOS_AUTH_REDIRECT_URL` as non-secret Container App env vars.
 

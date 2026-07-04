@@ -104,6 +104,11 @@ jobs:
           STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4 }}
           STUDENTOS_SUPABASE_JWT_SECRET: ${{ secrets.STUDENTOS_SUPABASE_JWT_SECRET }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_API_KEY_1: ${{ secrets.GROQ_API_KEY_1 }}
+          GROQ_API_KEY_2: ${{ secrets.GROQ_API_KEY_2 }}
+          GROQ_API_KEY_3: ${{ secrets.GROQ_API_KEY_3 }}
+          GROQ_API_KEY_4: ${{ secrets.GROQ_API_KEY_4 }}
+          GROQ_API_KEY_5: ${{ secrets.GROQ_API_KEY_5 }}
         run: |
           missing=()
           for name in \
@@ -116,8 +121,7 @@ jobs:
             STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3 \
             STUDENTOS_SUPABASE_URL_4 \
             STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4 \
-            STUDENTOS_SUPABASE_JWT_SECRET \
-            GROQ_API_KEY; do
+            STUDENTOS_SUPABASE_JWT_SECRET; do
             if [ -z "${!name}" ]; then
               missing+=("$name")
             fi
@@ -127,6 +131,7 @@ jobs:
             exit 1
           fi
           echo "Required backend runtime secret names are configured."
+          node scripts/validateAzureGroqSecrets.js
 
       - name: Deploy Container App infrastructure
         uses: azure/cli@v2
@@ -167,6 +172,7 @@ jobs:
           STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4 }}
           STUDENTOS_SUPABASE_JWT_SECRET: ${{ secrets.STUDENTOS_SUPABASE_JWT_SECRET }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_API_KEY_1: ${{ secrets.GROQ_API_KEY_1 }}
           GROQ_API_KEY_2: ${{ secrets.GROQ_API_KEY_2 }}
           GROQ_API_KEY_3: ${{ secrets.GROQ_API_KEY_3 }}
           GROQ_API_KEY_4: ${{ secrets.GROQ_API_KEY_4 }}
@@ -187,6 +193,8 @@ jobs:
               fi
             }
 
+            add_optional_provider_secret GROQ_API_KEY groq-api-key
+            add_optional_provider_secret GROQ_API_KEY_1 groq-api-key-1
             add_optional_provider_secret GROQ_API_KEY_2 groq-api-key-2
             add_optional_provider_secret GROQ_API_KEY_3 groq-api-key-3
             add_optional_provider_secret GROQ_API_KEY_4 groq-api-key-4
@@ -207,7 +215,6 @@ jobs:
                 studentos-supabase-url-4="$STUDENTOS_SUPABASE_URL_4" \
                 studentos-supabase-service-role-key-4="$STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4" \
                 studentos-supabase-jwt-secret="$STUDENTOS_SUPABASE_JWT_SECRET" \
-                groq-api-key="$GROQ_API_KEY" \
                 $optional_secret_args \
               --output none
 
@@ -225,7 +232,6 @@ jobs:
                 STUDENTOS_SUPABASE_URL_4=secretref:studentos-supabase-url-4 \
                 STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4=secretref:studentos-supabase-service-role-key-4 \
                 STUDENTOS_SUPABASE_JWT_SECRET=secretref:studentos-supabase-jwt-secret \
-                GROQ_API_KEY=secretref:groq-api-key \
                 STUDENTOS_AI_MODE=auto \
                 STUDENTOS_STORAGE_BUCKET=studentos-source-materials \
                 STUDENTOS_EXPORT_STORAGE_BUCKET=studentos-data-exports \
