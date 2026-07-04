@@ -8,7 +8,7 @@ Starter now follows one explicit operating loop:
 2. Add real Academic Context manually: courses, syllabus, exam dates, assignments, and study materials.
 3. Choose **Prepare Academic Context**.
 4. Wait while StudentOS checks and organizes the saved context.
-5. Choose **Generate todayâ€™s TO-DO list**.
+5. Choose **Generate today’s TO-DO list**.
 6. Use the generated plan for the rest of the current day.
 
 Today does not generate work on page load and does not show legacy/default study tasks for Starter.
@@ -20,7 +20,7 @@ Starter Today renders one of five primary states:
 - `context_empty`: guidance to open Academic Context. Legacy roadmap, due-work, and schedule panels stay hidden.
 - `context_needs_preparation`: preparation and review actions are available.
 - `context_preparing`: a light, centered waiting view explains that StudentOS is setting up the academic context.
-- `context_ready`: the only primary action is **Generate todayâ€™s TO-DO list**.
+- `context_ready`: the only primary action is **Generate today’s TO-DO list**.
 - generated today plan: a structured list shows title, time hint, reason, related course/context, and priority. Regeneration is explicit.
 
 `context_failed` is also supported as a recovery state. It directs the student to review Academic Context and try preparation again.
@@ -66,7 +66,7 @@ If a selected PDF is still in progress, the UI says that some material is still 
 
 The preparing state uses the logged-in light visual system with a centered dark spinner and calm copy. Dashboard panels are hidden. The frontend polls the preparation status until the context becomes ready or needs review.
 
-## Generate todayâ€™s TO-DO behavior
+## Generate today’s TO-DO behavior
 
 Generation requires:
 

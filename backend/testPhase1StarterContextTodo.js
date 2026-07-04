@@ -265,7 +265,7 @@ assert(todoRoute.indexOf("readiness.canGenerateTodo") < todoRoute.indexOf("reser
 const starterTodaySource = appSource.slice(appSource.indexOf("function renderStarterToday"), appSource.indexOf("function renderDashboardSummary"));
 assert.match(starterTodaySource, /Add your academic context first\./);
 assert.match(starterTodaySource, /Prepare Academic Context/);
-assert.match(starterTodaySource, /Generate todayâ€™s TO-DO list/);
+assert.match(starterTodaySource, /Generate today’s TO-DO list/);
 assert.doesNotMatch(starterTodaySource, /Quadratics worksheet|Sources ready|default roadmap/i);
 assert.doesNotMatch(starterTodaySource, /\b(provider|model|token|storage|database|backend|vector|embedding|chunks?|debug|OAuth scope)\b/i);
 assert.match(htmlSource, /value="syllabus"/);

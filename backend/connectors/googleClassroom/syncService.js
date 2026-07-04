@@ -7,6 +7,7 @@ import {
 import { refreshClassroomOAuthToken } from "./oauth.js";
 import { importClassroomSnapshotIntoState, syncClassroomCoursesIntoState } from "./mapper.js";
 import { MockGoogleClassroomReadOnlyConnector } from "./mockConnector.js";
+import { selectedClassroomContentFingerprint } from "../../domain/academicContextService.js";
 import {
   deletePersistentClassroomToken,
   getPersistentClassroomToken,
@@ -309,6 +310,137 @@ async function fetchOAuthSnapshot({ session, repository, config, fetchImpl = fet
     }
   }
   return { courses, courseWork, courseWorkMaterials, submissions, errors, providerAccountEmail: token.providerAccountEmail || null };
+}
+
+function cleanSelectedContent(value, limit = 12_000) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, limit);
+}
+
+function selectedContentSource(state, item) {
+  return (state.sourceMaterials || []).find((source) => source.classroomItemId === item.id && source.academicContextIncluded === true);
+}
+
+function applySelectedContentResult(state, item, result, now) {
+  const content = cleanSelectedContent(result?.content);
+  const status = content ? "content_ready" : result?.retryable ? "retryable" : "manual_upload_required";
+  item.selectedContentBackfill = {
+    status,
+    fingerprint: selectedClassroomContentFingerprint(item),
+    attemptedAt: nowIso(now),
+    completedAt: nowIso(now),
+    readOnly: true,
+  };
+  item.contentStatus = content ? "ready" : "manual_upload_required";
+  item.needsManualUpload = !content;
+  if (content) item.description = content;
+
+  if (item.itemType === "assignment") {
+    const assignment = (state.assignments || []).find((record) => record.classroomItemId === item.id && record.academicContextIncluded === true);
+    if (assignment && content) {
+      assignment.description = content;
+      assignment.contentStatus = "ready";
+      assignment.updatedAt = nowIso(now);
+    }
+  } else {
+    const source = selectedContentSource(state, item);
+    if (source) {
+      source.status = content ? "ready" : "metadata_only";
+      source.contentStatus = content ? "ready" : "manual_upload_required";
+      source.extractedText = content;
+      source.extractionSummary = content;
+      source.needsManualUpload = !content;
+      if (content) source.updatedAt = nowIso(now);
+    }
+  }
+  return status;
+}
+
+async function readSelectedItemContent(item, { client, cache, fetchItem } = {}) {
+  if (fetchItem) return fetchItem(item);
+  const courseId = item.providerCourseId;
+  if (item.providerCourseWorkId) {
+    const key = `work:${courseId}:${item.providerCourseWorkId}`;
+    if (!cache.has(key)) cache.set(key, client.getCourseWork(courseId, item.providerCourseWorkId));
+    const work = await cache.get(key);
+    return { content: work.description || "" };
+  }
+  if (item.providerCourseWorkMaterialId) {
+    const key = `material:${courseId}:${item.providerCourseWorkMaterialId}`;
+    if (!cache.has(key)) cache.set(key, client.getCourseWorkMaterial(courseId, item.providerCourseWorkMaterialId));
+    const material = await cache.get(key);
+    return { content: material.description || "" };
+  }
+  return { content: "" };
+}
+
+export async function backfillSelectedClassroomContentIntoState({
+  state,
+  session,
+  repository,
+  items = [],
+  config = getGoogleClassroomConfig(),
+  fetchImpl = fetch,
+  fetchItem = null,
+  now = new Date(),
+} = {}) {
+  assertNoGoogleClassroomWriteScopes(config.scopes);
+  const selected = new Map((state.classroomItems || [])
+    .filter((item) => item.academicContextIncluded === true && item.selectionState === "imported")
+    .map((item) => [String(item.id), item]));
+  const targets = items.map((item) => selected.get(String(item.id))).filter(Boolean);
+  const summary = {
+    attempted: targets.length,
+    contentReady: 0,
+    manualUploadRequired: 0,
+    retryable: 0,
+    skippedUnselected: items.length - targets.length,
+    readOnly: true,
+    automaticSyncTouched: false,
+    cadenceUnchanged: true,
+  };
+  if (!targets.length) return summary;
+
+  let client = null;
+  if (!fetchItem && config.mode === "oauth") {
+    try {
+      const token = await resolveOAuthToken({ session, repository, config, fetchImpl, now });
+      client = new GoogleClassroomApiClient({ accessToken: token.accessToken, fetchImpl });
+    } catch {
+      targets.forEach((item) => {
+        applySelectedContentResult(state, item, { content: "", retryable: true }, now);
+        summary.retryable += 1;
+      });
+      return summary;
+    }
+  }
+
+  const cache = new Map();
+  for (const item of targets) {
+    let result;
+    try {
+      result = config.mode === "mock" && !fetchItem
+        ? { content: item.description || "" }
+        : await readSelectedItemContent(item, { client, cache, fetchItem });
+    } catch {
+      result = { content: "", retryable: true };
+    }
+    const status = applySelectedContentResult(state, item, result, now);
+    if (status === "content_ready") summary.contentReady += 1;
+    else if (status === "retryable") summary.retryable += 1;
+    else summary.manualUploadRequired += 1;
+  }
+  state.auditLog = state.auditLog || [];
+  state.auditLog.push({
+    id: `audit_classroom_selected_content_${now.getTime()}`,
+    actorId: state.studentProfile?.id || "student_unknown",
+    action: "google_classroom.selected_content_checked",
+    targetType: "google_classroom",
+    targetId: state.studentProfile?.id || "student_unknown",
+    riskLevel: "low",
+    metadata: summary,
+    createdAt: nowIso(now),
+  });
+  return summary;
 }
 
 export async function syncGoogleClassroomIntoState({

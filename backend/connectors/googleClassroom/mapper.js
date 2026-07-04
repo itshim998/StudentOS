@@ -231,6 +231,7 @@ function baseClassroomItem({ id, itemType, providerCourseId, externalId, course,
 function syncImportedAssignment(state, item, now) {
   const assignment = (state.assignments || []).find((candidate) => candidate.classroomItemId === item.id);
   if (!assignment) return;
+  const providerContentUnchanged = assignment.classroomUpdatedAt === (item.providerUpdatedAt || null);
   assignment.title = item.title;
   assignment.description = item.description || "";
   assignment.dueAt = item.dueAt || null;
@@ -241,7 +242,7 @@ function syncImportedAssignment(state, item, now) {
   assignment.status = assignmentStatus(item, now);
   assignment.alternateLink = item.alternateLink || null;
   assignment.classroomUpdatedAt = item.providerUpdatedAt || null;
-  assignment.updatedAt = item.providerUpdatedAt || nowIso(now);
+  assignment.updatedAt = providerContentUnchanged ? assignment.updatedAt : item.providerUpdatedAt || nowIso(now);
 }
 
 function discoverAssignmentItems(state, snapshot, summary, now) {
@@ -276,7 +277,7 @@ function discoverAssignmentItems(state, snapshot, summary, now) {
         existing,
       }),
       providerCourseWorkId: work.providerCourseWorkId,
-      description: work.description || "",
+      description: work.description || (existing?.providerUpdatedAt === (work.updateTime || null) ? existing?.description || "" : ""),
       dueAt: work.dueAt || null,
       postedAt: work.creationTime || null,
       providerUpdatedAt: work.updateTime || submission?.updateTime || null,
@@ -313,6 +314,7 @@ function discoverAssignmentItems(state, snapshot, summary, now) {
         providerCourseWorkId: work.providerCourseWorkId,
         providerMaterialId: normalized.providerMaterialId,
         parentTitle: work.title || "Classroom assignment",
+        description: work.description || (existingMaterial?.providerUpdatedAt === (normalized.updateTime || work.updateTime || null) ? existingMaterial?.description || "" : ""),
         dueAt: work.dueAt || null,
         postedAt: normalized.creationTime || work.creationTime || null,
         providerUpdatedAt: normalized.updateTime || work.updateTime || null,
@@ -322,6 +324,7 @@ function discoverAssignmentItems(state, snapshot, summary, now) {
       const materialResult = upsertById(state.classroomItems, materialItem);
       if (materialResult.action === "discovered") summary.discoveredMaterials += 1;
       else summary.updatedMaterials += 1;
+      if (materialResult.item.academicContextIncluded) ensureMaterial(state, materialResult.item, now);
     });
   }
 }
@@ -358,6 +361,7 @@ function discoverMaterialPostItems(state, snapshot, summary, now) {
         providerCourseWorkMaterialId: post.providerCourseWorkMaterialId,
         providerMaterialId,
         parentTitle: post.title || null,
+        description: post.description || (existing?.providerUpdatedAt === (normalized.updateTime || post.updateTime || null) ? existing?.description || "" : ""),
         postedAt: normalized.creationTime || post.creationTime || null,
         providerUpdatedAt: normalized.updateTime || post.updateTime || null,
         linkUrl: normalized.linkUrl || post.alternateLink || null,
@@ -366,6 +370,7 @@ function discoverMaterialPostItems(state, snapshot, summary, now) {
       const result = upsertById(state.classroomItems, item);
       if (result.action === "discovered") summary.discoveredMaterials += 1;
       else summary.updatedMaterials += 1;
+      if (result.item.academicContextIncluded) ensureMaterial(state, result.item, now);
     });
   }
 }
@@ -454,6 +459,10 @@ function ensureCourse(state, item, now) {
     course = { id };
     state.courses.push(course);
   }
+  const incomingUpdatedAt = item.providerUpdatedAt || nowIso(now);
+  const stableUpdatedAt = timestampFor(course.updatedAt, 0) > timestampFor(incomingUpdatedAt, 0)
+    ? course.updatedAt
+    : incomingUpdatedAt;
   Object.assign(course, {
     title: item.courseTitle || "Classroom course",
     term: item.courseSection || "Classroom",
@@ -464,7 +473,7 @@ function ensureCourse(state, item, now) {
     academicContextIncluded: true,
     selectionState: "imported",
     archived: false,
-    updatedAt: item.providerUpdatedAt || nowIso(now),
+    updatedAt: stableUpdatedAt,
   });
   return course;
 }
@@ -542,14 +551,20 @@ function ensureMaterial(state, item, now) {
     source = { id, createdAt: nowIso(now) };
     state.sourceMaterials.push(source);
   }
+  const selectedContent = item.description || "";
+  const contentChanged = String(source.extractedText || "") !== selectedContent;
+  const unresolvedContentStatus = source.contentStatus === "manual_upload_required" ? "manual_upload_required" : "metadata_only";
   Object.assign(source, {
     courseId: course.id,
     title: item.title,
     kind: "classroom_selected_material",
     sourceType: "google_classroom_selected_material",
     filename: item.title,
-    status: "ready",
-    extractionSummary: "Selected Classroom work is available as a read-only study reference.",
+    status: selectedContent ? "ready" : "metadata_only",
+    contentStatus: selectedContent ? "ready" : unresolvedContentStatus,
+    extractedText: selectedContent,
+    extractionSummary: selectedContent,
+    needsManualUpload: !selectedContent,
     citationLabel: `Google Classroom: ${item.title}`,
     webFallbackAllowed: false,
     provider: "google_classroom",
@@ -561,7 +576,7 @@ function ensureMaterial(state, item, now) {
     linkUrl: item.linkUrl || null,
     readOnly: true,
     importedAt: item.importedAt || nowIso(now),
-    updatedAt: item.providerUpdatedAt || nowIso(now),
+    updatedAt: contentChanged ? item.providerUpdatedAt || nowIso(now) : source.updatedAt || item.providerUpdatedAt || nowIso(now),
     classroomItemId: item.id,
     academicContextIncluded: true,
     selectionState: "imported",

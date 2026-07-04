@@ -64,7 +64,7 @@ function activeItems(items = []) {
 export function buildDailyTodoInput(state, { currentDate, currentTime, timezone, planTier = null, now = new Date() } = {}) {
   const preparedContext = getPreparedAcademicContextCapsule(state);
   if (!preparedContext) {
-    const error = new Error("Prepare Academic Context before generating todayâ€™s TO-DO list.");
+    const error = new Error("Prepare Academic Context before generating today’s TO-DO list.");
     error.status = 409;
     error.code = "academic_context_not_ready";
     throw error;
@@ -83,6 +83,17 @@ export function buildDailyTodoInput(state, { currentDate, currentTime, timezone,
       classLevel: preferences.classLevel || null,
       dailyStudyAvailabilityMinutes: preferences.dailyStudyAvailabilityMinutes || preferences.dailyStudyWindowMinutes || null,
       studyBreakPattern: preferences.studyBreakPattern || null,
+    },
+    onboardingProfile: {
+      gradeBand: state.studentProfile?.gradeBand || null,
+      schoolSystem: state.studentProfile?.schoolSystem || null,
+      academicGoal: preferences.academicGoal || null,
+      stream: preferences.stream || null,
+      classLevel: preferences.classLevel || null,
+      dailyStudyAvailabilityMinutes: preferences.dailyStudyAvailabilityMinutes || preferences.dailyStudyWindowMinutes || null,
+      studyBreakPattern: preferences.studyBreakPattern || null,
+      studyDays: preferences.studyDays || null,
+      preferredStudyTime: preferences.preferredStudyTime || null,
     },
     preparedAcademicContext: preparedContext,
     timetable: activeItems(state.timetable || []).map((item) => ({
@@ -110,8 +121,8 @@ export function hasUsefulDailyTodoContext(input = {}) {
   return Boolean(
     context.assignments?.length ||
     context.exams?.length ||
-    context.syllabi?.length ||
-    context.materials?.length,
+    context.syllabi?.some((item) => item.units?.length || item.summary) ||
+    context.materials?.some((item) => item.readyForStudy && item.summary),
   );
 }
 
@@ -130,44 +141,65 @@ function remainingStudyMinutes(input) {
 
 function deterministicCandidates(input) {
   const context = input.preparedAcademicContext;
-  const candidates = [];
+  const deadlineCandidates = [];
+  const representedCourses = new Set();
+  const syllabusByCourse = new Map((context.syllabi || []).map((item) => [String(item.courseId || ""), item]));
   const activeAssignments = (context.assignments || [])
     .filter((item) => !item.handedIn && !["done", "completed", "submitted", "graded", "returned"].includes(String(item.status || "").toLowerCase()))
     .sort((left, right) => Date.parse(left.dueAt || "") - Date.parse(right.dueAt || ""));
   for (const assignment of activeAssignments.slice(0, 3)) {
     const days = daysUntil(assignment.dueAt, input.currentDate);
-    candidates.push({
+    representedCourses.add(String(assignment.courseId || assignment.courseTitle || ""));
+    deadlineCandidates.push({
       title: `Move ${assignment.title} forward`,
       reason: days !== null && days <= 1 ? "This is the nearest assignment deadline." : "This keeps upcoming due work under control.",
       related_course: assignment.courseTitle || "",
-      related_context: assignment.title,
+      related_context: assignment.description || assignment.title,
       priority: days !== null && days <= 2 ? "high" : "medium",
       duration: days !== null && days <= 1 ? 50 : 40,
+      dueInDays: days ?? 10_000,
+      deadlineType: "assignment",
     });
   }
   const upcomingExams = [...(context.exams || [])]
     .sort((left, right) => Date.parse(left.examDate || "") - Date.parse(right.examDate || ""));
-  for (const exam of upcomingExams.slice(0, 2)) {
+  for (const exam of upcomingExams.slice(0, 3)) {
     const days = daysUntil(exam.examDate, input.currentDate);
     if (days !== null && days < 0) continue;
-    candidates.push({
+    const syllabus = syllabusByCourse.get(String(exam.courseId || ""));
+    const topics = (syllabus?.units || []).slice(0, 3).map((unit) => typeof unit === "string" ? unit : unit?.title).filter(Boolean);
+    representedCourses.add(String(exam.courseId || exam.courseTitle || ""));
+    deadlineCandidates.push({
       title: `Review for ${exam.title}`,
-      reason: days === 0 ? "The exam is today, so use a short focused review." : days !== null && days <= 7 ? `The exam is in ${days} day${days === 1 ? "" : "s"}.` : "A short review now reduces pressure later.",
+      reason: days === 0
+        ? "The exam is today, so use a short focused review."
+        : `${days !== null ? `The exam is in ${days} day${days === 1 ? "" : "s"}.` : "This exam is upcoming."}${topics.length ? ` Start with ${topics.join(", ")}.` : " Build syllabus coverage now."}`,
       related_course: exam.courseTitle || "",
-      related_context: exam.notes || exam.title,
-      priority: days !== null && days <= 3 ? "high" : "medium",
-      duration: days === 0 ? 30 : 45,
+      related_context: [exam.title, exam.notes, syllabus?.title].filter(Boolean).join(" / "),
+      priority: days !== null && days <= 7 ? "high" : "medium",
+      duration: days === 0 ? 30 : 40,
+      dueInDays: days ?? 10_000,
+      deadlineType: "exam",
     });
   }
-  const preferredMaterial = (context.syllabi || [])[0] || (context.materials || []).find((item) => item.readyForStudy);
-  if (preferredMaterial) {
+
+  deadlineCandidates.sort((left, right) => left.dueInDays - right.dueInDays || (left.deadlineType === "assignment" ? -1 : 1));
+  const candidates = deadlineCandidates;
+  const parallelContext = [
+    ...(context.syllabi || []).filter((item) => item.units?.length || item.summary),
+    ...(context.materials || []).filter((item) => item.readyForStudy && item.summary),
+  ];
+  for (const material of parallelContext) {
+    const courseKey = String(material.courseId || material.courseTitle || material.id || "");
+    if (representedCourses.has(courseKey)) continue;
+    representedCourses.add(courseKey);
     candidates.push({
-      title: `Review ${preferredMaterial.title}`,
-      reason: "This strengthens the course material behind your next deadline or exam.",
-      related_course: preferredMaterial.courseTitle || "",
-      related_context: preferredMaterial.title,
-      priority: candidates.length ? "low" : "medium",
-      duration: 30,
+      title: `Build coverage in ${material.courseTitle || material.title}`,
+      reason: "Keep this lower-priority subject moving in parallel while nearer exams and deadlines stay first.",
+      related_course: material.courseTitle || "",
+      related_context: material.title,
+      priority: "low",
+      duration: 25,
     });
   }
   return candidates;
@@ -210,7 +242,8 @@ export function buildDailyTodoMessages(input) {
       role: "system",
       content: [
         "You are StudentOS. Build a practical study TO-DO list only for the rest of today.",
-        "Prioritize current local time, remaining day, nearest deadlines, upcoming exams, prepared syllabus/material, timetable, and the student's study rhythm.",
+        "Prioritize current local date and time, remaining day, nearest exams, exam syllabus coverage, assignment due dates and handed-in status, prepared material, timetable, weak/completed topics, and the student's study rhythm.",
+        "Put the most urgent exam or assignment first, then the next urgent subject, while keeping lower-priority subjects moving in parallel when time allows.",
         "Do not invent courses, assignments, exams, or materials. Keep every reason concrete and calm.",
         "Return only valid JSON with keys date, generated_at, summary, and items.",
         "Each item must contain title, time_hint, reason, related_course, related_context, and priority (high, medium, or low).",
@@ -251,6 +284,21 @@ export function normalizeDailyTodoPlan(value, input, { now = new Date() } = {}) 
   };
 }
 
+function isGroundedDailyTodoPlan(plan, input) {
+  const context = input.preparedAcademicContext || {};
+  const known = [
+    ...(context.courses || []).flatMap((item) => [item.title]),
+    ...(context.assignments || []).flatMap((item) => [item.title, item.description]),
+    ...(context.exams || []).flatMap((item) => [item.title, item.notes]),
+    ...(context.syllabi || []).flatMap((item) => [item.title, item.summary]),
+    ...(context.materials || []).flatMap((item) => [item.title, item.summary]),
+  ].map((value) => clean(value, 500).toLowerCase()).filter(Boolean);
+  return plan.items.every((item) => {
+    const references = [item.related_course, item.related_context].map((value) => clean(value, 500).toLowerCase()).filter(Boolean);
+    return references.length > 0 && references.some((reference) => known.some((value) => value.includes(reference) || reference.includes(value)));
+  });
+}
+
 export async function generateDailyTodoPlan({
   state,
   currentDate,
@@ -284,9 +332,10 @@ export async function generateDailyTodoPlan({
     return { generationSucceeded: false, retryable: true, plan: null, input };
   }
   try {
+    const normalized = normalizeDailyTodoPlan(parseProviderJson(result.text), input, { now });
     return {
       generationSucceeded: true,
-      plan: normalizeDailyTodoPlan(parseProviderJson(result.text), input, { now }),
+      plan: isGroundedDailyTodoPlan(normalized, input) ? normalized : buildDeterministicDailyTodoPlan(input, { now }),
       input,
     };
   } catch {

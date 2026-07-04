@@ -10,8 +10,11 @@ export const ACADEMIC_CONTEXT_ARTIFACT_KINDS = Object.freeze([
 
 export const ACADEMIC_CONTEXT_STATUSES = Object.freeze({
   EMPTY: "context_empty",
+  SELECTED_METADATA: "context_selected_metadata",
   NEEDS_PREPARATION: "context_needs_preparation",
   PREPARING: "context_preparing",
+  CLASSROOM_BACKFILL: "context_classroom_backfill",
+  NEEDS_MANUAL_UPLOAD: "context_needs_manual_upload",
   READY: "context_ready",
   FAILED: "context_failed",
 });
@@ -21,6 +24,7 @@ const READY_SOURCE_STATUSES = new Set(["indexed", "ready", "completed"]);
 const PENDING_SOURCE_STATUSES = new Set(["pending", "queued", "uploading", "extracting", "processing", "preparing"]);
 const FAILED_SOURCE_STATUSES = new Set(["failed", "needs_ocr", "needs_attention"]);
 const PREPARATION_SETTLE_MS = 600;
+const LEGACY_CLASSROOM_PLACEHOLDER = "Selected Classroom work is available as a read-only study reference.";
 
 function academicContextError(message, code) {
   const error = new Error(message);
@@ -64,6 +68,92 @@ function activeAcademicContext(state = {}) {
   return { courses, syllabi, exams, assignments, materials };
 }
 
+function usableSourceContent(source = {}) {
+  const status = String(source.status || source.extractionStatus || "").toLowerCase();
+  const text = clean(source.extractedText || source.extractionSummary, 2000);
+  if (isClassroomRecord(source)) {
+    return source.contentStatus === "ready" || Boolean(text && text !== LEGACY_CLASSROOM_PLACEHOLDER);
+  }
+  return Boolean(text || Number(source.chunkCount || 0) > 0 || READY_SOURCE_STATUSES.has(status));
+}
+
+function selectedClassroomItems(state = {}) {
+  return (state.classroomItems || []).filter((item) =>
+    item.academicContextIncluded === true && item.selectionState === "imported" && !item.archivedAt);
+}
+
+function classroomItemHasUsableContent(state, item) {
+  if (item.itemType === "assignment") {
+    const assignment = (state.assignments || []).find((record) => record.classroomItemId === item.id && isAcademicContextRecord(record));
+    return Boolean(clean(assignment?.description || item.description, 2000));
+  }
+  return (state.sourceMaterials || []).some((source) =>
+    source.classroomItemId === item.id && isAcademicContextRecord(source) && usableSourceContent(source));
+}
+
+export function selectedClassroomContentFingerprint(item = {}) {
+  return createHash("sha256").update(JSON.stringify({
+    id: item.id || null,
+    providerUpdatedAt: item.providerUpdatedAt || null,
+    providerCourseId: item.providerCourseId || null,
+    providerCourseWorkId: item.providerCourseWorkId || null,
+    providerCourseWorkMaterialId: item.providerCourseWorkMaterialId || null,
+    providerMaterialId: item.providerMaterialId || null,
+    linkUrl: item.linkUrl || null,
+  })).digest("hex");
+}
+
+export function getAcademicContextInventory(state = {}) {
+  const context = activeAcademicContext(state);
+  const selected = selectedClassroomItems(state);
+  const selectedWithContent = selected.filter((item) => classroomItemHasUsableContent(state, item));
+  const selectedContentIds = new Set(selectedWithContent.map((item) => String(item.id)));
+  const selectedMetadataOnly = selected.filter((item) => !selectedContentIds.has(String(item.id)));
+  const selectedNeedsManualUpload = selectedMetadataOnly.filter((item) =>
+    item.selectedContentBackfill?.status === "manual_upload_required");
+  const stored = state.studentProfile?.academicContextPreparation || {};
+  const fingerprint = academicContextFingerprint(state);
+  return {
+    courses: context.courses,
+    selectedClassroomItems: selected,
+    importedClassroomItems: selected,
+    selectedMetadataOnly,
+    selectedNeedsManualUpload,
+    selectedWithContent,
+    selectedAssignmentsWithDueDates: selected.filter((item) => item.itemType === "assignment" && item.dueAt),
+    selectedMaterials: selected.filter((item) => item.itemType === "material"),
+    manualPdfs: context.materials.filter((item) => !isClassroomRecord(item)),
+    manualExams: context.exams.filter((item) => !isClassroomRecord(item)),
+    context,
+    fingerprint,
+    preparedStale: stored.status === ACADEMIC_CONTEXT_STATUSES.READY && stored.fingerprint !== fingerprint,
+  };
+}
+
+export function getSelectedClassroomItemsNeedingBackfill(state = {}, { now = new Date() } = {}) {
+  const inventory = getAcademicContextInventory(state);
+  return inventory.selectedMetadataOnly.filter((item) => {
+    const fingerprint = selectedClassroomContentFingerprint(item);
+    const attempt = item.selectedContentBackfill || {};
+    if (attempt.fingerprint !== fingerprint) return true;
+    if (["content_ready", "manual_upload_required"].includes(attempt.status)) return false;
+    const attemptedAt = Date.parse(attempt.attemptedAt || "");
+    return !Number.isFinite(attemptedAt) || now.getTime() - attemptedAt >= 24 * 60 * 60 * 1000;
+  });
+}
+
+export function beginSelectedClassroomContentBackfill(state, { now = new Date() } = {}) {
+  const items = getSelectedClassroomItemsNeedingBackfill(state, { now });
+  if (!items.length) return { started: false, items, readiness: getAcademicContextReadiness(state) };
+  state.studentProfile.academicContextPreparation = {
+    ...(state.studentProfile.academicContextPreparation || {}),
+    status: ACADEMIC_CONTEXT_STATUSES.CLASSROOM_BACKFILL,
+    backfillRequestedAt: now.toISOString(),
+    failedAt: null,
+  };
+  return { started: true, items, readiness: getAcademicContextReadiness(state) };
+}
+
 function contextCounts(context) {
   return Object.fromEntries(Object.entries(context).map(([key, items]) => [key, items.length]));
 }
@@ -75,7 +165,7 @@ function hasAnyAcademicContext(context) {
 function hasUsefulAcademicContext(context) {
   return context.exams.length > 0 ||
     context.assignments.length > 0 ||
-    context.materials.length > 0 ||
+    context.materials.some(usableSourceContent) ||
     context.syllabi.some((item) => item.sourceMaterialId || (item.units || []).length > 0);
 }
 
@@ -85,8 +175,8 @@ function contextFingerprintPayload(context) {
     courses: pick(context.courses, ["id", "title", "term", "updatedAt", "archivedAt"]),
     syllabi: pick(context.syllabi, ["id", "courseId", "title", "units", "sourceMaterialId", "updatedAt"]),
     exams: pick(context.exams, ["id", "courseId", "title", "examDate", "examTime", "marksWeightage", "notes", "updatedAt"]),
-    assignments: pick(context.assignments, ["id", "courseId", "title", "dueAt", "dueDate", "status", "updatedAt"]),
-    materials: pick(context.materials, ["id", "courseId", "title", "artifactKind", "status", "chunkCount", "indexedAt", "updatedAt"]),
+    assignments: pick(context.assignments, ["id", "courseId", "title", "description", "dueAt", "dueDate", "status", "handedIn", "updatedAt"]),
+    materials: pick(context.materials, ["id", "courseId", "title", "artifactKind", "status", "contentStatus", "extractedText", "extractionSummary", "chunkCount", "indexedAt", "updatedAt"]),
   };
 }
 
@@ -99,24 +189,47 @@ export function academicContextFingerprint(state = {}) {
 function publicPreparationMessage(status, { someMaterialPreparing = false } = {}) {
   if (someMaterialPreparing) return "Some material is still being prepared.";
   if (status === ACADEMIC_CONTEXT_STATUSES.EMPTY) return "Add your academic context first.";
+  if (status === ACADEMIC_CONTEXT_STATUSES.SELECTED_METADATA) return "Selected Classroom work is ready to check.";
   if (status === ACADEMIC_CONTEXT_STATUSES.NEEDS_PREPARATION) return "Your academic context is ready to prepare.";
   if (status === ACADEMIC_CONTEXT_STATUSES.PREPARING) return "Setting things up for you.";
+  if (status === ACADEMIC_CONTEXT_STATUSES.CLASSROOM_BACKFILL) return "Checking selected Classroom work.";
+  if (status === ACADEMIC_CONTEXT_STATUSES.NEEDS_MANUAL_UPLOAD) return "Some selected Classroom work needs a manual upload before StudentOS can use it fully.";
   if (status === ACADEMIC_CONTEXT_STATUSES.READY) return "Your academic context is ready.";
   return "StudentOS could not prepare everything. Review Academic Context and try again.";
 }
 
+function publicInventorySummary(inventory) {
+  return {
+    coursesReady: inventory.courses.length,
+    assignmentsReady: inventory.context.assignments.length,
+    examDatesReady: inventory.context.exams.length,
+    materialsReady: inventory.context.materials.filter(usableSourceContent).length,
+    selectedClassroomReady: inventory.selectedWithContent.length,
+    selectedClassroomNeedsManualUpload: inventory.selectedNeedsManualUpload.length,
+    manualPdfsReady: inventory.manualPdfs.filter(usableSourceContent).length,
+    preparedContextStale: inventory.preparedStale,
+  };
+}
+
 export function getAcademicContextReadiness(state = {}) {
-  const context = activeAcademicContext(state);
+  const inventory = getAcademicContextInventory(state);
+  const context = inventory.context;
   const counts = contextCounts(context);
   const hasContext = hasAnyAcademicContext(context);
   const hasUsefulContext = hasUsefulAcademicContext(context);
-  const fingerprint = academicContextFingerprint(state);
+  const fingerprint = inventory.fingerprint;
   const stored = state.studentProfile?.academicContextPreparation || {};
   let status = stored.status;
   if (!hasContext) status = ACADEMIC_CONTEXT_STATUSES.EMPTY;
   else if (!Object.values(ACADEMIC_CONTEXT_STATUSES).includes(status)) status = ACADEMIC_CONTEXT_STATUSES.NEEDS_PREPARATION;
   else if (status === ACADEMIC_CONTEXT_STATUSES.READY && stored.fingerprint !== fingerprint) {
     status = ACADEMIC_CONTEXT_STATUSES.NEEDS_PREPARATION;
+  }
+  const remainingBackfills = getSelectedClassroomItemsNeedingBackfill(state).length;
+  if (![ACADEMIC_CONTEXT_STATUSES.PREPARING, ACADEMIC_CONTEXT_STATUSES.CLASSROOM_BACKFILL].includes(status) &&
+      inventory.selectedMetadataOnly.length) {
+    if (remainingBackfills) status = ACADEMIC_CONTEXT_STATUSES.SELECTED_METADATA;
+    else if (!hasUsefulContext) status = ACADEMIC_CONTEXT_STATUSES.NEEDS_MANUAL_UPLOAD;
   }
   const someMaterialPreparing = status === ACADEMIC_CONTEXT_STATUSES.PREPARING && context.materials.some((source) => {
     const sourceStatus = String(source.status || source.extractionStatus || "").toLowerCase();
@@ -131,9 +244,15 @@ export function getAcademicContextReadiness(state = {}) {
     preparationRequestedAt: stored.preparationRequestedAt || null,
     failedAt: status === ACADEMIC_CONTEXT_STATUSES.FAILED ? stored.failedAt || null : null,
     someMaterialPreparing,
-    canPrepare: hasUsefulContext && status !== ACADEMIC_CONTEXT_STATUSES.PREPARING,
+    canPrepare: (hasUsefulContext || remainingBackfills > 0) &&
+      ![ACADEMIC_CONTEXT_STATUSES.PREPARING, ACADEMIC_CONTEXT_STATUSES.CLASSROOM_BACKFILL].includes(status),
     canGenerateTodo: status === ACADEMIC_CONTEXT_STATUSES.READY && stored.fingerprint === fingerprint,
     message: publicPreparationMessage(status, { someMaterialPreparing }),
+    summary: publicInventorySummary(inventory),
+    lessComplete: inventory.selectedMetadataOnly.length > 0,
+    manualUploadGuidance: inventory.selectedNeedsManualUpload.length
+      ? "Some selected Classroom work needs a manual upload before StudentOS can use it fully."
+      : null,
   };
 }
 
@@ -162,8 +281,10 @@ function compactText(value, limit = 900) {
 }
 
 export function buildPreparedAcademicContextCapsule(state = {}) {
-  const context = activeAcademicContext(state);
+  const inventory = getAcademicContextInventory(state);
+  const context = inventory.context;
   const courseById = new Map(context.courses.map((course) => [String(course.id), course]));
+  const sourceById = new Map(context.materials.map((source) => [String(source.id), source]));
   return {
     courses: context.courses.map((course) => ({
       id: course.id,
@@ -177,6 +298,7 @@ export function buildPreparedAcademicContextCapsule(state = {}) {
       title: syllabus.title,
       units: (syllabus.units || []).slice(0, 30),
       sourceMaterialId: syllabus.sourceMaterialId || null,
+      summary: compactText(sourceById.get(String(syllabus.sourceMaterialId))?.extractedText || sourceById.get(String(syllabus.sourceMaterialId))?.extractionSummary, 1200),
     })),
     exams: context.exams.map((exam) => ({
       id: exam.id,
@@ -193,6 +315,7 @@ export function buildPreparedAcademicContextCapsule(state = {}) {
       courseId: assignment.courseId,
       courseTitle: courseById.get(String(assignment.courseId))?.title || assignment.courseTitle || null,
       title: assignment.title,
+      description: compactText(assignment.description, 1200) || null,
       dueAt: assignment.dueAt || assignment.dueDate || null,
       status: assignment.status || "open",
       handedIn: assignment.handedIn === true,
@@ -204,8 +327,23 @@ export function buildPreparedAcademicContextCapsule(state = {}) {
       title: material.title,
       artifactKind: material.artifactKind || "material",
       summary: compactText(material.extractedText || material.extractionSummary, 1200),
-      readyForStudy: READY_SOURCE_STATUSES.has(String(material.status || material.extractionStatus || "").toLowerCase()),
+      readyForStudy: usableSourceContent(material),
     })),
+    timetable: (state.timetable || []).filter((item) => !item.archived && item.status !== "archived").map((item) => ({
+      title: item.title,
+      courseId: item.courseId || null,
+      startsAt: item.startsAt || null,
+      endsAt: item.endsAt || null,
+    })),
+    selectedClassroom: inventory.selectedClassroomItems.map((item) => ({
+      id: item.id,
+      title: item.title,
+      itemType: item.itemType,
+      courseTitle: item.courseTitle || null,
+      contentReady: classroomItemHasUsableContent(state, item),
+      needsManualUpload: !classroomItemHasUsableContent(state, item),
+    })),
+    preparationSummary: publicInventorySummary(inventory),
   };
 }
 

@@ -95,6 +95,23 @@
   line-height: 1.65;
 }
 
+.context-preparation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.55rem;
+  margin: 1.2rem auto 0;
+}
+
+.context-preparation-summary span {
+  padding: 0.45rem 0.72rem;
+  border: 1px solid rgba(22, 31, 27, 0.09);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .starter-today-actions {
   display: flex;
   justify-content: center;

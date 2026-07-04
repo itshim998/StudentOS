@@ -56,6 +56,7 @@ import {
   advanceAcademicContextPreparation,
   applyAcademicContextDeletion,
   beginAcademicContextPreparation,
+  beginSelectedClassroomContentBackfill,
   buildAcademicContextDeletionPlan,
   getAcademicContextReadiness,
   linkManualAcademicContextUpload,
@@ -87,6 +88,7 @@ import {
 } from "./connectors/googleClassroom/oauth.js";
 import {
   disconnectGoogleClassroom,
+  backfillSelectedClassroomContentIntoState,
   getClassroomConnectorStatus,
   markClassroomConnected,
   shouldRunAutomaticClassroomCheck,
@@ -1809,12 +1811,35 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/academic-context/prepare") {
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
-    const academicContext = beginAcademicContextPreparation(state);
+    const activePlanKey = resolveEntitlements(state).activePlanKey;
+    const classroomPolicy = getProductClassroomPolicy(state);
+    const oneClickTodo = activePlanKey !== "starter" && classroomPolicy.courseworkReviewEnabled === true;
+    let selectedContentCheck = null;
+    if (oneClickTodo) {
+      const backfill = beginSelectedClassroomContentBackfill(state);
+      if (backfill.started) {
+        await repository.saveState(session, state);
+        selectedContentCheck = await backfillSelectedClassroomContentIntoState({
+          state,
+          session,
+          repository,
+          items: backfill.items,
+          config: googleClassroomConfig,
+        });
+        markAcademicContextNeedsPreparation(state, "selected_classroom_content_checked");
+      }
+    }
+    beginAcademicContextPreparation(state);
+    const academicContext = oneClickTodo
+      ? advanceAcademicContextPreparation(state, { force: true }).readiness
+      : getAcademicContextReadiness(state);
     await repository.saveState(session, state);
-    sendJson(res, 202, {
+    sendJson(res, oneClickTodo ? 200 : 202, {
       academicContext,
+      selectedContentCheck,
+      autoGenerateTodo: oneClickTodo && academicContext.canGenerateTodo,
       state: publicState(state, persistence),
-      message: "Setting things up for you.",
+      message: academicContext.manualUploadGuidance || (oneClickTodo ? "Academic Context is ready for today’s plan." : "Setting things up for you."),
       secretsPrinted: false,
     });
     return;
@@ -1862,7 +1887,7 @@ async function handleApi(req, res, url) {
     enforceRateLimit(req, session, "ai_call");
     const readiness = getAcademicContextReadiness(state);
     if (!readiness.canGenerateTodo) {
-      const error = new Error("Prepare Academic Context before generating todayâ€™s TO-DO list.");
+      const error = new Error("Prepare Academic Context before generating today’s TO-DO list.");
       error.status = 409;
       error.code = "academic_context_not_ready";
       throw error;
@@ -1936,7 +1961,7 @@ async function handleApi(req, res, url) {
       sendJson(res, 200, {
         generated: false,
         retryable: true,
-        message: "StudentOS could not generate todayâ€™s plan. Please try again.",
+        message: "StudentOS could not generate today’s plan. Please try again.",
         weeklyAiHelp,
         state: publicState(state, persistence),
         secretsPrinted: false,

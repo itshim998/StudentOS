@@ -855,6 +855,9 @@ test("new signed-in student follows lifecycle gates before Today", async ({ page
 
 test("Classroom status UI normalizes controls and copy", async ({ page }) => {
   await prepareLocalWorkspace();
+  const revealClassroomStatusFixture = () => page.locator("#today-dashboard-panels").evaluate((element) => {
+    element.hidden = false;
+  });
   function connectorFor(state, overrides = {}) {
     const connected = state === "connected";
     const actions = {
@@ -923,18 +926,21 @@ test("Classroom status UI normalizes controls and copy", async ({ page }) => {
   }));
 
   await page.goto(baseUrl);
+  await revealClassroomStatusFixture();
   await expect(page.locator("#classroom-panel")).toContainText("Classroom setup is not active");
   await expectClassroomControls(page, {});
   await expectNoClassroomDeveloperCopy(page, "disabled Classroom state");
 
   connector = connectorFor("setup_required");
   await page.goto(baseUrl);
+  await revealClassroomStatusFixture();
   await expect(page.locator("#classroom-panel")).toContainText("Classroom setup is not active");
   await expectClassroomControls(page, {});
   await expectNoClassroomDeveloperCopy(page, "setup-required Classroom state");
 
   connector = connectorFor("disconnected");
   await page.goto(baseUrl);
+  await revealClassroomStatusFixture();
   await expect(page.locator("#classroom-panel")).toContainText("Classroom can be connected");
   await expectClassroomControls(page, { connectLabel: "Connect Classroom" });
   await expectNoClassroomDeveloperCopy(page, "disconnected Classroom state");
@@ -949,12 +955,14 @@ test("Classroom status UI normalizes controls and copy", async ({ page }) => {
     },
   });
   await page.goto(baseUrl);
+  await revealClassroomStatusFixture();
   await expect(page.locator("#classroom-panel")).toContainText("Classroom connected");
   await expectClassroomControls(page, { sync: true, disconnect: true });
   await expectNoClassroomDeveloperCopy(page, "connected Classroom state");
 
   connector = connectorFor("reconnect_required");
   await page.goto(baseUrl);
+  await revealClassroomStatusFixture();
   await expect(page.locator("#classroom-panel")).toContainText("Reconnect Classroom");
   await expectClassroomControls(page, { connectLabel: "Reconnect Classroom" });
   await expectNoClassroomDeveloperCopy(page, "reconnect-required Classroom state");
@@ -981,22 +989,18 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#auth-session")).toContainText("Local preview");
   await expect(page.locator("#rail-session-status")).toContainText("Local preview");
   await expect(page.locator("#connector-status")).toContainText("Local preview");
-  await expect(page.locator("#dashboard-summary")).toContainText("Do now");
-  await expect(page.locator("#dashboard-summary")).toContainText("Goal");
-  await expect(page.locator("#dashboard-summary")).toContainText(/Physics|Engineering/);
+  await expect(page.locator("#dashboard-summary")).toContainText("Your academic context is ready to prepare.");
+  await expect(page.getByRole("button", { name: "Prepare Academic Context" })).toBeVisible();
+  await expect(page.locator("#today-dashboard-panels")).toBeHidden();
   await clickNav(page, "Setup");
   await expect(page.locator("#onboarding-form input[name='displayName']")).toHaveValue("E2E Student");
   await expect(page.locator("#onboarding-form input[name='stream']")).toHaveValue("Engineering");
   await expect(page.locator("#onboarding-form input[name='classLevel']")).toHaveValue("Undergraduate");
   await expect(page.locator("#onboarding-form textarea[name='subjectsText']")).toHaveValue(/Physics/);
   await page.reload();
-  await expect(page.locator("#dashboard-summary")).toContainText(/Physics|Engineering/);
+  await expect(page.locator("#dashboard-summary")).toContainText("Your academic context is ready to prepare.");
   await expect(page.locator("body")).not.toContainText(/Aarav|Grade 10|Quadratics worksheet|Load sample profile|Plan Free/);
   await expectNoVisibleExternalBranding(page, "initial local workspace");
-  await page.getByRole("button", { name: "Plan today" }).click();
-  await expect(page.locator("#ai-panel")).toBeVisible();
-  await expect(page.locator("#ai-message")).toHaveValue(/Plan today from my tasks/i);
-  await closeAiDrawer(page);
 
   for (const view of ["Today", "Setup", "Courses", "Academic Context", "Studio", "Account"]) {
     await clickNav(page, view);
@@ -1146,6 +1150,9 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await closeAiDrawer(page);
 
   await clickNav(page, "Today");
+  await page.locator("#today-dashboard-panels").evaluate((element) => {
+    element.hidden = false;
+  });
   await expect(page.locator("#classroom-panel")).toContainText(/work ready to review|connected|demo/i);
   await expectClassroomControls(page, { sync: true, disconnect: true });
   await page.route("**/api/classroom/sync", async (route) => {
@@ -1188,6 +1195,9 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   });
   await page.getByRole("button", { name: "Check Classroom" }).click();
   await waitForNotLoading(page.locator("#classroom-panel"), "Checking Classroom work");
+  await page.locator("#today-dashboard-panels").evaluate((element) => {
+    element.hidden = false;
+  });
   await expect(page.locator("#classroom-panel")).toContainText("work ready to review");
   await expectNoClassroomDeveloperCopy(page, "mock Classroom sync");
   await expect(page.locator("#assignment-list")).toContainText("Google Classroom");
@@ -1540,8 +1550,8 @@ test("Starter Today follows academic context preparation before generating a str
       body: JSON.stringify({ generated: true, plan, state: starterState }),
     });
   });
-  await page.getByRole("button", { name: "Generate todayâ€™s TO-DO list" }).click();
-  await expect(page.getByRole("heading", { name: "Todayâ€™s focused plan" })).toBeVisible();
+  await page.getByRole("button", { name: "Generate today’s TO-DO list" }).click();
+  await expect(page.getByRole("heading", { name: "Today’s focused plan" })).toBeVisible();
   await expect(page.locator(".today-todo-item")).toContainText("Review motion and forces");
   await expect(page.locator(".today-todo-item")).toContainText("45 minutes");
   expect(generationClock.currentDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
@@ -1549,6 +1559,136 @@ test("Starter Today follows academic context preparation before generating a str
   expect(generationClock.timezone).toBeTruthy();
   const visibleToday = await page.locator("#view-today").innerText();
   expect(visibleToday).not.toMatch(/\b(provider|model|token|storage|database|backend|vector|embedding|chunks?|debug|OAuth scope)\b/i);
+});
+
+test("Essential prepares selected Classroom context and generates Today in one click", async ({ page }) => {
+  const baseState = await fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json());
+  const essentialPlanAccess = {
+    ...baseState.planAccess,
+    activePlanKey: "essential",
+    selectedPlanKey: "essential",
+    dashboardAccess: true,
+    entitlements: {
+      ...(baseState.planAccess?.entitlements || {}),
+      classroom: {
+        ...(baseState.planAccess?.entitlements?.classroom || {}),
+        courseOnly: false,
+        courseworkReviewEnabled: true,
+        automaticChecksEnabled: true,
+      },
+    },
+  };
+  let essentialState = {
+    ...structuredClone(baseState),
+    planAccess: essentialPlanAccess,
+    todayPlan: null,
+    academicContext: {
+      status: "context_selected_metadata",
+      hasContext: true,
+      hasUsefulContext: true,
+      canPrepare: true,
+      canGenerateTodo: false,
+      message: "Selected Classroom work is ready to check.",
+      summary: {
+        coursesReady: 1,
+        assignmentsReady: 1,
+        examDatesReady: 1,
+        materialsReady: 0,
+        selectedClassroomNeedsManualUpload: 0,
+      },
+    },
+    productLifecycle: {
+      ...baseState.productLifecycle,
+      selectedPlanId: "essential",
+      dashboardActive: true,
+    },
+  };
+  let prepareCalls = 0;
+  let todoCalls = 0;
+  let generationClock = null;
+  await page.route("**/api/bootstrap", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify(essentialState),
+  }));
+  await page.route("**/api/academic-context/prepare", (route) => {
+    prepareCalls += 1;
+    essentialState = {
+      ...essentialState,
+      academicContext: {
+        ...essentialState.academicContext,
+        status: "context_ready",
+        canPrepare: true,
+        canGenerateTodo: true,
+        lessComplete: true,
+        manualUploadGuidance: "Some selected Classroom work needs a manual upload before StudentOS can use it fully.",
+        message: "Your academic context is ready.",
+        summary: {
+          ...essentialState.academicContext.summary,
+          selectedClassroomNeedsManualUpload: 1,
+        },
+      },
+    };
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: essentialState,
+        academicContext: essentialState.academicContext,
+        autoGenerateTodo: true,
+        selectedContentCheck: { attempted: 1, manualUploadRequired: 1, cadenceUnchanged: true },
+      }),
+    });
+  });
+  await page.route("**/api/today/todo", async (route) => {
+    todoCalls += 1;
+    generationClock = route.request().postDataJSON();
+    const plan = {
+      date: generationClock.currentDate,
+      generated_at: new Date().toISOString(),
+      timezone: generationClock.timezone,
+      summary: "AI first, Electronics second, with other subjects moving in parallel.",
+      items: [
+        {
+          title: "Review AI CIA 1 topics",
+          time_hint: "40 minutes",
+          reason: "AI is the nearest exam.",
+          related_course: "AI",
+          related_context: "Topics 1-2",
+          priority: "high",
+        },
+        {
+          title: "Review Electronics CIA 1 topics",
+          time_hint: "40 minutes",
+          reason: "Electronics is the next exam.",
+          related_course: "Electronics",
+          related_context: "Topics 1-2",
+          priority: "medium",
+        },
+      ],
+    };
+    essentialState = { ...essentialState, todayPlan: plan };
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ generated: true, plan, state: essentialState }),
+    });
+  });
+
+  await page.goto(baseUrl);
+  await expect(page.locator("#today-dashboard-panels")).toBeHidden();
+  await expect(page.locator("#dashboard-summary")).toContainText("Selected Classroom work is ready to check.");
+  await page.getByRole("button", { name: "Prepare Academic Context" }).click();
+  await expect(page.getByRole("heading", { name: "Today’s focused plan" })).toBeVisible();
+  await expect(page.locator(".today-todo-item").nth(0)).toContainText("AI CIA 1");
+  await expect(page.locator(".today-todo-item").nth(1)).toContainText("Electronics CIA 1");
+  await clickNav(page, "Academic Context");
+  await expect(page.locator("#academic-context-preparation-status")).toContainText("Some selected Classroom work needs a manual upload");
+  expect(prepareCalls).toBe(1);
+  expect(todoCalls).toBe(1);
+  expect(generationClock.currentDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  expect(generationClock.currentTime).toMatch(/^\d{2}:\d{2}$/);
+  expect(generationClock.timezone).toBeTruthy();
+  await page.unroute("**/api/today/todo");
+  await page.unroute("**/api/academic-context/prepare");
+  await page.unroute("**/api/bootstrap");
 });
 
 test("responsive surfaces and AI drawer avoid horizontal overflow", async ({ page }) => {

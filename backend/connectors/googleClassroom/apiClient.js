@@ -110,6 +110,37 @@ function materialMetadata(material = {}, index = 0) {
   };
 }
 
+function courseWorkRecord(item = {}, courseId) {
+  return {
+    providerCourseId: courseId,
+    providerCourseWorkId: item.id,
+    title: item.title || "Classroom assignment",
+    description: item.description || "",
+    state: item.state || "",
+    alternateLink: item.alternateLink || "",
+    creationTime: item.creationTime || "",
+    updateTime: item.updateTime || "",
+    dueAt: dueDateTime(item),
+    maxPoints: item.maxPoints ?? null,
+    workType: item.workType || "",
+    materials: (item.materials || []).map(materialMetadata),
+  };
+}
+
+function courseWorkMaterialRecord(item = {}, courseId) {
+  return {
+    providerCourseId: courseId,
+    providerCourseWorkMaterialId: item.id,
+    title: item.title || "Classroom material",
+    description: item.description || "",
+    state: item.state || "",
+    alternateLink: item.alternateLink || "",
+    creationTime: item.creationTime || "",
+    updateTime: item.updateTime || "",
+    materials: (item.materials || []).map(materialMetadata),
+  };
+}
+
 export class GoogleClassroomApiClient {
   constructor({ accessToken, fetchImpl = fetch } = {}) {
     this.accessToken = accessToken;
@@ -140,20 +171,15 @@ export class GoogleClassroomApiClient {
       fetchImpl: this.fetchImpl,
       params: { courseWorkStates: "PUBLISHED" },
     });
-    return coursework.map((item) => ({
-      providerCourseId: courseId,
-      providerCourseWorkId: item.id,
-      title: item.title || "Classroom assignment",
-      description: item.description || "",
-      state: item.state || "",
-      alternateLink: item.alternateLink || "",
-      creationTime: item.creationTime || "",
-      updateTime: item.updateTime || "",
-      dueAt: dueDateTime(item),
-      maxPoints: item.maxPoints ?? null,
-      workType: item.workType || "",
-      materials: (item.materials || []).map(materialMetadata),
-    }));
+    return coursework.map((item) => courseWorkRecord(item, courseId));
+  }
+
+  async getCourseWork(courseId, courseWorkId) {
+    const item = await classroomFetch(
+      `/courses/${encodeURIComponent(courseId)}/courseWork/${encodeURIComponent(courseWorkId)}`,
+      { token: this.accessToken, fetchImpl: this.fetchImpl },
+    );
+    return courseWorkRecord(item, courseId);
   }
 
   async listCourseWorkMaterials(courseId) {
@@ -162,17 +188,15 @@ export class GoogleClassroomApiClient {
       fetchImpl: this.fetchImpl,
       params: { courseWorkMaterialStates: "PUBLISHED" },
     });
-    return materials.map((item) => ({
-      providerCourseId: courseId,
-      providerCourseWorkMaterialId: item.id,
-      title: item.title || "Classroom material",
-      description: item.description || "",
-      state: item.state || "",
-      alternateLink: item.alternateLink || "",
-      creationTime: item.creationTime || "",
-      updateTime: item.updateTime || "",
-      materials: (item.materials || []).map(materialMetadata),
-    }));
+    return materials.map((item) => courseWorkMaterialRecord(item, courseId));
+  }
+
+  async getCourseWorkMaterial(courseId, courseWorkMaterialId) {
+    const item = await classroomFetch(
+      `/courses/${encodeURIComponent(courseId)}/courseWorkMaterials/${encodeURIComponent(courseWorkMaterialId)}`,
+      { token: this.accessToken, fetchImpl: this.fetchImpl },
+    );
+    return courseWorkMaterialRecord(item, courseId);
   }
 
   async listOwnSubmissions(courseId, courseWorkId) {

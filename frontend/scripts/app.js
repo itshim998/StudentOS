@@ -2103,8 +2103,8 @@ function currentActivePlanKey() {
   return String(state?.planAccess?.activePlanKey || state?.planAccess?.selectedPlanKey || state?.productLifecycle?.selectedPlanId || "").toLowerCase();
 }
 
-function usesStarterTodayFlow() {
-  return currentActivePlanKey() === "starter";
+function usesAcademicTodayFlow() {
+  return ["trial", "starter", "essential", "plus", "pro"].includes(currentActivePlanKey());
 }
 
 function localDateOnly(now = new Date()) {
@@ -2144,6 +2144,18 @@ function todayTodoItemMarkup(item) {
   `;
 }
 
+function contextPreparationSummaryMarkup(readiness) {
+  const summary = readiness?.summary || {};
+  const labels = [
+    summary.coursesReady ? "Courses ready" : "",
+    summary.assignmentsReady ? "Assignments ready" : "",
+    summary.examDatesReady ? "Exam dates ready" : "",
+    summary.materialsReady ? "Study material ready" : "",
+    summary.selectedClassroomNeedsManualUpload ? "Some selected Classroom files need manual upload" : "",
+  ].filter(Boolean);
+  return labels.length ? `<div class="context-preparation-summary">${labels.map((label) => `<span>${escapeHtml(label)}</span>`).join("")}</div>` : "";
+}
+
 function renderStarterToday() {
   const readiness = academicContextReadiness();
   const currentPlan = state.todayPlan?.date === localDateOnly() ? state.todayPlan : null;
@@ -2173,6 +2185,17 @@ function renderStarterToday() {
     return;
   }
 
+  if (readiness.status === "context_classroom_backfill") {
+    setResult(els.dashboardSummary, `
+      <article class="starter-today-state starter-today-waiting" role="status" aria-live="polite">
+        <span class="starter-context-spinner" aria-hidden="true"></span>
+        <h3>Checking selected Classroom work.</h3>
+        <p>StudentOS is checking only the Classroom work you chose for Academic Context.</p>
+      </article>
+    `);
+    return;
+  }
+
   if (readiness.status === "context_empty") {
     setResult(els.dashboardSummary, `
       <article class="starter-today-state">
@@ -2185,17 +2208,31 @@ function renderStarterToday() {
     return;
   }
 
-  if (readiness.status === "context_needs_preparation") {
+  if (["context_needs_preparation", "context_selected_metadata"].includes(readiness.status)) {
     setResult(els.dashboardSummary, `
       <article class="starter-today-state">
         <p class="eyebrow">Today</p>
-        <h3>Your academic context is ready to prepare.</h3>
-        <p>StudentOS can organize your courses, PDFs, exam dates, and assignments before planning your day.</p>
+        <h3>${escapeHtml(readiness.status === "context_selected_metadata" ? "Selected Classroom work is ready to check." : "Your academic context is ready to prepare.")}</h3>
+        <p>${escapeHtml(readiness.status === "context_selected_metadata" ? "StudentOS will check only the work you selected, then prepare your context and plan the rest of today." : "StudentOS can organize your courses, PDFs, exam dates, and assignments before planning your day.")}</p>
+        ${contextPreparationSummaryMarkup(readiness)}
         ${todayTodoMessage ? `<p class="starter-today-message">${escapeHtml(todayTodoMessage)}</p>` : ""}
         <div class="starter-today-actions">
           <button class="primary-button" type="button" data-today-action="prepare-context">Prepare Academic Context</button>
           <button class="text-button" type="button" data-today-action="academic-context">Review Academic Context</button>
         </div>
+      </article>
+    `);
+    return;
+  }
+
+  if (readiness.status === "context_needs_manual_upload") {
+    setResult(els.dashboardSummary, `
+      <article class="starter-today-state">
+        <p class="eyebrow">Today</p>
+        <h3>Some selected Classroom work needs a manual upload.</h3>
+        <p>Add the related file, syllabus, exam date, assignment, or material so StudentOS can generate a useful plan.</p>
+        ${contextPreparationSummaryMarkup(readiness)}
+        <div class="starter-today-actions"><button class="primary-button" type="button" data-today-action="academic-context">Go to Academic Context</button></div>
       </article>
     `);
     return;
@@ -2222,8 +2259,9 @@ function renderStarterToday() {
         <p class="eyebrow">Today</p>
         <h3>Your academic context is ready.</h3>
         <p>Generate a focused TO-DO list for the rest of today.</p>
+        ${contextPreparationSummaryMarkup(readiness)}
         ${todayTodoMessage ? `<p class="starter-today-message">${escapeHtml(todayTodoMessage)}</p>` : ""}
-        <div class="starter-today-actions"><button class="primary-button" type="button" data-today-action="generate-todo">Generate todayâ€™s TO-DO list</button></div>
+        <div class="starter-today-actions"><button class="primary-button" type="button" data-today-action="generate-todo">Generate today’s TO-DO list</button></div>
       </article>
     `);
     return;
@@ -2234,7 +2272,7 @@ function renderStarterToday() {
       <div class="starter-today-plan-header">
         <div>
           <p class="eyebrow">Today</p>
-          <h3>Todayâ€™s focused plan</h3>
+          <h3>Today’s focused plan</h3>
           <p>${escapeHtml(currentPlan.summary || "A focused plan for the rest of today.")}</p>
         </div>
         <span>Generated ${escapeHtml(formatTime(currentPlan.generated_at))}</span>
@@ -2246,7 +2284,7 @@ function renderStarterToday() {
 }
 
 function renderDashboardSummary() {
-  if (usesStarterTodayFlow()) {
+  if (usesAcademicTodayFlow()) {
     renderStarterToday();
     return;
   }
@@ -2700,14 +2738,20 @@ function renderAcademicContextPreparationStatus() {
       : readiness.message;
     els.academicContextPreparationStatus.innerHTML = `
       <span class="status-dot" aria-hidden="true"></span>
-      <p><strong>${escapeHtml(readiness.message)}</strong>${detail !== readiness.message ? `<small>${escapeHtml(detail)}</small>` : ""}</p>
+      <div>
+        <p><strong>${escapeHtml(readiness.message)}</strong>${detail !== readiness.message ? `<small>${escapeHtml(detail)}</small>` : ""}</p>
+        ${contextPreparationSummaryMarkup(readiness)}
+        ${readiness.manualUploadGuidance ? `<small>${escapeHtml(readiness.manualUploadGuidance)}</small>` : ""}
+      </div>
     `;
     els.academicContextPreparationStatus.dataset.status = readiness.status;
   }
   if (els.academicContextPrepareButton) {
-    els.academicContextPrepareButton.disabled = readiness.status === "context_preparing" || !readiness.hasUsefulContext;
+    els.academicContextPrepareButton.disabled = ["context_preparing", "context_classroom_backfill"].includes(readiness.status) || !readiness.canPrepare;
     els.academicContextPrepareButton.textContent = readiness.status === "context_preparing"
       ? "Preparing..."
+      : readiness.status === "context_classroom_backfill"
+        ? "Checking selected work..."
       : readiness.status === "context_ready"
         ? "Prepare again"
         : readiness.status === "context_failed"
@@ -3615,14 +3659,21 @@ async function pollAcademicContextPreparation() {
 
 async function prepareAcademicContext() {
   todayTodoMessage = "";
-  state.academicContext = { ...academicContextReadiness(), status: "context_preparing", message: "Setting things up for you." };
+  const oneClickTodo = currentActivePlanKey() !== "starter";
+  state.academicContext = {
+    ...academicContextReadiness(),
+    status: oneClickTodo ? "context_classroom_backfill" : "context_preparing",
+    message: oneClickTodo ? "Checking selected Classroom work." : "Setting things up for you.",
+  };
   setView("today");
   render();
   try {
     const result = await api("/api/academic-context/prepare", { method: "POST", body: JSON.stringify({}) });
     state = result.state || state;
+    todayTodoMessage = result.message || "";
     render();
-    scheduleAcademicContextPreparationPoll();
+    if (result.autoGenerateTodo) await generateTodayTodo();
+    else if (academicContextReadiness().status === "context_preparing") scheduleAcademicContextPreparationPoll();
   } catch (error) {
     todayTodoMessage = error.message;
     await loadBootstrap();
@@ -3649,7 +3700,7 @@ async function generateTodayTodo() {
       body: JSON.stringify(browserTodoClock()),
     });
     state = result.state || state;
-    if (!result.generated) todayTodoMessage = result.message || "StudentOS could not generate todayâ€™s plan. Please try again.";
+    if (!result.generated) todayTodoMessage = result.message || "StudentOS could not generate today’s plan. Please try again.";
   } catch (error) {
     todayTodoMessage = error.message;
   } finally {
@@ -4546,7 +4597,7 @@ function wireEvents() {
       if (action === "generate-todo") {
         withButtonLoading(todayAction, "Generating...", generateTodayTodo, {
           timeoutTarget: els.dashboardSummary,
-          timeoutCopy: "Todayâ€™s plan is taking longer than expected. Please try again.",
+          timeoutCopy: "Today’s plan is taking longer than expected. Please try again.",
           timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS,
         }).catch((error) => {
           todayTodoMessage = error.message;
