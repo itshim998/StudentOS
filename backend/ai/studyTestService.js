@@ -225,6 +225,7 @@ export function synchronizeTestSession(session, { now = new Date() } = {}) {
 
 export function publicTestSession(session, options = {}) {
   const projected = structuredClone(session);
+  if (projected.answerSheetDraft?.extractedText) delete projected.answerSheetDraft.extractedText;
   return synchronizeTestSession(projected, options);
 }
 
@@ -284,5 +285,5 @@ export function finishStudyTestSession(session, { now = new Date() } = {}) {
 }
 
 export function isReusableStudyTest(session) {
-  return Boolean(session && [...ACTIVE_STATUSES, "time_expired", "submitted_pending_evaluation", "ready_for_evaluation"].includes(session.status));
+  return Boolean(session && [...ACTIVE_STATUSES, "time_expired", "submitted_pending_evaluation", "ready_for_evaluation", "evaluated"].includes(session.status));
 }

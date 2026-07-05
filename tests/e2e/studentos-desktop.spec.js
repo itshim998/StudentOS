@@ -1695,6 +1695,18 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
   const baseState = await fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json());
   let studyState = {
     ...structuredClone(baseState),
+    productLifecycle: {
+      ...structuredClone(baseState.productLifecycle || {}),
+      state: "dashboard_active",
+      dashboardActive: true,
+      selectedPlanId: "starter",
+      accessMode: "paid_plan",
+    },
+    planAccess: {
+      ...structuredClone(baseState.planAccess || {}),
+      activePlanKey: "starter",
+      dashboardAccess: true,
+    },
     todayPlan: null,
     courses: [
       { id: "course_study_physics", title: "Physics", source: "manual", academicContextIncluded: true, selectionState: "imported" },
@@ -1835,7 +1847,25 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
     const request = route.request();
     const path = new URL(request.url()).pathname;
     const session = studyState.testSessions[0];
-    if (path.endsWith("/start")) {
+    if (path.endsWith("/evaluate")) {
+      session.status = "evaluated";
+      session.evaluatedAt = new Date().toISOString();
+      session.evaluation = {
+        total_marks: 6,
+        scored_marks: 4,
+        percentage: 66.67,
+        question_results: [
+          { question_number: 1, marks_awarded: 2, max_marks: 2, feedback: "Correctly identified net force.", correction: "Keep stating that force is a vector sum." },
+          { question_number: 2, marks_awarded: 2, max_marks: 4, feedback: "The answer names the law but needs fuller reasoning.", correction: "Explain that acceleration is proportional to net force and inversely proportional to mass." },
+        ],
+        strengths: ["Identified the central force idea"],
+        weak_topics: ["Applying Newton's second law"],
+        next_steps: ["Review both corrections", "Practise one force calculation"],
+        short_revision_plan: "Review the corrections for 10 minutes, then solve one fresh force problem.",
+      };
+      studyState.todayPlan.items[0].workflow_status = "completed";
+      studyState.todayPlan.items[0].evaluation_completed_at = session.evaluatedAt;
+    } else if (path.endsWith("/start")) {
       const body = request.postDataJSON();
       session.answerMode = body.answerMode;
       session.status = "in_progress";
@@ -1850,7 +1880,13 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
     }
     await route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ testSession: session, state: studyState, message: path.endsWith("/finish") ? "Submitted for evaluation." : "Answers saved." }),
+      body: JSON.stringify({
+        evaluated: path.endsWith("/evaluate") ? true : undefined,
+        evaluation: session.evaluation,
+        testSession: session,
+        state: studyState,
+        message: path.endsWith("/evaluate") ? "Your result is ready." : path.endsWith("/finish") ? "Submitted for evaluation." : "Answers saved.",
+      }),
     });
   });
 
@@ -1897,6 +1933,14 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
   expect(studyState.testSessions[0].deadlineAt).toBe(originalDeadline);
   await page.getByRole("button", { name: "Submit for evaluation" }).click();
   await expect(page.locator(".study-test-closed")).toContainText("Submitted for evaluation");
+  await page.getByRole("button", { name: "Evaluate my test" }).click();
+  await expect(page.locator(".study-test-result")).toContainText("Your result");
+  await expect(page.locator(".study-test-result")).toContainText("4 / 6");
+  await expect(page.locator(".study-result-question")).toHaveCount(2);
+  await expect(page.locator(".study-test-result")).toContainText("Applying Newton's second law");
+  await expect(page.locator(".study-test-result")).toContainText("Practise one force calculation");
+  await expect(page.getByRole("button", { name: "Review corrections" })).toBeVisible();
+  expect(studyState.todayPlan.items[0].workflow_status).toBe("completed");
   expect(await page.locator("#view-study").innerText()).not.toMatch(/\b(provider|model|token|storage|database|backend|vector|embedding|chunks?|debug|OAuth scope)\b/i);
 
   await page.unroute("**/api/study/tests/**");

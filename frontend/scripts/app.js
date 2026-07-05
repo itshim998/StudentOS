@@ -2395,6 +2395,7 @@ function studyTestStatusLabel(status) {
     time_expired: "Time expired",
     submitted_pending_evaluation: "Submitted for evaluation",
     ready_for_evaluation: "Ready for evaluation",
+    evaluated: "Evaluated",
   }[status] || humanize(status || "not generated");
 }
 
@@ -2479,6 +2480,7 @@ function studyTestAttemptMarkup(session) {
 }
 
 function studyTestClosedMarkup(session) {
+  if (session.status === "evaluated" && session.evaluation) return studyTestResultMarkup(session);
   const expired = session.status === "time_expired";
   const handwritten = session.answerMode === "handwritten";
   const title = expired ? "Time is up. This attempt is locked." : studyTestStatusLabel(session.status);
@@ -2493,6 +2495,53 @@ function studyTestClosedMarkup(session) {
       <h4>${escapeHtml(title)}</h4>
       <p>${escapeHtml(copy)}</p>
       ${studyTestSummaryMarkup(session.testPaper)}
+      <div class="study-evaluation-submit">
+        ${handwritten ? `
+          <label class="study-answer-sheet-field">
+            <span>Handwritten answer sheet</span>
+            <input type="file" data-study-answer-sheet accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+            <small>${session.answerSheetDraft?.filename ? `Saved for retry: ${escapeHtml(session.answerSheetDraft.filename)}` : "Upload your handwritten answer sheet as PDF or DOCX."}</small>
+          </label>
+        ` : `<p>Your saved typed answers will be evaluated against this test.</p>`}
+        <button class="primary-button" type="button" data-study-test-evaluate="${escapeHtml(session.id)}">${session.answerSheetDraft?.filename ? "Retry evaluation" : "Evaluate my test"}</button>
+      </div>
+    </section>
+  `;
+}
+
+function studyTestResultMarkup(session) {
+  const result = session.evaluation;
+  const strengths = result.strengths?.length ? result.strengths : ["You completed the test and now have a clear revision path."];
+  const weakTopics = result.weak_topics?.length ? result.weak_topics : ["No specific weak topic was identified."];
+  return `
+    <section class="study-test-result" aria-labelledby="study-test-result-title">
+      <header class="study-result-header">
+        <div><p class="eyebrow">Your result</p><h4 id="study-test-result-title">${escapeHtml(`${result.scored_marks} / ${result.total_marks}`)}</h4><p>${escapeHtml(`${result.percentage}%`)}</p></div>
+        <div class="study-result-score" aria-label="Score ${escapeHtml(result.percentage)} percent"><strong>${escapeHtml(result.percentage)}%</strong><span>${escapeHtml(session.testPaper.topic)}</span></div>
+      </header>
+      <div class="study-result-overview">
+        <section><h5>What went well</h5><ul>${strengths.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}</ul></section>
+        <section><h5>What to revise</h5><ul>${weakTopics.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}</ul></section>
+      </div>
+      <section class="study-result-questions">
+        <div class="study-result-section-heading"><p class="eyebrow">Corrections</p><h5>Question-by-question feedback</h5></div>
+        ${result.question_results.map((question) => `
+          <article class="study-result-question">
+            <header><strong>Question ${escapeHtml(question.question_number)}</strong><span>${escapeHtml(`${question.marks_awarded} / ${question.max_marks} marks`)}</span></header>
+            <p><strong>Feedback</strong>${escapeHtml(question.feedback)}</p>
+            <p><strong>Correction</strong>${escapeHtml(question.correction)}</p>
+          </article>
+        `).join("")}
+      </section>
+      <section class="study-result-next">
+        <div><h5>Next steps</h5><ul>${result.next_steps.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}</ul></div>
+        <div><h5>Short revision plan</h5><p>${escapeHtml(result.short_revision_plan)}</p></div>
+      </section>
+      <div class="study-result-actions" aria-label="Result actions">
+        <button class="secondary-button" type="button" data-study-review-corrections>Review corrections</button>
+        <button class="secondary-button" type="button" data-study-go-today>Back to Today</button>
+        <button class="primary-button" type="button" data-study-continue>Continue Study and Evaluate</button>
+      </div>
     </section>
   `;
 }
@@ -4195,6 +4244,42 @@ async function finishStudyTest(sessionId) {
   renderStudyAndEvaluate();
 }
 
+async function evaluateStudyTestAttempt(sessionId) {
+  const session = (state.testSessions || []).find((entry) => entry.id === sessionId);
+  let body = JSON.stringify({});
+  if (session?.answerMode === "handwritten") {
+    const file = els.studyEvaluateContent?.querySelector("[data-study-answer-sheet]")?.files?.[0] || null;
+    const extension = file?.name?.toLowerCase().match(/\.[^.]+$/)?.[0] || "";
+    if (!file && !session.answerSheetDraft?.filename) {
+      studyWorkspaceMessage = "Upload your handwritten answer sheet as PDF or DOCX.";
+      renderStudyAndEvaluate();
+      return;
+    }
+    if (file && ![".pdf", ".docx"].includes(extension)) {
+      studyWorkspaceMessage = "Upload your handwritten answer sheet as PDF or DOCX.";
+      renderStudyAndEvaluate();
+      return;
+    }
+    if (file) {
+      body = new FormData();
+      body.append("answerSheet", file);
+    }
+  }
+  const result = await api(`/api/study/tests/${encodeURIComponent(sessionId)}/evaluate`, { method: "POST", body });
+  state = result.state || state;
+  studyWorkspaceMessage = result.message || (result.evaluated ? "Your result is ready." : "StudentOS could not evaluate this test right now. Your answers are safe. Please try again.");
+  render();
+  setView("study");
+}
+
+function continueStudyAndEvaluate() {
+  const items = currentStudyPlan()?.items || [];
+  const next = items.find((item) => currentStudyTestSession(item)?.status !== "evaluated") || null;
+  if (next) selectedStudyItemId = next.id;
+  studyWorkspaceMessage = next ? "Choose the next step for this study item." : "Today’s Study and Evaluate items are complete.";
+  renderStudyAndEvaluate();
+}
+
 async function refreshStudyTestSession(sessionId) {
   if (studyTestExpiryRefreshPending) return;
   studyTestExpiryRefreshPending = true;
@@ -5168,6 +5253,27 @@ function wireEvents() {
         if (/time is up|locked/i.test(error.message)) await refreshStudyTestSession(finishStudyTestButton.dataset.studyTestFinish);
         else renderStudyAndEvaluate();
       });
+      return;
+    }
+    const evaluateStudyTestButton = event.target.closest("[data-study-test-evaluate]");
+    if (evaluateStudyTestButton) {
+      withButtonLoading(evaluateStudyTestButton, "Evaluating...", () => evaluateStudyTestAttempt(evaluateStudyTestButton.dataset.studyTestEvaluate), {
+        timeoutTarget: els.studyEvaluateContent,
+        timeoutCopy: "Evaluation is taking longer than expected. Your answers are safe; please try again.",
+      }).catch((error) => {
+        studyWorkspaceMessage = error.message;
+        renderStudyAndEvaluate();
+      });
+      return;
+    }
+    const reviewCorrectionsButton = event.target.closest("[data-study-review-corrections]");
+    if (reviewCorrectionsButton) {
+      els.studyEvaluateContent?.querySelector(".study-result-questions")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    const continueStudyButton = event.target.closest("[data-study-continue]");
+    if (continueStudyButton) {
+      continueStudyAndEvaluate();
       return;
     }
     const todayAction = event.target.closest("[data-today-action]");

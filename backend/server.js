@@ -120,6 +120,13 @@ import {
   startStudyTestSession,
   synchronizeTestSession,
 } from "./ai/studyTestService.js";
+import {
+  ANSWER_SHEET_COPY,
+  MAX_ANSWER_SHEET_BYTES,
+  applyStudyTestEvaluation,
+  evaluateStudyTest,
+  extractStudyAnswerSheet,
+} from "./ai/studyTestEvaluationService.js";
 import { getSafeAiProviderStatus, getAiProviderConfig } from "./ai/providerConfig.js";
 import {
   AI_ALLOWANCE_COPY,
@@ -292,6 +299,7 @@ const SERVE_FRONTEND = DEPLOYMENT_TARGET !== "azure-container-apps" && process.e
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const SOURCE_UPLOAD_STAGE_TIMEOUT_MS = Number(process.env.STUDENTOS_SOURCE_UPLOAD_STAGE_TIMEOUT_MS || 20000);
 const SOURCE_UPLOAD_PARSE_TIMEOUT_MS = Number(process.env.STUDENTOS_SOURCE_UPLOAD_PARSE_TIMEOUT_MS || 15000);
+const studyTestEvaluationsInFlight = new Set();
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -2298,6 +2306,164 @@ async function handleApi(req, res, url) {
       secretsPrinted: false,
     });
     return;
+  }
+
+  const studyTestEvaluateMatch = url.pathname.match(/^\/api\/study\/tests\/([^/]+)\/evaluate$/);
+  if (req.method === "POST" && studyTestEvaluateMatch) {
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    assertProductFeatureAccess(state, FEATURE_KEYS.ASSISTANT);
+    enforceRateLimit(req, session, "ai_call");
+    const testSession = findStudyTestSession(state, { sessionId: decodeURIComponent(studyTestEvaluateMatch[1]) });
+    if (!testSession) {
+      const error = new Error("This test is no longer available.");
+      error.status = 404;
+      throw error;
+    }
+    synchronizeTestSession(testSession);
+    if (testSession.status === "evaluated" && testSession.evaluation) {
+      sendJson(res, 200, {
+        evaluated: true,
+        reused: true,
+        testSession: publicTestSession(testSession),
+        state: publicState(state, persistence),
+        secretsPrinted: false,
+      });
+      return;
+    }
+    if (!["submitted_pending_evaluation", "ready_for_evaluation", "time_expired"].includes(testSession.status)) {
+      const error = new Error("This test is not ready for evaluation.");
+      error.status = 409;
+      throw error;
+    }
+    const inFlightKey = `${session.user.id}:${testSession.id}`;
+    if (studyTestEvaluationsInFlight.has(inFlightKey)) {
+      const error = new Error("This test is already being evaluated. Please wait for the result.");
+      error.status = 409;
+      throw error;
+    }
+    studyTestEvaluationsInFlight.add(inFlightKey);
+    try {
+      let answerSheet = testSession.answerSheetDraft || null;
+      if (testSession.answerMode === "handwritten") {
+        const contentType = String(req.headers["content-type"] || "");
+        if (contentType.toLowerCase().startsWith("multipart/form-data")) {
+          const form = await readMultipartForm(req, { maxBytes: MAX_ANSWER_SHEET_BYTES + 512 * 1024 });
+          const file = form.files.answerSheet;
+          if (file) {
+            answerSheet = await extractStudyAnswerSheet(file);
+            testSession.answerSheetDraft = answerSheet;
+            testSession.updatedAt = new Date().toISOString();
+            await repository.saveState(session, state);
+          }
+        } else {
+          await readJsonBody(req);
+        }
+        if (!answerSheet?.extractedText) {
+          const error = new Error(ANSWER_SHEET_COPY);
+          error.status = 400;
+          throw error;
+        }
+      } else {
+        await readJsonBody(req);
+      }
+
+      const item = findDailyTodoItem(state, testSession.todoItemId);
+      if (!item) {
+        const error = new Error("The related study item is no longer available.");
+        error.status = 404;
+        throw error;
+      }
+      const activePlanKey = resolveEntitlements(state).activePlanKey;
+      const allowance = getAiWeeklyAllowance(activePlanKey);
+      const period = getAiWeeklyPeriod();
+      const task = classifyAiTask({ verb: "Review", message: `Evaluate completed test for ${testSession.testPaper.topic}` });
+      let reservation;
+      try {
+        reservation = await repository.reserveAiWeeklyAllowance(session, {
+          planTier: activePlanKey,
+          periodKey: period.periodKey,
+          allowance,
+          actionType: task.actionType,
+          creditCost: task.creditCost,
+          requestId: req.requestId,
+          metadata: { workflow: "study_test_evaluation", todoItemId: item.id, testSessionId: testSession.id },
+        });
+      } catch (error) {
+        logger.warn("study_test_evaluation.allowance_reservation_failed", { requestId: req.requestId, status: error.status || 500 });
+        sendJson(res, 200, {
+          evaluated: false,
+          retryable: true,
+          message: AI_ALLOWANCE_COPY.unavailable,
+          state: publicState(state, persistence),
+          secretsPrinted: false,
+        });
+        return;
+      }
+      if (!reservation.allowed) {
+        sendJson(res, 200, {
+          evaluated: false,
+          allowanceLimited: true,
+          message: `${AI_ALLOWANCE_COPY.exhausted} ${AI_ALLOWANCE_COPY.exhaustedNextStep}`,
+          weeklyAiHelp: buildPublicAiAllowance({ ...reservation, refreshesAt: period.refreshesAt, blocked: true }),
+          state: publicState(state, persistence),
+          secretsPrinted: false,
+        });
+        return;
+      }
+      let result;
+      try {
+        result = await evaluateStudyTest({
+          state,
+          item,
+          session: testSession,
+          answerSheetText: answerSheet?.extractedText || "",
+        });
+      } catch (error) {
+        await repository.settleAiWeeklyAllowance(session, { requestId: req.requestId, status: "refunded" }).catch(() => null);
+        throw error;
+      }
+      const evaluated = result.evaluationSucceeded === true && Boolean(result.evaluation);
+      const settlement = await repository.settleAiWeeklyAllowance(session, {
+        requestId: req.requestId,
+        status: evaluated ? "charged" : "refunded",
+      }).catch((error) => {
+        logger.warn("study_test_evaluation.allowance_settlement_failed", { requestId: req.requestId, status: error.status || 500 });
+        return null;
+      });
+      const usedAfterSettlement = settlement?.used ?? (evaluated ? reservation.used : Math.max(0, reservation.used - task.creditCost));
+      const weeklyAiHelp = buildPublicAiAllowance({
+        allowance,
+        used: usedAfterSettlement,
+        remaining: Math.max(0, allowance - usedAfterSettlement),
+        refreshesAt: period.refreshesAt,
+      });
+      if (!evaluated) {
+        sendJson(res, 200, {
+          evaluated: false,
+          retryable: true,
+          message: "StudentOS could not evaluate this test right now. Your answers are safe. Please try again.",
+          weeklyAiHelp,
+          state: publicState(state, persistence),
+          secretsPrinted: false,
+        });
+        return;
+      }
+      applyStudyTestEvaluation({ state, item, session: testSession, evaluation: result.evaluation, answerSheet });
+      await repository.saveState(session, state);
+      sendJson(res, 200, {
+        evaluated: true,
+        testSession: publicTestSession(testSession),
+        evaluation: result.evaluation,
+        weeklyAiHelp,
+        state: publicState(state, persistence),
+        message: "Your result is ready.",
+        secretsPrinted: false,
+      });
+      return;
+    } finally {
+      studyTestEvaluationsInFlight.delete(inFlightKey);
+    }
   }
 
   const studyTestMatch = url.pathname.match(/^\/api\/study\/tests\/([^/]+)$/);

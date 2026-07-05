@@ -250,7 +250,7 @@ function rowForCollection(key, item, userId) {
     };
   }
   if (key === "testSessions") {
-    const persistedStatus = ["submitted_pending_evaluation", "ready_for_evaluation"].includes(item.status)
+    const persistedStatus = ["submitted_pending_evaluation", "ready_for_evaluation", "evaluated"].includes(item.status)
       ? "completed"
       : item.status === "time_expired" ? "abandoned" : "open";
     return {
