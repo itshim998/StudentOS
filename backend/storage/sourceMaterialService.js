@@ -228,7 +228,7 @@ export function chunkExtractedText(text, { maxChars = 900, overlapChars = 120 } 
   return chunks;
 }
 
-export function createSourceMaterialRecord({ session, course, courseId, title, file, config, extraction, artifactKind = "material" }) {
+export function createSourceMaterialRecord({ session, course, courseId, title, file, config, extraction, artifactKind = "material", contextKind = null }) {
   const sourceId = `src_upload_${Date.now()}_${randomUUID().slice(0, 8)}`;
   const validation = validateSourceUpload({
     filename: file.filename,
@@ -256,6 +256,7 @@ export function createSourceMaterialRecord({ session, course, courseId, title, f
     kind: "uploaded_file",
     sourceType: "uploaded_file",
     artifactKind,
+    contextKind: contextKind || (artifactKind === "material" ? "study_material" : artifactKind),
     filename: validation.filename,
     mimeType: validation.mimeType,
     sizeBytes: validation.sizeBytes,

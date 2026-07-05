@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getAiProviderConfig } from "./providerConfig.js";
 import { runProviderFallback } from "./providers.js";
+import { isReadableStudyMaterial } from "../domain/academicContextKinds.js";
 
 const MAX_CONTENT_LENGTH = 14_000;
 
@@ -45,7 +46,7 @@ export function relatedMaterialsForTodo(state, item) {
     .flatMap((value) => clean(value, 300).toLowerCase().split(/[^a-z0-9]+/))
     .filter((value) => value.length >= 4);
   return (state.sourceMaterials || [])
-    .filter((source) => !source.deletedAt && source.academicContextIncluded === true)
+    .filter((source) => !source.deletedAt && source.academicContextIncluded === true && isReadableStudyMaterial(source))
     .map((source) => {
       let score = 0;
       if (item.generated_material_id && source.id === item.generated_material_id) score += 100;
@@ -134,6 +135,8 @@ export async function generateStudyMaterial({ state, item, now = new Date(), pro
     kind: "generated_study_material",
     sourceType: "generated_study_material",
     artifactKind: "material",
+    materialKind: "generated_study_material",
+    contextKind: "generated_study_material",
     source: "studentos_generated",
     origin: "studentos_generated",
     status: "ready",

@@ -1087,6 +1087,12 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   const uploadedCard = page.locator(".academic-context-card").filter({ hasText: "E2E quadratics note" });
   await expect(uploadedCard).toContainText("Manual upload");
   await expect(uploadedCard.getByRole("img", { name: "PDF document preview placeholder" })).toBeVisible();
+  await uploadedCard.getByRole("button", { name: "Open E2E quadratics note" }).click();
+  await expect(page.locator("#academic-pdf-viewer")).toBeVisible();
+  await expect(page.locator("#academic-pdf-viewer-title")).toHaveText("E2E quadratics note");
+  await expect(page.locator("#academic-pdf-viewer-object")).toHaveAttribute("data", /^blob:/);
+  await page.getByRole("button", { name: "Close document viewer" }).click();
+  await expect(page.locator("#academic-pdf-viewer")).toBeHidden();
   await uploadedCard.getByRole("button", { name: /Ask StudentOS about E2E quadratics note/ }).click();
   await expect(page.locator("#ai-panel")).toBeVisible();
   await expect(page.locator("#ai-message")).toHaveValue(/Explain this source/i);
@@ -1855,7 +1861,7 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
         scored_marks: 4,
         percentage: 66.67,
         question_results: [
-          { question_number: 1, marks_awarded: 2, max_marks: 2, feedback: "Correctly identified net force.", correction: "Keep stating that force is a vector sum." },
+          { question_number: 1, marks_awarded: 2, max_marks: 2, feedback: "Correctly identified net force.", correction: "Keep stating that net force combines all forces and their directions." },
           { question_number: 2, marks_awarded: 2, max_marks: 4, feedback: "The answer names the law but needs fuller reasoning.", correction: "Explain that acceleration is proportional to net force and inversely proportional to mass." },
         ],
         strengths: ["Identified the central force idea"],
@@ -1900,7 +1906,7 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
   await expect(page.getByRole("link", { name: "Open material" })).toBeVisible();
 
   await page.locator(".study-queue-item").first().click();
-  await expect(page.locator(".study-workspace")).toContainText("StudentOS does not have a material for this item yet.");
+  await expect(page.locator(".study-workspace")).toContainText("No study material is available for this task yet.");
   await page.getByRole("button", { name: "Generate study material" }).click();
   await expect(page.locator(".study-generated-material")).toContainText("Core lesson");
   await expect(page.locator(".study-workspace")).toContainText("saved to Academic Context", { ignoreCase: true });

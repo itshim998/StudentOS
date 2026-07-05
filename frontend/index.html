@@ -524,7 +524,7 @@
                       <option value="syllabus">Syllabus</option>
                       <option value="exam_schedule">Exam schedule</option>
                     </select>
-                    <small id="source-kind-help" class="form-field-help">Assignments have deadlines. Other PDFs stay ready for study.</small>
+                    <small id="source-kind-help" class="form-field-help">Assignments require deadlines. Each PDF keeps the type you choose.</small>
                   </label>
                   <label for="source-title">
                     <span>Title</span>
@@ -864,6 +864,25 @@
           <button id="academic-context-delete-cancel" class="secondary-button" type="button" autofocus>Keep it</button>
           <button id="academic-context-delete-confirm" class="primary-button danger-action" type="button">Delete permanently</button>
         </div>
+      </div>
+    </dialog>
+
+    <dialog id="academic-pdf-viewer" class="academic-pdf-viewer" aria-labelledby="academic-pdf-viewer-title">
+      <div class="academic-pdf-viewer-shell">
+        <header class="academic-pdf-viewer-header">
+          <div>
+            <p class="eyebrow">Academic Context</p>
+            <h3 id="academic-pdf-viewer-title">Document</h3>
+          </div>
+          <button id="academic-pdf-viewer-close" class="icon-button" type="button" aria-label="Close document viewer">X</button>
+        </header>
+        <p id="academic-pdf-viewer-status" class="academic-pdf-viewer-status" role="status">Opening document...</p>
+        <object id="academic-pdf-viewer-object" class="academic-pdf-viewer-object" type="application/pdf" aria-label="PDF document" hidden>
+          <div class="academic-pdf-viewer-fallback">
+            <p>This browser cannot show the PDF inside StudentOS.</p>
+            <a id="academic-pdf-viewer-fallback" class="secondary-button" target="_blank" rel="noopener noreferrer">Open in new tab</a>
+          </div>
+        </object>
       </div>
     </dialog>
   </div>

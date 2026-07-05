@@ -83,7 +83,7 @@ for (const copy of [
   "Study the next item from your plan, then check yourself when you are ready.",
   "Generate today’s TO-DO list first.",
   "Choose what you want to study now.",
-  "StudentOS does not have a material for this item yet.",
+  "No study material is available for this task yet.",
   "Generate study material",
   "Mark study done",
   "Generate test",

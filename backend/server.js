@@ -2502,7 +2502,7 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  const studyMaterialOpenMatch = url.pathname.match(/^\/api\/study\/materials\/([^/]+)\/open$/);
+  const studyMaterialOpenMatch = url.pathname.match(/^\/api\/(?:academic-context|study)\/materials\/([^/]+)\/open$/);
   if (req.method === "GET" && studyMaterialOpenMatch) {
     const { session, state } = await getStateContext(req);
     requireDashboardActive(state);
@@ -3425,7 +3425,7 @@ async function handleApi(req, res, url) {
       const material = createSourceMaterialRecord({
         session,
         course,
-        courseId: course.id,
+        courseId: course?.id || null,
         title: contract.title,
         file: {
           ...file,
@@ -3438,18 +3438,17 @@ async function handleApi(req, res, url) {
           status: "extracting",
         },
         artifactKind: contract.kind,
+        contextKind: contract.kind === "material" ? "study_material" : contract.kind,
       });
-      if (repository.useSupabase(session)) {
-        uploadStage = "storage_upload";
-        await runUploadStage(req, uploadStage, () => repository.uploadStorageObject(session, {
-          bucket: material.storageBucket,
-          path: material.storagePath,
-          bytes: file.bytes,
-          mimeType: material.mimeType,
-        }), {
-          timeoutMs: SOURCE_UPLOAD_STAGE_TIMEOUT_MS,
-        });
-      }
+      uploadStage = "storage_upload";
+      await runUploadStage(req, uploadStage, () => repository.uploadStorageObject(session, {
+        bucket: material.storageBucket,
+        path: material.storagePath,
+        bytes: file.bytes,
+        mimeType: material.mimeType,
+      }), {
+        timeoutMs: SOURCE_UPLOAD_STAGE_TIMEOUT_MS,
+      });
 
       uploadStage = "chunk_embed";
       const chunks = extraction.status === "indexed" ? chunkExtractedText(extraction.extractedText) : [];
@@ -3535,7 +3534,7 @@ async function handleApi(req, res, url) {
           filename: material.filename,
           mimeType: material.mimeType,
           sizeBytes: material.sizeBytes,
-          artifactKind: contract.kind,
+          contextKind: material.contextKind,
           assignmentId: assignment?.id || null,
           status: material.status,
           chunkCount: material.chunkCount,

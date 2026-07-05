@@ -809,6 +809,7 @@ function localRetrieval({ state, message, topic, course, limit, fallbackReason =
 class MockStudentOsRepository {
   constructor() {
     this.states = new Map();
+    this.sourceObjects = new Map();
     this.exportPackages = new Map();
     this.deletionExecutionEvidence = [];
     this.operatorAuditEvents = [];
@@ -1104,12 +1105,18 @@ class MockStudentOsRepository {
     return { deleted: true, mode: "mock" };
   }
 
-  async deleteStorageObject() {
-    return { deleted: false, mode: "mock" };
+  async uploadStorageObject(session, { bucket, path, bytes }) {
+    this.sourceObjects.set(`${session.user.id}/${bucket}/${path}`, Buffer.from(bytes));
+    return { uploaded: true, mode: "mock_private_source_storage" };
   }
 
-  async downloadStorageObject() {
-    return { downloaded: false, mode: "mock", bytes: null };
+  async deleteStorageObject(session, { bucket, path }) {
+    return { deleted: this.sourceObjects.delete(`${session.user.id}/${bucket}/${path}`), mode: "mock_private_source_storage" };
+  }
+
+  async downloadStorageObject(session, { bucket, path }) {
+    const bytes = this.sourceObjects.get(`${session.user.id}/${bucket}/${path}`);
+    return { downloaded: Boolean(bytes), mode: "mock_private_source_storage", bytes: bytes ? Buffer.from(bytes) : null };
   }
 
   async saveAiConversation(session, conversation, messages) {
@@ -2219,7 +2226,7 @@ export class StudentOsRepository {
   }
 
   async uploadStorageObject(session, storageObject) {
-    if (!this.useSupabase(session)) return { uploaded: false, mode: "mock" };
+    if (!this.useSupabase(session)) return this.mock.uploadStorageObject(session, storageObject);
     return this.supabase.uploadStorageObject(session, storageObject);
   }
 

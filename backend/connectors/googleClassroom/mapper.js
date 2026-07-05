@@ -559,6 +559,7 @@ function ensureMaterial(state, item, now) {
     title: item.title,
     kind: "classroom_selected_material",
     sourceType: "google_classroom_selected_material",
+    contextKind: "study_material",
     filename: item.title,
     status: selectedContent ? "ready" : "metadata_only",
     contentStatus: selectedContent ? "ready" : unresolvedContentStatus,

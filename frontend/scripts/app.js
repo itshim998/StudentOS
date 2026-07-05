@@ -37,6 +37,7 @@ let studyTestGenerating = false;
 let studyTestCountdown = null;
 let studyTestAutosave = null;
 let studyTestExpiryRefreshPending = false;
+let academicPdfObjectUrl = null;
 const productUploadResults = new Map();
 const ACTION_LOADING_TIMEOUT_MS = 30000;
 const LONG_ACTION_LOADING_TIMEOUT_MS = 60000;
@@ -121,6 +122,12 @@ const els = {
   academicContextDeleteDialog: document.getElementById("academic-context-delete-dialog"),
   academicContextDeleteCancel: document.getElementById("academic-context-delete-cancel"),
   academicContextDeleteConfirm: document.getElementById("academic-context-delete-confirm"),
+  academicPdfViewer: document.getElementById("academic-pdf-viewer"),
+  academicPdfViewerTitle: document.getElementById("academic-pdf-viewer-title"),
+  academicPdfViewerStatus: document.getElementById("academic-pdf-viewer-status"),
+  academicPdfViewerObject: document.getElementById("academic-pdf-viewer-object"),
+  academicPdfViewerFallback: document.getElementById("academic-pdf-viewer-fallback"),
+  academicPdfViewerClose: document.getElementById("academic-pdf-viewer-close"),
   scoreTopicSelect: document.getElementById("score-topic-select"),
   extensionAssignmentSelect: document.getElementById("extension-assignment-select"),
   flowAssignmentSelect: document.getElementById("flow-assignment-select"),
@@ -2315,13 +2322,57 @@ function studyCourseForItem(item) {
     .some((value) => String(value).toLowerCase() === related || String(value).toLowerCase().includes(related) || related.includes(String(value).toLowerCase()))) || null;
 }
 
+function normalizeAcademicContextKind(item = {}) {
+  const payload = item?.payload && typeof item.payload === "object" ? item.payload : {};
+  const aliases = {
+    syllabus: "syllabus",
+    course_outline: "syllabus",
+    material: "study_material",
+    study_material: "study_material",
+    study_materials: "study_material",
+    classroom_selected_material: "study_material",
+    google_classroom_selected_material: "study_material",
+    notes: "study_material",
+    handout: "study_material",
+    reading: "study_material",
+    assignment: "assignment",
+    coursework: "assignment",
+    exam_schedule: "exam_schedule",
+    exam_dates: "exam_schedule",
+    generated_study_material: "generated_study_material",
+    studentos_generated: "generated_study_material",
+    unknown: "unknown",
+  };
+  const recognized = (value) => aliases[String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")] || null;
+  const explicitValues = [
+    item.contextKind, payload.contextKind, item.materialKind, payload.materialKind,
+    item.artifactKind, payload.artifactKind, item.includedAs, payload.includedAs,
+    item.kind, payload.kind, item.sourceType, payload.sourceType, item.source, item.origin,
+  ];
+  if (explicitValues.some((value) => recognized(value) === "generated_study_material")) return "generated_study_material";
+  for (const value of explicitValues) {
+    const kind = recognized(value);
+    if (kind) return kind;
+  }
+  const title = String(item.title || item.filename || payload.title || payload.filename || "").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  if (/syllabus|course_outline/.test(title)) return "syllabus";
+  if (/exam_(?:schedule|dates?)|exam_timetable/.test(title)) return "exam_schedule";
+  if (/assignment|coursework/.test(title)) return "assignment";
+  if (/(?:^|_)notes?(?:_|$)|handout|reading|study_material/.test(title)) return "study_material";
+  return "unknown";
+}
+
+function isReadableStudyMaterial(item) {
+  return ["study_material", "generated_study_material"].includes(normalizeAcademicContextKind(item));
+}
+
 function relatedStudyMaterial(item) {
   if (!item) return null;
   if (item.generated_material_id) {
-    const generated = (state.sourceMaterials || []).find((source) => source.id === item.generated_material_id && !source.deletedAt);
+    const generated = (state.sourceMaterials || []).find((source) => source.id === item.generated_material_id && !source.deletedAt && isReadableStudyMaterial(source));
     if (generated) return generated;
   }
-  const linked = (state.sourceMaterials || []).find((source) => source.todoItemId === item.id && !source.deletedAt);
+  const linked = (state.sourceMaterials || []).find((source) => source.todoItemId === item.id && !source.deletedAt && isReadableStudyMaterial(source));
   if (linked) return linked;
   const course = studyCourseForItem(item);
   const terms = [item.title, item.related_context]
@@ -2330,7 +2381,7 @@ function relatedStudyMaterial(item) {
     .split(/[^a-z0-9]+/)
     .filter((term) => term.length >= 4);
   return (state.sourceMaterials || [])
-    .filter((source) => !source.deletedAt && isIncludedAcademicContextItem(source))
+    .filter((source) => !source.deletedAt && isIncludedAcademicContextItem(source) && isReadableStudyMaterial(source))
     .map((source) => {
       const text = `${source.title || ""} ${source.extractionSummary || ""}`.toLowerCase();
       const courseMatch = course?.id && source.courseId === course.id ? 20 : 0;
@@ -2374,13 +2425,28 @@ function studyMaterialMarkup(material) {
         <h4>${escapeHtml(material.title || "Study material")}</h4>
         ${material.extractedSnippet ? `<p>${escapeHtml(material.extractedSnippet)}</p>` : `<p>This material is ready in Academic Context.</p>`}
       </div>
-      ${url
-        ? `<a class="primary-button" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Open material</a>`
-        : material.isPrivate
-          ? `<button class="primary-button" type="button" data-study-open-material="${escapeHtml(material.id)}">Open material</button>`
+      ${material.isPrivate
+        ? `<button class="primary-button" type="button" data-open-academic-pdf="${escapeHtml(material.id)}" data-pdf-title="${escapeHtml(material.title || "Study material")}">Open material</button>`
+        : url
+          ? `<a class="primary-button" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Open material</a>`
           : ""}
     </article>
   `;
+}
+
+function studyMaterialEmptyCopy(item) {
+  const course = studyCourseForItem(item);
+  const matchesCourse = (record) => !course?.id || !record.courseId || record.courseId === course.id;
+  const sources = (state.sourceMaterials || []).filter((source) => !source.deletedAt && isIncludedAcademicContextItem(source) && matchesCourse(source));
+  const hasSyllabus = sources.some((source) => normalizeAcademicContextKind(source) === "syllabus");
+  const hasExamSchedule = sources.some((source) => normalizeAcademicContextKind(source) === "exam_schedule") ||
+    (state.exams || []).some((exam) => !exam.archived && matchesCourse(exam));
+  if (hasSyllabus && hasExamSchedule) {
+    return "StudentOS has your syllabus and exam date, but not a study handout or notes for this topic.";
+  }
+  if (hasSyllabus) return "StudentOS has your syllabus, but not a study handout or notes for this topic.";
+  if (hasExamSchedule) return "StudentOS has your exam date, but not a study handout or notes for this topic.";
+  return "Add a study handout or notes, or create a concise lesson for this task.";
 }
 
 function currentStudyTestSession(item) {
@@ -2639,8 +2705,8 @@ function renderStudyAndEvaluate() {
           <div class="study-material-area">
             ${material ? studyMaterialMarkup(material) : `
               <div class="study-material-empty">
-                <h4>StudentOS does not have a material for this item yet.</h4>
-                <p>Create a concise lesson for this task and save it to Academic Context.</p>
+                <h4>No study material is available for this task yet.</h4>
+                <p>${escapeHtml(studyMaterialEmptyCopy(selected))}</p>
                 <button class="primary-button" type="button" data-study-generate-material ${studyMaterialGenerating ? "disabled" : ""}>${studyMaterialGenerating ? "Creating material..." : "Generate study material"}</button>
               </div>
             `}
@@ -3105,14 +3171,30 @@ function academicContextTextPreview() {
   return `<div class="academic-context-preview academic-context-text-preview" role="img" aria-label="Generated text material"><span>TEXT</span><small>Study guide</small></div>`;
 }
 
-function academicContextOpenAction(url, title) {
+function academicContextOpenAction(source, title, url = null) {
+  if (source?.isPrivate) {
+    return `<button class="mini-action" type="button" data-open-academic-pdf="${escapeHtml(source.id)}" data-pdf-title="${escapeHtml(title)}" aria-label="Open ${escapeHtml(title)}">Open</button>`;
+  }
   return url ? `<a class="mini-action" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHtml(title)}">Open</a>` : "";
+}
+
+function academicContextKindLabel(source) {
+  return {
+    syllabus: "Syllabus",
+    study_material: "Study material",
+    assignment: "Assignment",
+    exam_schedule: "Exam schedule",
+    generated_study_material: "Generated study material",
+    unknown: "Academic document",
+  }[normalizeAcademicContextKind(source)] || "Academic document";
 }
 
 function academicContextMaterialStatus(source) {
   const status = String(source.status || source.extractionStatus || "").toLowerCase();
   if (source.extractionError || ["failed", "needs_ocr", "needs_attention"].includes(status)) return "Needs attention";
-  if (source.readyForStudy || ["indexed", "ready", "completed"].includes(status)) return "Ready for study";
+  if (source.readyForStudy || ["indexed", "ready", "completed"].includes(status)) {
+    return isReadableStudyMaterial(source) ? "Ready for study" : "Ready for planning";
+  }
   return "Preparing";
 }
 
@@ -3181,11 +3263,11 @@ function renderSources() {
     .filter((assignment) => !assignment.archived && isIncludedAcademicContextItem(assignment))
     .sort(sortStudentWork);
   const allMaterials = (state.sourceMaterials || [])
-    .filter((source) => !source.deletedAt && source.artifactKind !== "assignment" && isIncludedAcademicContextItem(source))
+    .filter((source) => !source.deletedAt && normalizeAcademicContextKind(source) !== "assignment" && isIncludedAcademicContextItem(source))
     .sort((left, right) => classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left));
-  const syllabi = allMaterials.filter((source) => source.artifactKind === "syllabus");
-  const examSchedules = allMaterials.filter((source) => source.artifactKind === "exam_schedule");
-  const materials = allMaterials.filter((source) => !["syllabus", "exam_schedule"].includes(source.artifactKind));
+  const syllabi = allMaterials.filter((source) => normalizeAcademicContextKind(source) === "syllabus");
+  const examSchedules = allMaterials.filter((source) => normalizeAcademicContextKind(source) === "exam_schedule");
+  const materials = allMaterials.filter((source) => ["study_material", "generated_study_material"].includes(normalizeAcademicContextKind(source)));
   const courseOnly = starterCourseOnlyClassroom();
   const reviewEnabled = currentClassroomPolicy().courseworkReviewEnabled === true;
   const classroomReviewItems = reviewEnabled
@@ -3235,7 +3317,7 @@ function renderSources() {
           </div>
           <div class="tag-row">${tag(status, status === "Overdue" ? "urgent" : status === "Due soon" ? "medium" : "source")}</div>
           <div class="source-action-row">
-            ${academicContextOpenAction(assignment.alternateLink || source?.linkUrl, assignment.title)}
+            ${academicContextOpenAction(source, assignment.title, assignment.alternateLink || source?.linkUrl)}
             <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}" aria-label="Ask StudentOS about ${escapeHtml(assignment.title)}">Ask StudentOS</button>
             <button class="mini-action danger-action" type="button" data-delete-context-kind="assignment" data-delete-context-id="${escapeHtml(assignment.id)}" aria-label="Delete ${escapeHtml(assignment.title)}">Delete</button>
           </div>
@@ -3260,13 +3342,13 @@ function renderSources() {
           </div>
           <div class="academic-context-card-meta academic-context-material-meta">
             <span><small>Origin</small><strong>${escapeHtml(origin)}</strong></span>
-            <span><small>Included as</small><strong>${generated ? "Generated study material" : "Selected material"}</strong></span>
+            <span><small>Included as</small><strong>${escapeHtml(academicContextKindLabel(source))}</strong></span>
           </div>
-          <div class="tag-row">${tag(readiness, readiness === "Needs attention" ? "urgent" : readiness === "Preparing" ? "medium" : "source")}</div>
+          <div class="tag-row">${tag(readiness, readiness === "Needs attention" ? "urgent" : readiness === "Preparing" ? "medium" : "source")}${generated ? tag("Generated by StudentOS", "source") : ""}</div>
           <div class="source-action-row">
             ${generated
               ? `<button class="mini-action" type="button" data-open-generated-study="${escapeHtml(source.todoItemId || "")}">View material</button>`
-              : academicContextOpenAction(source.linkUrl || source.alternateLink, source.title)}
+              : academicContextOpenAction(source, source.title, source.linkUrl || source.alternateLink)}
             <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}" aria-label="Ask StudentOS about ${escapeHtml(source.title)}">Ask StudentOS</button>
             <button class="mini-action danger-action" type="button" data-delete-context-kind="material" data-delete-context-id="${escapeHtml(source.id)}" aria-label="Delete ${escapeHtml(source.title)}">Delete</button>
           </div>
@@ -4295,24 +4377,47 @@ async function refreshStudyTestSession(sessionId) {
   }
 }
 
-async function openPrivateStudyMaterial(materialId) {
-  const popup = window.open("", "_blank", "noopener,noreferrer");
+function releaseAcademicPdfObjectUrl() {
+  if (!academicPdfObjectUrl) return;
+  URL.revokeObjectURL(academicPdfObjectUrl);
+  academicPdfObjectUrl = null;
+}
+
+function closeAcademicPdfViewer() {
+  const dialog = els.academicPdfViewer;
+  if (!dialog) return;
+  if (typeof dialog.close === "function" && dialog.open) dialog.close();
+  else dialog.removeAttribute("open");
+}
+
+async function openAcademicPdf(materialId, title = "Academic Context PDF") {
+  const dialog = els.academicPdfViewer;
+  if (!dialog) return;
+  releaseAcademicPdfObjectUrl();
+  els.academicPdfViewerTitle.textContent = title;
+  els.academicPdfViewerStatus.textContent = "Opening document...";
+  els.academicPdfViewerStatus.hidden = false;
+  els.academicPdfViewerObject.hidden = true;
+  els.academicPdfViewerObject.removeAttribute("data");
+  els.academicPdfViewerFallback.removeAttribute("href");
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
   try {
     const headers = {};
     if (authSession?.access_token) headers.Authorization = `Bearer ${authSession.access_token}`;
-    const response = await fetch(apiUrl(`/api/study/materials/${encodeURIComponent(materialId)}/open`), { headers });
+    const response = await fetch(apiUrl(`/api/academic-context/materials/${encodeURIComponent(materialId)}/open`), { headers });
     if (!response.ok) {
       const body = await readJsonResponse(response, "This material could not be opened.");
       throw new Error(studentFacingRequestError(body.error || "This material could not be opened.", response.status));
     }
-    const objectUrl = URL.createObjectURL(await response.blob());
-    if (popup) popup.location = objectUrl;
-    else window.open(objectUrl, "_blank", "noopener,noreferrer");
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    academicPdfObjectUrl = URL.createObjectURL(await response.blob());
+    els.academicPdfViewerFallback.href = academicPdfObjectUrl;
+    els.academicPdfViewerObject.data = academicPdfObjectUrl;
+    els.academicPdfViewerObject.hidden = false;
+    els.academicPdfViewerStatus.hidden = true;
   } catch (error) {
-    popup?.close();
-    studyWorkspaceMessage = error.message;
-    renderStudyAndEvaluate();
+    els.academicPdfViewerStatus.textContent = error.message;
+    els.academicPdfViewerStatus.hidden = false;
   }
 }
 
@@ -4339,9 +4444,15 @@ async function addSource(event) {
         method: "POST",
         body: form,
       });
+      const readyCopy = {
+        assignment: " is ready for assignment planning.",
+        material: " is ready for study.",
+        syllabus: " is ready for course planning.",
+        exam_schedule: " is ready for exam planning.",
+      }[kind] || " is ready in Academic Context.";
       setResult(els.sourceResult, `
         <strong>Added to Academic Context.</strong>
-        <p>${escapeHtml(result.material.title)}${result.material.extractionError ? " was added and needs attention before it is ready for study." : " is ready for study."}</p>
+        <p>${escapeHtml(result.material.title)}${result.material.extractionError ? " was added and needs attention." : readyCopy}</p>
       `);
       formElement.reset();
       clearAcademicContextFieldMessages();
@@ -5206,9 +5317,9 @@ function wireEvents() {
       setView("study");
       return;
     }
-    const openStudyMaterial = event.target.closest("[data-study-open-material]");
-    if (openStudyMaterial) {
-      openPrivateStudyMaterial(openStudyMaterial.dataset.studyOpenMaterial);
+    const openAcademicPdfButton = event.target.closest("[data-open-academic-pdf]");
+    if (openAcademicPdfButton) {
+      openAcademicPdf(openAcademicPdfButton.dataset.openAcademicPdf, openAcademicPdfButton.dataset.pdfTitle);
       return;
     }
     const generateStudyMaterialButton = event.target.closest("[data-study-generate-material]");
@@ -5384,6 +5495,11 @@ function wireEvents() {
     if (button) {
       handleAiContextButton(button);
     }
+  });
+  els.academicPdfViewerClose?.addEventListener("click", closeAcademicPdfViewer);
+  els.academicPdfViewer?.addEventListener("close", () => {
+    els.academicPdfViewerObject?.removeAttribute("data");
+    releaseAcademicPdfObjectUrl();
   });
   document.querySelectorAll(".verb-tab").forEach((button) => {
     button.addEventListener("click", () => setVerb(button.dataset.verb));

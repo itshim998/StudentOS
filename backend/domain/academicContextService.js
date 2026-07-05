@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isAcademicContextRecord, isClassroomRecord } from "../connectors/googleClassroom/mapper.js";
+import { normalizeAcademicContextKind } from "./academicContextKinds.js";
 
 export const ACADEMIC_CONTEXT_ARTIFACT_KINDS = Object.freeze([
   "assignment",
@@ -176,7 +177,7 @@ function contextFingerprintPayload(context) {
     syllabi: pick(context.syllabi, ["id", "courseId", "title", "units", "sourceMaterialId", "updatedAt"]),
     exams: pick(context.exams, ["id", "courseId", "title", "examDate", "examTime", "marksWeightage", "notes", "updatedAt"]),
     assignments: pick(context.assignments, ["id", "courseId", "title", "description", "dueAt", "dueDate", "status", "handedIn", "updatedAt"]),
-    materials: pick(context.materials, ["id", "courseId", "title", "artifactKind", "status", "contentStatus", "extractedText", "extractionSummary", "chunkCount", "indexedAt", "updatedAt"]),
+    materials: pick(context.materials, ["id", "courseId", "title", "contextKind", "artifactKind", "status", "contentStatus", "extractedText", "extractionSummary", "chunkCount", "indexedAt", "updatedAt"]),
   };
 }
 
@@ -325,6 +326,7 @@ export function buildPreparedAcademicContextCapsule(state = {}) {
       courseId: material.courseId || null,
       courseTitle: courseById.get(String(material.courseId))?.title || null,
       title: material.title,
+      contextKind: normalizeAcademicContextKind(material),
       artifactKind: material.artifactKind || "material",
       summary: compactText(material.extractedText || material.extractionSummary, 1200),
       readyForStudy: usableSourceContent(material),
@@ -541,6 +543,7 @@ function manualAssignmentStatus(dueAt, now = new Date()) {
 export function linkManualAcademicContextUpload(state, material, contract, { now = new Date() } = {}) {
   const timestamp = now.toISOString();
   Object.assign(material, {
+    contextKind: contract.kind === "material" ? "study_material" : contract.kind,
     artifactKind: contract.kind,
     materialKind: contract.kind,
     origin: "manual_upload",
