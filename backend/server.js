@@ -104,6 +104,13 @@ import {
 import { savePersistentClassroomToken } from "./connectors/googleClassroom/tokenStore.js";
 import { runStudentOsVerb } from "./ai/studentBrainAdapter.js";
 import { generateDailyTodoPlan } from "./ai/dailyTodoService.js";
+import {
+  ensureDailyTodoStudyState,
+  findDailyTodoItem,
+  generateStudyMaterial,
+  relatedMaterialsForTodo,
+  updateDailyTodoStudyStatus,
+} from "./ai/studyMaterialService.js";
 import { getSafeAiProviderStatus, getAiProviderConfig } from "./ai/providerConfig.js";
 import {
   AI_ALLOWANCE_COPY,
@@ -381,6 +388,22 @@ function sendPrivateDownload(res, bytes, filename = "studentos-export.json") {
   res.end(bytes);
 }
 
+function sendPrivateMaterial(res, bytes, filename = "study-material.pdf", mimeType = "application/pdf") {
+  const safeFilename = String(filename || "study-material.pdf").replace(/[^a-zA-Z0-9._ -]/g, "_").slice(0, 160);
+  const headers = {
+    "Content-Type": mimeType || "application/pdf",
+    "Content-Disposition": `inline; filename="${safeFilename}"`,
+    "Content-Length": String(bytes.length),
+    "Cache-Control": "private, no-store, max-age=0",
+    "X-Content-Type-Options": "nosniff",
+    "X-Request-Id": res.requestId || "",
+    "Vary": "Origin",
+  };
+  if (res.corsOrigin) headers["Access-Control-Allow-Origin"] = res.corsOrigin;
+  res.writeHead(200, headers);
+  res.end(bytes);
+}
+
 function sendHtml(res, status, html) {
   res.writeHead(status, {
     "Content-Type": "text/html; charset=utf-8",
@@ -550,7 +573,7 @@ function publicState(state, persistence) {
     assignmentInsights: getAssignmentInsights(state),
     todayNextActions: getTodayNextActions(state),
     academicContext: getAcademicContextReadiness(state),
-    todayPlan: state.studentProfile?.dailyTodoPlan || null,
+    todayPlan: ensureDailyTodoStudyState(state.studentProfile?.dailyTodoPlan) || null,
     classroomDueWork: dueWork,
     todayDoNow: getClassroomTodayAction(state, {
       includeDiscoveredReview: classroomPolicy.courseworkReviewEnabled === true && classroomPolicy.autoCheckEnabled === true,
@@ -1977,6 +2000,157 @@ async function handleApi(req, res, url) {
       state: publicState(state, persistence),
       secretsPrinted: false,
     });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/study/status") {
+    const body = await readJsonBody(req);
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    const item = updateDailyTodoStudyStatus(state, body.itemId, body.status);
+    await repository.saveState(session, state);
+    sendJson(res, 200, {
+      item,
+      message: body.status === "done" ? "Study marked done." : "Study started.",
+      state: publicState(state, persistence),
+      testSessionStarted: false,
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/study/material") {
+    const body = await readJsonBody(req);
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    assertProductFeatureAccess(state, FEATURE_KEYS.ASSISTANT);
+    enforceRateLimit(req, session, "ai_call");
+    const item = findDailyTodoItem(state, body.itemId);
+    if (!item) {
+      const error = new Error("That item is no longer in today’s study queue.");
+      error.status = 404;
+      throw error;
+    }
+    const existing = relatedMaterialsForTodo(state, item).find((material) => material.todoItemId === item.id);
+    if (existing) {
+      item.generated_material_id = existing.id;
+      await repository.saveState(session, state);
+      sendJson(res, 200, {
+        generated: true,
+        reused: true,
+        material: publicState(state, persistence).sourceMaterials.find((source) => source.id === existing.id),
+        state: publicState(state, persistence),
+        secretsPrinted: false,
+      });
+      return;
+    }
+    const activePlanKey = resolveEntitlements(state).activePlanKey;
+    const allowance = getAiWeeklyAllowance(activePlanKey);
+    const period = getAiWeeklyPeriod();
+    const task = classifyAiTask({ verb: "Make", message: `Create study material for ${item.title}` });
+    let reservation;
+    try {
+      reservation = await repository.reserveAiWeeklyAllowance(session, {
+        planTier: activePlanKey,
+        periodKey: period.periodKey,
+        allowance,
+        actionType: task.actionType,
+        creditCost: task.creditCost,
+        requestId: req.requestId,
+        metadata: { workflow: "study_material", todoItemId: item.id },
+      });
+    } catch (error) {
+      logger.warn("study_material.allowance_reservation_failed", { requestId: req.requestId, status: error.status || 500 });
+      sendJson(res, 200, {
+        generated: false,
+        retryable: true,
+        message: AI_ALLOWANCE_COPY.unavailable,
+        state: publicState(state, persistence),
+        secretsPrinted: false,
+      });
+      return;
+    }
+    if (!reservation.allowed) {
+      sendJson(res, 200, {
+        generated: false,
+        allowanceLimited: true,
+        message: `${AI_ALLOWANCE_COPY.exhausted} ${AI_ALLOWANCE_COPY.exhaustedNextStep}`,
+        weeklyAiHelp: buildPublicAiAllowance({ ...reservation, refreshesAt: period.refreshesAt, blocked: true }),
+        state: publicState(state, persistence),
+        secretsPrinted: false,
+      });
+      return;
+    }
+    let result;
+    try {
+      result = await generateStudyMaterial({ state, item });
+    } catch (error) {
+      await repository.settleAiWeeklyAllowance(session, { requestId: req.requestId, status: "refunded" }).catch(() => null);
+      throw error;
+    }
+    const generated = result.generationSucceeded === true && Boolean(result.material);
+    const settlement = await repository.settleAiWeeklyAllowance(session, {
+      requestId: req.requestId,
+      status: generated ? "charged" : "refunded",
+    }).catch((error) => {
+      logger.warn("study_material.allowance_settlement_failed", { requestId: req.requestId, status: error.status || 500 });
+      return null;
+    });
+    const usedAfterSettlement = settlement?.used ?? (generated ? reservation.used : Math.max(0, reservation.used - task.creditCost));
+    const weeklyAiHelp = buildPublicAiAllowance({
+      allowance,
+      used: usedAfterSettlement,
+      remaining: Math.max(0, allowance - usedAfterSettlement),
+      refreshesAt: period.refreshesAt,
+    });
+    if (!generated) {
+      sendJson(res, 200, {
+        generated: false,
+        retryable: true,
+        message: "StudentOS could not create this study material right now. Please try again.",
+        weeklyAiHelp,
+        state: publicState(state, persistence),
+        secretsPrinted: false,
+      });
+      return;
+    }
+    state.sourceMaterials.push(result.material);
+    item.generated_material_id = result.material.id;
+    if (item.study_status === "not_started") item.study_status = "studying";
+    await repository.saveState(session, state);
+    const safeState = publicState(state, persistence);
+    sendJson(res, 200, {
+      generated: true,
+      material: safeState.sourceMaterials.find((source) => source.id === result.material.id),
+      weeklyAiHelp,
+      state: safeState,
+      message: "Study material created and saved to Academic Context.",
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  const studyMaterialOpenMatch = url.pathname.match(/^\/api\/study\/materials\/([^/]+)\/open$/);
+  if (req.method === "GET" && studyMaterialOpenMatch) {
+    const { session, state } = await getStateContext(req);
+    requireDashboardActive(state);
+    const materialId = decodeURIComponent(studyMaterialOpenMatch[1]);
+    const material = (state.sourceMaterials || []).find((source) => source.id === materialId && !source.deletedAt && isAcademicContextRecord(source));
+    if (!material || !material.storageBucket || !material.storagePath) {
+      const error = new Error("This material is not available to open here.");
+      error.status = 404;
+      throw error;
+    }
+    const download = await repository.downloadStorageObject(session, {
+      bucket: material.storageBucket,
+      path: material.storagePath,
+    });
+    if (!download?.bytes) {
+      const error = new Error("This material is not available to open here.");
+      error.status = 404;
+      throw error;
+    }
+    sendPrivateMaterial(res, download.bytes, material.filename || `${material.title || "study-material"}.pdf`, material.mimeType || "application/pdf");
     return;
   }
 

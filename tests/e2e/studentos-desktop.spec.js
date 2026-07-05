@@ -1002,7 +1002,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("body")).not.toContainText(/Aarav|Grade 10|Quadratics worksheet|Load sample profile|Plan Free/);
   await expectNoVisibleExternalBranding(page, "initial local workspace");
 
-  for (const view of ["Today", "Setup", "Courses", "Academic Context", "Studio", "Account"]) {
+  for (const view of ["Today", "Setup", "Courses", "Academic Context", "Study and Evaluate", "Studio", "Account"]) {
     await clickNav(page, view);
   }
 
@@ -1691,10 +1691,151 @@ test("Essential prepares selected Classroom context and generates Today in one c
   await page.unroute("**/api/bootstrap");
 });
 
+test("Study and Evaluate uses today's queue, saves generated material, and completes study without starting a test", async ({ page }) => {
+  const baseState = await fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json());
+  let studyState = {
+    ...structuredClone(baseState),
+    todayPlan: null,
+    courses: [
+      { id: "course_study_physics", title: "Physics", source: "manual", academicContextIncluded: true, selectionState: "imported" },
+      { id: "course_study_math", title: "Mathematics", source: "manual", academicContextIncluded: true, selectionState: "imported" },
+    ],
+    sourceMaterials: [],
+    testSessions: [],
+  };
+  await page.route("**/api/bootstrap", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify(studyState),
+  }));
+  await page.goto(baseUrl);
+  await clickNav(page, "Study and Evaluate");
+  await expect(page.locator("#view-study")).toContainText("Generate today’s TO-DO list first.");
+  await expect(page.getByRole("button", { name: "Go to Today" })).toBeVisible();
+
+  const today = await page.evaluate(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  });
+  studyState.todayPlan = {
+    date: today,
+    generated_at: new Date().toISOString(),
+    summary: "Physics first, then Mathematics.",
+    items: [
+      {
+        id: "todo_study_physics",
+        title: "Review motion and forces",
+        related_course: "Physics",
+        related_context: "Newton's laws",
+        reason: "The Physics exam is approaching.",
+        time_hint: "45 minutes",
+        priority: "high",
+        study_status: "not_started",
+      },
+      {
+        id: "todo_study_math",
+        title: "Review integration methods",
+        related_course: "Mathematics",
+        related_context: "Integration notes",
+        reason: "Keep the next subject moving.",
+        time_hint: "30 minutes",
+        priority: "medium",
+        study_status: "not_started",
+      },
+    ],
+  };
+  studyState.sourceMaterials = [{
+    id: "source_math_notes",
+    courseId: "course_study_math",
+    title: "Integration notes",
+    artifactKind: "material",
+    status: "ready",
+    readyForStudy: true,
+    linkUrl: "https://example.com/integration-notes",
+    academicContextIncluded: true,
+    selectionState: "imported",
+  }];
+  await page.route("**/api/study/status", async (route) => {
+    const body = route.request().postDataJSON();
+    const item = studyState.todayPlan.items.find((entry) => entry.id === body.itemId);
+    item.study_status = body.status;
+    if (body.status === "done") item.study_completed_at = new Date().toISOString();
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        item,
+        message: body.status === "done" ? "Study marked done." : "Study started.",
+        state: studyState,
+        testSessionStarted: false,
+      }),
+    });
+  });
+  await page.route("**/api/study/material", async (route) => {
+    const generatedMaterial = {
+      id: "source_generated_physics",
+      courseId: "course_study_physics",
+      title: "Review motion and forces",
+      artifactKind: "material",
+      source: "studentos_generated",
+      origin: "studentos_generated",
+      status: "ready",
+      readyForStudy: true,
+      generatedContent: "Study guide: Review motion and forces\n\nWhat to focus on\nNewton's laws and force diagrams.\n\nCore lesson\nConnect net force to acceleration.\n\nStudy steps\n1. Draw a force diagram.\n\nQuick self-check\nExplain the result in your own words.",
+      todoItemId: "todo_study_physics",
+      generatedAt: new Date().toISOString(),
+      academicContextIncluded: true,
+      selectionState: "imported",
+    };
+    studyState.sourceMaterials.push(generatedMaterial);
+    const item = studyState.todayPlan.items[0];
+    item.generated_material_id = generatedMaterial.id;
+    item.study_status = "studying";
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        generated: true,
+        material: generatedMaterial,
+        message: "Study material created and saved to Academic Context.",
+        state: studyState,
+      }),
+    });
+  });
+
+  await page.reload();
+  await clickNav(page, "Study and Evaluate");
+  await expect(page.locator(".study-queue-item")).toHaveCount(2);
+  await expect(page.locator(".study-queue-item").first()).toContainText("Review motion and forces");
+  await expect(page.locator(".study-queue-item").first()).toContainText("45 minutes");
+  await page.locator(".study-queue-item").nth(1).click();
+  await expect(page.locator(".study-workspace")).toContainText("Integration notes");
+  await expect(page.getByRole("link", { name: "Open material" })).toBeVisible();
+
+  await page.locator(".study-queue-item").first().click();
+  await expect(page.locator(".study-workspace")).toContainText("StudentOS does not have a material for this item yet.");
+  await page.getByRole("button", { name: "Generate study material" }).click();
+  await expect(page.locator(".study-generated-material")).toContainText("Core lesson");
+  await expect(page.locator(".study-workspace")).toContainText("saved to Academic Context", { ignoreCase: true });
+
+  await clickNav(page, "Academic Context");
+  await expect(page.locator("#source-list")).toContainText("Generated by StudentOS");
+  await expect(page.locator("#source-list")).toContainText("Review motion and forces");
+  await clickNav(page, "Study and Evaluate");
+  await page.getByRole("button", { name: "Mark study done" }).click();
+  await expect(page.locator(".study-workspace")).toContainText("Study marked done.");
+  await expect(page.getByRole("button", { name: "Generate test" })).toBeVisible();
+  await page.getByRole("button", { name: "Generate test" }).click();
+  await expect(page.locator(".study-workspace")).toContainText("Test generation comes next.");
+  expect(studyState.testSessions).toEqual([]);
+  expect(await page.locator("#view-study").innerText()).not.toMatch(/\b(provider|model|token|storage|database|backend|vector|embedding|chunks?|debug|OAuth scope)\b/i);
+
+  await page.unroute("**/api/study/material");
+  await page.unroute("**/api/study/status");
+  await page.unroute("**/api/bootstrap");
+});
+
 test("responsive surfaces and AI drawer avoid horizontal overflow", async ({ page }) => {
   test.setTimeout(75_000);
   const widths = [1440, 1280, 1024, 768, 430, 390, 360];
-  const views = ["Today", "Setup", "Courses", "Academic Context", "Studio", "Account"];
+  const views = ["Today", "Setup", "Courses", "Academic Context", "Study and Evaluate", "Studio", "Account"];
 
   for (const width of widths) {
     await page.setViewportSize({ width, height: width <= 430 ? 820 : 900 });

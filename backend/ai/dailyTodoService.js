@@ -1,6 +1,7 @@
 import { getPreparedAcademicContextCapsule } from "../domain/academicContextService.js";
 import { getAiProviderConfig } from "./providerConfig.js";
 import { runProviderFallback } from "./providers.js";
+import { ensureDailyTodoStudyState } from "./studyMaterialService.js";
 
 const PRIORITIES = new Set(["high", "medium", "low"]);
 const MAX_ITEMS = 6;
@@ -319,7 +320,7 @@ export async function generateDailyTodoPlan({
   if (["mock", "bridge"].includes(providerConfig.requestedMode)) {
     return {
       generationSucceeded: true,
-      plan: buildDeterministicDailyTodoPlan(input, { now }),
+      plan: ensureDailyTodoStudyState(buildDeterministicDailyTodoPlan(input, { now })),
       input,
     };
   }
@@ -335,7 +336,7 @@ export async function generateDailyTodoPlan({
     const normalized = normalizeDailyTodoPlan(parseProviderJson(result.text), input, { now });
     return {
       generationSucceeded: true,
-      plan: isGroundedDailyTodoPlan(normalized, input) ? normalized : buildDeterministicDailyTodoPlan(input, { now }),
+      plan: ensureDailyTodoStudyState(isGroundedDailyTodoPlan(normalized, input) ? normalized : buildDeterministicDailyTodoPlan(input, { now })),
       input,
     };
   } catch {
