@@ -111,6 +111,15 @@ import {
   relatedMaterialsForTodo,
   updateDailyTodoStudyStatus,
 } from "./ai/studyMaterialService.js";
+import {
+  findStudyTestSession,
+  finishStudyTestSession,
+  generateStudyTest,
+  publicTestSession,
+  saveStudyTestAnswers,
+  startStudyTestSession,
+  synchronizeTestSession,
+} from "./ai/studyTestService.js";
 import { getSafeAiProviderStatus, getAiProviderConfig } from "./ai/providerConfig.js";
 import {
   AI_ALLOWANCE_COPY,
@@ -510,7 +519,7 @@ function publicState(state, persistence) {
     topics,
     assignments,
     roadmap,
-    testSessions: (state.testSessions || []).filter(isAcademicContextRecord),
+    testSessions: (state.testSessions || []).filter(isAcademicContextRecord).map((session) => publicTestSession(session)),
     revisionEvents: (state.revisionEvents || []).filter(isAcademicContextRecord),
     tutorLessons: (state.tutorLessons || []).filter(isAcademicContextRecord),
     assignmentAutomationContracts: (state.assignmentAutomationContracts || []).filter(isAcademicContextRecord),
@@ -2125,6 +2134,203 @@ async function handleApi(req, res, url) {
       weeklyAiHelp,
       state: safeState,
       message: "Study material created and saved to Academic Context.",
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/study/test") {
+    const body = await readJsonBody(req);
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    assertProductFeatureAccess(state, FEATURE_KEYS.ASSISTANT);
+    enforceRateLimit(req, session, "ai_call");
+    const item = findDailyTodoItem(state, body.itemId);
+    if (!item) {
+      const error = new Error("That item is no longer in today’s study queue.");
+      error.status = 404;
+      throw error;
+    }
+    if (item.study_status !== "done") {
+      const error = new Error("Mark this study item done before generating its test.");
+      error.status = 409;
+      throw error;
+    }
+    const existing = findStudyTestSession(state, { todoItemId: item.id });
+    if (existing) {
+      const previousStatus = existing.status;
+      synchronizeTestSession(existing);
+      if (existing.status !== previousStatus) await repository.saveState(session, state);
+      sendJson(res, 200, {
+        generated: true,
+        reused: true,
+        testSession: publicTestSession(existing),
+        state: publicState(state, persistence),
+        secretsPrinted: false,
+      });
+      return;
+    }
+    const activePlanKey = resolveEntitlements(state).activePlanKey;
+    const allowance = getAiWeeklyAllowance(activePlanKey);
+    const period = getAiWeeklyPeriod();
+    const task = classifyAiTask({ verb: "Make", message: `Create a test for ${item.title}` });
+    let reservation;
+    try {
+      reservation = await repository.reserveAiWeeklyAllowance(session, {
+        planTier: activePlanKey,
+        periodKey: period.periodKey,
+        allowance,
+        actionType: task.actionType,
+        creditCost: task.creditCost,
+        requestId: req.requestId,
+        metadata: { workflow: "study_test", todoItemId: item.id },
+      });
+    } catch (error) {
+      logger.warn("study_test.allowance_reservation_failed", { requestId: req.requestId, status: error.status || 500 });
+      sendJson(res, 200, {
+        generated: false,
+        retryable: true,
+        message: AI_ALLOWANCE_COPY.unavailable,
+        state: publicState(state, persistence),
+        secretsPrinted: false,
+      });
+      return;
+    }
+    if (!reservation.allowed) {
+      sendJson(res, 200, {
+        generated: false,
+        allowanceLimited: true,
+        message: `${AI_ALLOWANCE_COPY.exhausted} ${AI_ALLOWANCE_COPY.exhaustedNextStep}`,
+        weeklyAiHelp: buildPublicAiAllowance({ ...reservation, refreshesAt: period.refreshesAt, blocked: true }),
+        state: publicState(state, persistence),
+        secretsPrinted: false,
+      });
+      return;
+    }
+    let result;
+    try {
+      result = await generateStudyTest({ state, item });
+    } catch (error) {
+      await repository.settleAiWeeklyAllowance(session, { requestId: req.requestId, status: "refunded" }).catch(() => null);
+      throw error;
+    }
+    const generated = result.generationSucceeded === true && Boolean(result.session);
+    const settlement = await repository.settleAiWeeklyAllowance(session, {
+      requestId: req.requestId,
+      status: generated ? "charged" : "refunded",
+    }).catch((error) => {
+      logger.warn("study_test.allowance_settlement_failed", { requestId: req.requestId, status: error.status || 500 });
+      return null;
+    });
+    const usedAfterSettlement = settlement?.used ?? (generated ? reservation.used : Math.max(0, reservation.used - task.creditCost));
+    const weeklyAiHelp = buildPublicAiAllowance({
+      allowance,
+      used: usedAfterSettlement,
+      remaining: Math.max(0, allowance - usedAfterSettlement),
+      refreshesAt: period.refreshesAt,
+    });
+    if (!generated) {
+      sendJson(res, 200, {
+        generated: false,
+        retryable: true,
+        message: "StudentOS could not create this test right now. Please try again.",
+        weeklyAiHelp,
+        state: publicState(state, persistence),
+        secretsPrinted: false,
+      });
+      return;
+    }
+    state.testSessions.push(result.session);
+    await repository.saveState(session, state);
+    sendJson(res, 200, {
+      generated: true,
+      testSession: publicTestSession(result.session),
+      weeklyAiHelp,
+      state: publicState(state, persistence),
+      message: "Your test is ready. Review the warning before you start.",
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  const studyTestStartMatch = url.pathname.match(/^\/api\/study\/tests\/([^/]+)\/start$/);
+  if (req.method === "POST" && studyTestStartMatch) {
+    const body = await readJsonBody(req);
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    const testSession = findStudyTestSession(state, { sessionId: decodeURIComponent(studyTestStartMatch[1]) });
+    if (!testSession) {
+      const error = new Error("This test is no longer available.");
+      error.status = 404;
+      throw error;
+    }
+    startStudyTestSession(testSession, body.answerMode);
+    await repository.saveState(session, state);
+    sendJson(res, 200, {
+      testSession: publicTestSession(testSession),
+      state: publicState(state, persistence),
+      message: "Test started. The timer cannot be paused.",
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  const studyTestFinishMatch = url.pathname.match(/^\/api\/study\/tests\/([^/]+)\/finish$/);
+  if (req.method === "POST" && studyTestFinishMatch) {
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    const testSession = findStudyTestSession(state, { sessionId: decodeURIComponent(studyTestFinishMatch[1]) });
+    if (!testSession) {
+      const error = new Error("This test is no longer available.");
+      error.status = 404;
+      throw error;
+    }
+    finishStudyTestSession(testSession);
+    await repository.saveState(session, state);
+    sendJson(res, 200, {
+      testSession: publicTestSession(testSession),
+      state: publicState(state, persistence),
+      message: testSession.status === "time_expired"
+        ? "Time is up. This attempt is locked."
+        : testSession.answerMode === "handwritten"
+          ? "Your test is ready for handwritten submission."
+          : "Submitted for evaluation.",
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  const studyTestMatch = url.pathname.match(/^\/api\/study\/tests\/([^/]+)$/);
+  if (studyTestMatch && ["GET", "PATCH"].includes(req.method)) {
+    const { session, state, persistence } = await getStateContext(req);
+    requireDashboardActive(state);
+    const testSession = findStudyTestSession(state, { sessionId: decodeURIComponent(studyTestMatch[1]) });
+    if (!testSession) {
+      const error = new Error("This test is no longer available.");
+      error.status = 404;
+      throw error;
+    }
+    const previousStatus = testSession.status;
+    synchronizeTestSession(testSession);
+    if (req.method === "PATCH") {
+      if (testSession.status === "time_expired") {
+        await repository.saveState(session, state);
+        sendJson(res, 409, {
+          error: "Time is up. This attempt is locked.",
+          testSession: publicTestSession(testSession),
+          state: publicState(state, persistence),
+          secretsPrinted: false,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      saveStudyTestAnswers(testSession, body.answers);
+    }
+    if (req.method === "PATCH" || testSession.status !== previousStatus) await repository.saveState(session, state);
+    sendJson(res, 200, {
+      testSession: publicTestSession(testSession),
+      state: publicState(state, persistence),
+      message: req.method === "PATCH" ? "Answers saved." : null,
       secretsPrinted: false,
     });
     return;

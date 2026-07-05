@@ -87,7 +87,6 @@ for (const copy of [
   "Generate study material",
   "Mark study done",
   "Generate test",
-  "Test generation comes next.",
 ]) assert.match(`${html}\n${app}`, new RegExp(copy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
 assert.match(app, /state\.todayPlan/);
@@ -101,7 +100,7 @@ assert.match(server, /reserveAiWeeklyAllowance[\s\S]*workflow: "study_material"/
 assert.match(server, /settleAiWeeklyAllowance/);
 assert.match(server, /state\.sourceMaterials\.push\(result\.material\)/);
 assert.match(server, /testSessionStarted: false/);
-assert.doesNotMatch(server, /\/api\/study\/test/);
+assert.match(server, /\/api\/study\/test/);
 assert.match(packageJson, /test:phase2-1/);
 
 const normalStudyUi = `${html.slice(html.indexOf('id="view-study"'), html.indexOf('id="view-studio"'))}\n${app.slice(app.indexOf("function currentStudyPlan"), app.indexOf("function renderDashboardSummary"))}`;

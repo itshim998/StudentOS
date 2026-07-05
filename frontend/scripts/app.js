@@ -33,6 +33,10 @@ let todayTodoMessage = "";
 let selectedStudyItemId = null;
 let studyWorkspaceMessage = "";
 let studyMaterialGenerating = false;
+let studyTestGenerating = false;
+let studyTestCountdown = null;
+let studyTestAutosave = null;
+let studyTestExpiryRefreshPending = false;
 const productUploadResults = new Map();
 const ACTION_LOADING_TIMEOUT_MS = 30000;
 const LONG_ACTION_LOADING_TIMEOUT_MS = 60000;
@@ -2379,6 +2383,144 @@ function studyMaterialMarkup(material) {
   `;
 }
 
+function currentStudyTestSession(item) {
+  if (!item) return null;
+  return (state.testSessions || []).find((session) => session.todoItemId === item.id) || null;
+}
+
+function studyTestStatusLabel(status) {
+  return {
+    ready_to_start: "Ready to start",
+    in_progress: "In progress",
+    time_expired: "Time expired",
+    submitted_pending_evaluation: "Submitted for evaluation",
+    ready_for_evaluation: "Ready for evaluation",
+  }[status] || humanize(status || "not generated");
+}
+
+function studyTestTimeLeft(deadlineAt) {
+  return Math.max(0, new Date(deadlineAt || 0).getTime() - Date.now());
+}
+
+function studyTestTimerText(milliseconds) {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return hours > 0
+    ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
+    : `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+}
+
+function studyTestSummaryMarkup(paper) {
+  return `
+    <dl class="study-test-summary">
+      <div><dt>Estimated time</dt><dd>${escapeHtml(`${paper.estimated_minutes} minutes`)}</dd></div>
+      <div><dt>Total marks</dt><dd>${escapeHtml(paper.total_marks)}</dd></div>
+      <div><dt>Questions</dt><dd>${paper.questions.length}</dd></div>
+      <div><dt>Topic / course</dt><dd>${escapeHtml(`${paper.topic} / ${paper.course}`)}</dd></div>
+    </dl>
+  `;
+}
+
+function studyTestWarningMarkup(session) {
+  const paper = session.testPaper;
+  return `
+    <section class="study-test-warning" aria-labelledby="study-test-warning-title">
+      <p class="eyebrow">Before you start</p>
+      <h4 id="study-test-warning-title">This test cannot be paused. Start only when you can complete it in one sitting.</h4>
+      ${studyTestSummaryMarkup(paper)}
+      <fieldset class="study-answer-mode">
+        <legend>How will you answer?</legend>
+        <label><input type="radio" name="study-answer-mode" value="typed"> <span><strong>Type answers in StudentOS</strong><small>Your answers will be saved as you work.</small></span></label>
+        <label><input type="radio" name="study-answer-mode" value="handwritten"> <span><strong>Upload handwritten answer sheet later</strong><small>Write on paper while the test remains open here.</small></span></label>
+      </fieldset>
+      <p class="study-test-stays-here">The question paper stays inside StudentOS.</p>
+      <button class="primary-button" type="button" data-study-test-start="${escapeHtml(session.id)}">Start test</button>
+    </section>
+  `;
+}
+
+function studyTestQuestionMarkup(question, session) {
+  const answer = session.answers?.[String(question.question_number)] || "";
+  const choices = question.choices?.length
+    ? `<ol class="study-test-choices" type="A">${question.choices.map((choice) => `<li>${escapeHtml(choice)}</li>`).join("")}</ol>`
+    : "";
+  const answerArea = session.answerMode === "typed"
+    ? `<label class="study-test-answer"><span>Your answer</span><textarea data-study-test-answer="${question.question_number}" rows="${question.type === "long_answer" ? 7 : 4}">${escapeHtml(answer)}</textarea></label>`
+    : "";
+  return `
+    <article class="study-test-question">
+      <header><span>Question ${question.question_number}</span><span>${escapeHtml(humanize(question.type))} · ${question.marks} mark${question.marks === 1 ? "" : "s"}</span></header>
+      <p>${escapeHtml(question.prompt)}</p>
+      ${choices}
+      ${answerArea}
+    </article>
+  `;
+}
+
+function studyTestAttemptMarkup(session) {
+  const paper = session.testPaper;
+  return `
+    <section class="study-test-attempt" data-study-test-session="${escapeHtml(session.id)}">
+      <header class="study-test-attempt-header">
+        <div><p class="eyebrow">Strict test</p><h4>${escapeHtml(paper.test_title)}</h4><p>${escapeHtml(`${paper.topic} · ${paper.course}`)}</p></div>
+        <div class="study-test-timer" aria-live="polite"><small>Time remaining</small><strong data-study-test-timer>${studyTestTimerText(studyTestTimeLeft(session.deadlineAt))}</strong></div>
+      </header>
+      <div class="study-test-instructions"><strong>Instructions</strong><ul>${paper.instructions.map((instruction) => `<li>${escapeHtml(instruction)}</li>`).join("")}</ul></div>
+      ${session.answerMode === "handwritten" ? `<p class="study-handwritten-guidance">After you finish on paper, you will upload your answer sheet for evaluation.</p>` : `<p class="study-test-save-state" data-study-test-save-state>${session.lastSavedAt ? "Answers saved." : "Answers save as you work."}</p>`}
+      <div class="study-test-questions">${paper.questions.map((question) => studyTestQuestionMarkup(question, session)).join("")}</div>
+      <div class="study-test-finish">
+        <p>${session.answerMode === "handwritten" ? "Finish when your paper answers are complete." : "Submit when you have finished every answer."}</p>
+        <button class="primary-button" type="button" data-study-test-finish="${escapeHtml(session.id)}">${session.answerMode === "handwritten" ? "I’ve finished" : "Submit for evaluation"}</button>
+      </div>
+    </section>
+  `;
+}
+
+function studyTestClosedMarkup(session) {
+  const expired = session.status === "time_expired";
+  const handwritten = session.answerMode === "handwritten";
+  const title = expired ? "Time is up. This attempt is locked." : studyTestStatusLabel(session.status);
+  const copy = expired
+    ? (handwritten ? "Your question paper is locked. Your handwritten work can be added during evaluation." : "Your saved answers are locked and ready for the evaluation step.")
+    : handwritten
+      ? "Your handwritten answer sheet can be added during the evaluation step."
+      : "Your answers are saved. Scoring will be completed in the evaluation step.";
+  return `
+    <section class="study-test-closed">
+      <p class="eyebrow">${escapeHtml(studyTestStatusLabel(session.status))}</p>
+      <h4>${escapeHtml(title)}</h4>
+      <p>${escapeHtml(copy)}</p>
+      ${studyTestSummaryMarkup(session.testPaper)}
+    </section>
+  `;
+}
+
+function studyTestMarkup(session) {
+  if (session.status === "ready_to_start") return studyTestWarningMarkup(session);
+  if (session.status === "in_progress") return studyTestAttemptMarkup(session);
+  return studyTestClosedMarkup(session);
+}
+
+function startStudyTestCountdown(session) {
+  if (studyTestCountdown) window.clearInterval(studyTestCountdown);
+  studyTestCountdown = null;
+  if (session?.status !== "in_progress" || !session.deadlineAt) return;
+  const tick = () => {
+    const remaining = studyTestTimeLeft(session.deadlineAt);
+    const timer = els.studyEvaluateContent?.querySelector("[data-study-test-timer]");
+    if (timer) timer.textContent = studyTestTimerText(remaining);
+    if (remaining <= 0) {
+      window.clearInterval(studyTestCountdown);
+      studyTestCountdown = null;
+      refreshStudyTestSession(session.id);
+    }
+  };
+  tick();
+  studyTestCountdown = window.setInterval(tick, 1000);
+}
+
 function studyQueueItemMarkup(item) {
   const selected = item.id === selectedStudyItemId;
   return `
@@ -2411,9 +2553,14 @@ function renderStudyAndEvaluate() {
     `;
     return;
   }
+  if (!selectedStudyItemId) {
+    const activeSession = (state.testSessions || []).find((session) => session.status === "in_progress");
+    if (activeSession && plan.items.some((item) => item.id === activeSession.todoItemId)) selectedStudyItemId = activeSession.todoItemId;
+  }
   if (selectedStudyItemId && !plan.items.some((item) => item.id === selectedStudyItemId)) selectedStudyItemId = null;
   const selected = plan.items.find((item) => item.id === selectedStudyItemId) || null;
   const material = relatedStudyMaterial(selected);
+  const testSession = currentStudyTestSession(selected);
   const status = selected ? studyStatusLabel(selected.study_status) : "";
   els.studyEvaluateContent.innerHTML = `
     <aside class="study-queue" aria-labelledby="study-queue-title">
@@ -2433,30 +2580,32 @@ function renderStudyAndEvaluate() {
           </div>
           ${tag(status, selected.study_status === "done" ? "source" : selected.study_status === "studying" ? "medium" : "low")}
         </header>
-        <dl class="study-task-details">
-          <div><dt>Course</dt><dd>${escapeHtml(selected.related_course || "Not specified")}</dd></div>
-          <div><dt>Related context</dt><dd>${escapeHtml(selected.related_context || "No additional context")}</dd></div>
-          <div><dt>Suggested time</dt><dd>${escapeHtml(selected.time_hint || "Not specified")}</dd></div>
-          <div><dt>Study status</dt><dd>${escapeHtml(status)}</dd></div>
-        </dl>
-        <div class="study-material-area">
-          ${material ? studyMaterialMarkup(material) : `
-            <div class="study-material-empty">
-              <h4>StudentOS does not have a material for this item yet.</h4>
-              <p>Create a concise lesson for this task and save it to Academic Context.</p>
-              <button class="primary-button" type="button" data-study-generate-material ${studyMaterialGenerating ? "disabled" : ""}>${studyMaterialGenerating ? "Creating material..." : "Generate study material"}</button>
-            </div>
-          `}
-        </div>
-        <div class="study-completion-area">
-          ${selected.study_status === "done" ? `
-            <div><strong>Study marked done.</strong><p>You can return to the material whenever you need it.</p></div>
-            <button class="secondary-button" type="button" data-study-generate-test>Generate test</button>
-          ` : `
-            <div><strong>Finish this study item when you are ready.</strong><p>No timer or test session will start.</p></div>
-            <button class="primary-button" type="button" data-study-mark-done>Mark study done</button>
-          `}
-        </div>
+        ${testSession ? studyTestMarkup(testSession) : `
+          <dl class="study-task-details">
+            <div><dt>Course</dt><dd>${escapeHtml(selected.related_course || "Not specified")}</dd></div>
+            <div><dt>Related context</dt><dd>${escapeHtml(selected.related_context || "No additional context")}</dd></div>
+            <div><dt>Suggested time</dt><dd>${escapeHtml(selected.time_hint || "Not specified")}</dd></div>
+            <div><dt>Study status</dt><dd>${escapeHtml(status)}</dd></div>
+          </dl>
+          <div class="study-material-area">
+            ${material ? studyMaterialMarkup(material) : `
+              <div class="study-material-empty">
+                <h4>StudentOS does not have a material for this item yet.</h4>
+                <p>Create a concise lesson for this task and save it to Academic Context.</p>
+                <button class="primary-button" type="button" data-study-generate-material ${studyMaterialGenerating ? "disabled" : ""}>${studyMaterialGenerating ? "Creating material..." : "Generate study material"}</button>
+              </div>
+            `}
+          </div>
+          <div class="study-completion-area">
+            ${selected.study_status === "done" ? `
+              <div><strong>Study marked done.</strong><p>You can return to the material whenever you need it.</p></div>
+              <button class="secondary-button" type="button" data-study-generate-test ${studyTestGenerating ? "disabled" : ""}>${studyTestGenerating ? "Generating test..." : "Generate test"}</button>
+            ` : `
+              <div><strong>Finish this study item when you are ready.</strong><p>No timer or test session will start.</p></div>
+              <button class="primary-button" type="button" data-study-mark-done>Mark study done</button>
+            `}
+          </div>
+        `}
         ${studyWorkspaceMessage ? `<p class="study-workspace-message" role="status">${escapeHtml(studyWorkspaceMessage)}</p>` : ""}
       ` : `
         <div class="study-choose-state">
@@ -2467,6 +2616,7 @@ function renderStudyAndEvaluate() {
       `}
     </section>
   `;
+  startStudyTestCountdown(testSession);
 }
 
 function renderDashboardSummary() {
@@ -3959,6 +4109,107 @@ async function markStudyDone() {
   setView("study");
 }
 
+async function createStudyTest() {
+  if (!selectedStudyItemId || studyTestGenerating) return;
+  studyTestGenerating = true;
+  studyWorkspaceMessage = "";
+  renderStudyAndEvaluate();
+  try {
+    const result = await api("/api/study/test", {
+      method: "POST",
+      body: JSON.stringify({ itemId: selectedStudyItemId }),
+    });
+    state = result.state || state;
+    studyWorkspaceMessage = result.generated
+      ? (result.message || "Your test is ready. Review the warning before you start.")
+      : (result.message || "StudentOS could not create this test right now. Please try again.");
+  } catch (error) {
+    studyWorkspaceMessage = error.message;
+  } finally {
+    studyTestGenerating = false;
+    render();
+    setView("study");
+  }
+}
+
+async function startStudyTest(sessionId) {
+  const answerMode = els.studyEvaluateContent?.querySelector('input[name="study-answer-mode"]:checked')?.value;
+  if (!answerMode) {
+    studyWorkspaceMessage = "Choose how you will answer before starting the test.";
+    renderStudyAndEvaluate();
+    return;
+  }
+  const result = await api(`/api/study/tests/${encodeURIComponent(sessionId)}/start`, {
+    method: "POST",
+    body: JSON.stringify({ answerMode }),
+  });
+  state = result.state || state;
+  studyWorkspaceMessage = result.message || "Test started. The timer cannot be paused.";
+  renderStudyAndEvaluate();
+}
+
+function typedStudyTestAnswers() {
+  return Object.fromEntries([...els.studyEvaluateContent.querySelectorAll("[data-study-test-answer]")]
+    .map((input) => [input.dataset.studyTestAnswer, input.value]));
+}
+
+async function saveCurrentStudyTestAnswers(sessionId) {
+  const answers = typedStudyTestAnswers();
+  const result = await api(`/api/study/tests/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ answers }),
+  });
+  state = result.state || state;
+  const saveState = els.studyEvaluateContent?.querySelector("[data-study-test-save-state]");
+  if (saveState) saveState.textContent = "Answers saved.";
+}
+
+function scheduleStudyTestAutosave(input) {
+  const sessionId = input.closest("[data-study-test-session]")?.dataset.studyTestSession;
+  if (!sessionId) return;
+  const saveState = els.studyEvaluateContent?.querySelector("[data-study-test-save-state]");
+  if (saveState) saveState.textContent = "Saving answers...";
+  if (studyTestAutosave) window.clearTimeout(studyTestAutosave);
+  studyTestAutosave = window.setTimeout(() => {
+    studyTestAutosave = null;
+    saveCurrentStudyTestAnswers(sessionId).catch(async (error) => {
+      if (saveState) saveState.textContent = error.message;
+      if (/time is up|locked/i.test(error.message)) await refreshStudyTestSession(sessionId);
+    });
+  }, 700);
+}
+
+async function finishStudyTest(sessionId) {
+  const session = (state.testSessions || []).find((entry) => entry.id === sessionId);
+  if (studyTestAutosave) {
+    window.clearTimeout(studyTestAutosave);
+    studyTestAutosave = null;
+  }
+  if (session?.answerMode === "typed") await saveCurrentStudyTestAnswers(sessionId);
+  const result = await api(`/api/study/tests/${encodeURIComponent(sessionId)}/finish`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  state = result.state || state;
+  studyWorkspaceMessage = result.message || "Your test attempt is saved.";
+  renderStudyAndEvaluate();
+}
+
+async function refreshStudyTestSession(sessionId) {
+  if (studyTestExpiryRefreshPending) return;
+  studyTestExpiryRefreshPending = true;
+  try {
+    const result = await api(`/api/study/tests/${encodeURIComponent(sessionId)}`);
+    state = result.state || state;
+    renderStudyAndEvaluate();
+  } catch (error) {
+    studyWorkspaceMessage = error.message;
+    renderStudyAndEvaluate();
+  } finally {
+    studyTestExpiryRefreshPending = false;
+  }
+}
+
 async function openPrivateStudyMaterial(materialId) {
   const popup = window.open("", "_blank", "noopener,noreferrer");
   try {
@@ -4849,6 +5100,9 @@ function wireEvents() {
     }
   });
   window.addEventListener("hashchange", handleAuthLocationChange);
+  document.addEventListener("input", (event) => {
+    if (event.target.matches("[data-study-test-answer]")) scheduleStudyTestAutosave(event.target);
+  });
   document.addEventListener("click", (event) => {
     const studyItem = event.target.closest("[data-study-item-id]");
     if (studyItem) {
@@ -4888,9 +5142,32 @@ function wireEvents() {
       });
       return;
     }
-    if (event.target.closest("[data-study-generate-test]")) {
-      studyWorkspaceMessage = "Test generation comes next.";
-      renderStudyAndEvaluate();
+    const generateStudyTestButton = event.target.closest("[data-study-generate-test]");
+    if (generateStudyTestButton) {
+      createStudyTest();
+      return;
+    }
+    const startStudyTestButton = event.target.closest("[data-study-test-start]");
+    if (startStudyTestButton) {
+      withButtonLoading(startStudyTestButton, "Starting...", () => startStudyTest(startStudyTestButton.dataset.studyTestStart), {
+        timeoutTarget: els.studyEvaluateContent,
+        timeoutCopy: "Starting this test is taking longer than expected. Please try again.",
+      }).catch((error) => {
+        studyWorkspaceMessage = error.message;
+        renderStudyAndEvaluate();
+      });
+      return;
+    }
+    const finishStudyTestButton = event.target.closest("[data-study-test-finish]");
+    if (finishStudyTestButton) {
+      withButtonLoading(finishStudyTestButton, "Saving...", () => finishStudyTest(finishStudyTestButton.dataset.studyTestFinish), {
+        timeoutTarget: els.studyEvaluateContent,
+        timeoutCopy: "Saving this test is taking longer than expected. Please try again.",
+      }).catch(async (error) => {
+        studyWorkspaceMessage = error.message;
+        if (/time is up|locked/i.test(error.message)) await refreshStudyTestSession(finishStudyTestButton.dataset.studyTestFinish);
+        else renderStudyAndEvaluate();
+      });
       return;
     }
     const todayAction = event.target.closest("[data-today-action]");

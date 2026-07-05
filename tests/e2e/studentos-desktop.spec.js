@@ -1691,7 +1691,7 @@ test("Essential prepares selected Classroom context and generates Today in one c
   await page.unroute("**/api/bootstrap");
 });
 
-test("Study and Evaluate uses today's queue, saves generated material, and completes study without starting a test", async ({ page }) => {
+test("Study and Evaluate generates and runs a durable in-app test", async ({ page }) => {
   const baseState = await fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json());
   let studyState = {
     ...structuredClone(baseState),
@@ -1799,6 +1799,60 @@ test("Study and Evaluate uses today's queue, saves generated material, and compl
       }),
     });
   });
+  await page.route("**/api/study/test", async (route) => {
+    const paper = {
+      test_title: "Newton's laws check",
+      course: "Physics",
+      topic: "Newton's laws",
+      total_marks: 6,
+      estimated_minutes: 20,
+      instructions: ["Answer every question.", "Show your reasoning."],
+      questions: [
+        { question_number: 1, type: "objective", prompt: "Which statement describes net force?", marks: 2, choices: ["The vector sum of forces", "Only the largest force"] },
+        { question_number: 2, type: "short_answer", prompt: "Explain Newton's second law.", marks: 4 },
+      ],
+    };
+    const testSession = {
+      id: "11111111-1111-4111-8111-111111111111",
+      todoItemId: "todo_study_physics",
+      courseId: "course_study_physics",
+      status: "ready_to_start",
+      testPaper: paper,
+      questions: paper.questions,
+      answerMode: null,
+      answers: {},
+      durationMinutes: 20,
+      deadlineAt: null,
+      academicContextIncluded: true,
+    };
+    studyState.testSessions.push(testSession);
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ generated: true, testSession, state: studyState, message: "Your test is ready. Review the warning before you start." }),
+    });
+  });
+  await page.route("**/api/study/tests/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const session = studyState.testSessions[0];
+    if (path.endsWith("/start")) {
+      const body = request.postDataJSON();
+      session.answerMode = body.answerMode;
+      session.status = "in_progress";
+      session.startedAt = new Date().toISOString();
+      session.deadlineAt = new Date(Date.now() + session.durationMinutes * 60_000).toISOString();
+    } else if (path.endsWith("/finish")) {
+      session.status = session.answerMode === "handwritten" ? "ready_for_evaluation" : "submitted_pending_evaluation";
+      session.submittedAt = new Date().toISOString();
+    } else if (request.method() === "PATCH") {
+      session.answers = { ...session.answers, ...request.postDataJSON().answers };
+      session.lastSavedAt = new Date().toISOString();
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ testSession: session, state: studyState, message: path.endsWith("/finish") ? "Submitted for evaluation." : "Answers saved." }),
+    });
+  });
 
   await page.reload();
   await clickNav(page, "Study and Evaluate");
@@ -1823,10 +1877,30 @@ test("Study and Evaluate uses today's queue, saves generated material, and compl
   await expect(page.locator(".study-workspace")).toContainText("Study marked done.");
   await expect(page.getByRole("button", { name: "Generate test" })).toBeVisible();
   await page.getByRole("button", { name: "Generate test" }).click();
-  await expect(page.locator(".study-workspace")).toContainText("Test generation comes next.");
-  expect(studyState.testSessions).toEqual([]);
+  await expect(page.locator(".study-test-warning")).toContainText("This test cannot be paused. Start only when you can complete it in one sitting.");
+  await expect(page.locator(".study-test-warning")).toContainText("20 minutes");
+  await expect(page.getByRole("button", { name: "Start test" })).toBeVisible();
+  await page.getByRole("button", { name: "Start test" }).click();
+  await expect(page.locator(".study-workspace-message")).toContainText("Choose how you will answer");
+  await page.getByLabel("Type answers in StudentOS").check();
+  await page.getByRole("button", { name: "Start test" }).click();
+  await expect(page.locator(".study-test-timer")).toBeVisible();
+  await expect(page.locator(".study-test-question")).toHaveCount(2);
+  await page.locator('[data-study-test-answer="1"]').fill("The vector sum of all forces.");
+  await page.waitForTimeout(850);
+  expect(studyState.testSessions[0].answers["1"]).toBe("The vector sum of all forces.");
+
+  const originalDeadline = studyState.testSessions[0].deadlineAt;
+  await page.reload();
+  await clickNav(page, "Study and Evaluate");
+  await expect(page.locator(".study-test-timer")).toBeVisible();
+  expect(studyState.testSessions[0].deadlineAt).toBe(originalDeadline);
+  await page.getByRole("button", { name: "Submit for evaluation" }).click();
+  await expect(page.locator(".study-test-closed")).toContainText("Submitted for evaluation");
   expect(await page.locator("#view-study").innerText()).not.toMatch(/\b(provider|model|token|storage|database|backend|vector|embedding|chunks?|debug|OAuth scope)\b/i);
 
+  await page.unroute("**/api/study/tests/**");
+  await page.unroute("**/api/study/test");
   await page.unroute("**/api/study/material");
   await page.unroute("**/api/study/status");
   await page.unroute("**/api/bootstrap");

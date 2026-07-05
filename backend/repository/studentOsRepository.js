@@ -250,14 +250,17 @@ function rowForCollection(key, item, userId) {
     };
   }
   if (key === "testSessions") {
+    const persistedStatus = ["submitted_pending_evaluation", "ready_for_evaluation"].includes(item.status)
+      ? "completed"
+      : item.status === "time_expired" ? "abandoned" : "open";
     return {
       ...base,
       assignment_id: item.assignmentId || null,
       course_id: item.courseId || null,
       topic_id: item.topicId || null,
       question_format: item.questionFormat || "mcq",
-      status: item.status || "open",
-      questions: asJson(item.questions, []),
+      status: persistedStatus,
+      questions: asJson(item.testPaper?.questions || item.questions, []),
       answer_key: asJson(item.answerKey, []),
     };
   }

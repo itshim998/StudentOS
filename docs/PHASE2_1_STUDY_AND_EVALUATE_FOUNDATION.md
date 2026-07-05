@@ -38,8 +38,8 @@ No migration is required because source material records already retain their fu
 
 ## Mark study done behavior
 
-**Mark study done** persists `Done` and a completion timestamp on the selected TO-DO item. The workspace confirms **Study marked done.** and reveals **Generate test**. In Phase 2.1 that button only displays **Test generation comes next.** No test session is created.
+**Mark study done** persists `Done` and a completion timestamp on the selected TO-DO item. The workspace confirms **Study marked done.** and reveals **Generate test**. The Phase 2.1 foundation does not create a test merely by marking study done; Phase 2.2 activates generation only after the student chooses the button.
 
 ## Deferred work
 
-Phase 2.2 is responsible for strict test generation and the test session experience. Phase 2.3 is responsible for final answer evaluation and later learning-state features. Learning Level, Consistency Points, flashcards, visual notes, timers, question papers, grading, submissions, Classroom writeback, and auto-submit are not part of this phase.
+Phase 2.2 adds strict test generation and the test session experience. Phase 2.3 is responsible for final answer evaluation and later learning-state features. Learning Level, Consistency Points, flashcards, visual notes, grading, Classroom writeback, and auto-submit are not part of Phase 2.1.
