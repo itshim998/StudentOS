@@ -19,6 +19,40 @@ function todoItemId(date, index, title) {
   return `todo_${String(date || "today").replace(/[^0-9-]/g, "")}_${index + 1}_${slug(title, "study-item").slice(0, 42)}`;
 }
 
+/** Returns true if a line is a PDF page marker, table header, CO code, or other document artifact — not a real syllabus topic. */
+function isSyllabusArtifactLine(text) {
+  const trimmed = String(text || "").replace(/\s+/g, " ").trim();
+  if (!trimmed || trimmed.length < 3) return true;
+  // Purely numeric, punctuation-only, or single-char fragments
+  if (/^[\d\s.,;:!?\-–—•*#/()\[\]]+$/.test(trimmed)) return true;
+  // Page markers: "- 23 -", "— 5 —", "- 24 -", "Page 3", etc.
+  if (/^[-–—]\s*\d+\s*[-–—]$/.test(trimmed)) return true;
+  if (/^page\s+\d+$/i.test(trimmed)) return true;
+  // "Detailed Syllabus" / "Detailed Syllabus continued"
+  if (/^detailed\s+syllabus(\s+continued)?$/i.test(trimmed)) return true;
+  // Table/header labels: "Module Contents Contact Hours CO Linked", column headers
+  if (/^module\s+contents?\s+contact\s+hours?/i.test(trimmed)) return true;
+  if (/^(s\.?\s*no|sr\.?\s*no|serial|contact\s+hours?|hours?|credits?|total)$/i.test(trimmed)) return true;
+  // CO-code-only lines: "RCC-PCC-AIML-401.CO1", "CO1", "PO3", "CO1, CO2"
+  if (/^([A-Z]{1,6}-)*[A-Z]{1,6}-\d{2,5}\.[A-Z]{2}\d+$/i.test(trimmed)) return true;
+  if (/^(CO|PO|PSO)\d{1,2}(\s*,\s*(CO|PO|PSO)\d{1,2})*$/i.test(trimmed)) return true;
+  // Course code lines that contain no descriptive words (e.g. "RCC-PCC-AIML-401")
+  if (/^[A-Z]{2,6}(-[A-Z]{2,6}){1,4}(-\d{2,5})?$/.test(trimmed)) return true;
+  return false;
+}
+
+/** Cleans a real topic title: strips trailing CO refs, excess list markers, and whitespace. Returns empty string if nothing meaningful remains. */
+function cleanSyllabusTopicLine(text) {
+  let t = String(text || "").replace(/\s+/g, " ").trim();
+  // Strip trailing CO/PO references like "(CO1, CO2)" or "CO1"
+  t = t.replace(/\s*\(?\s*(CO|PO|PSO)\d{1,2}(\s*,\s*(CO|PO|PSO)\d{1,2})*\s*\)?\s*\.?\s*$/i, "").trim();
+  // Strip leading list markers that survived prior parsing ("- ", "• ", "1. ")
+  t = t.replace(/^[-–—•*]\s+/, "").replace(/^\d+[.):]\s+/, "").trim();
+  // Strip trailing period if it's a leftover
+  t = t.replace(/\.$/, "").trim();
+  return t;
+}
+
 export function ensureDailyTodoStudyState(plan) {
   if (!plan || !Array.isArray(plan.items)) return plan;
   for (const [index, item] of plan.items.entries()) {
@@ -61,9 +95,11 @@ function parseSyllabusHeadings(source) {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const headings = [];
   for (const line of lines) {
+    if (isSyllabusArtifactLine(line)) continue;
     const match = line.match(/^(?:(?:module|unit|topic|chapter)\s*[\w.-]+\s*[:\-–—]\s*|(?:\d+(?:\.\d+)*)[.)]\s+|[-•]\s+)(.+)$/i);
-    const title = clean(match?.[1], 260);
-    if (title && title.length >= 3 && !headings.some((entry) => entry.toLowerCase() === title.toLowerCase())) headings.push(title);
+    const raw = clean(match?.[1], 260);
+    const title = cleanSyllabusTopicLine(raw);
+    if (title && title.length >= 3 && !isSyllabusArtifactLine(title) && !headings.some((entry) => entry.toLowerCase() === title.toLowerCase())) headings.push(title);
     if (headings.length >= 30) break;
   }
   return headings;
@@ -88,7 +124,11 @@ function matchingAcademicContext(state, item) {
 }
 
 function orderedSyllabusTopics(state, item, syllabus, exam) {
-  let units = (syllabus?.units || []).map((unit, index) => ({ title: exactTopicTitle(unit), module: moduleLabel(unit, index), sourceOrder: index })).filter((unit) => unit.title);
+  let units = (syllabus?.units || []).map((unit, index) => {
+    const raw = exactTopicTitle(unit);
+    const title = cleanSyllabusTopicLine(raw);
+    return { title, module: moduleLabel(unit, index), sourceOrder: index };
+  }).filter((unit) => unit.title && !isSyllabusArtifactLine(unit.title));
   let uncertain = false;
   if (!units.length && syllabus?.sourceMaterialId) {
     const source = (state.sourceMaterials || []).find((entry) => entry.id === syllabus.sourceMaterialId);
@@ -114,7 +154,7 @@ export function normalizeTopicMasteryQueue(queue) {
   queue.version = 1;
   queue.topics = queue.topics.map((topic, index) => {
     topic.id = clean(topic.id, 180) || `topic_${index + 1}_${slug(topic.title)}`;
-    topic.title = clean(topic.title, 260);
+    topic.title = cleanSyllabusTopicLine(clean(topic.title, 260));
     topic.order = index + 1;
     topic.status = QUEUE_STATUSES.has(topic.status) ? topic.status : "pending";
     topic.subparts = Array.isArray(topic.subparts) ? topic.subparts.map((part, partIndex) => ({
@@ -127,7 +167,7 @@ export function normalizeTopicMasteryQueue(queue) {
     })).filter((part) => part.title) : [];
     if (topic.subparts.length) topic.status = topic.subparts.every((part) => part.status === "done") ? "done" : topic.subparts.some((part) => part.status !== "pending") ? "studying" : topic.status;
     return topic;
-  }).filter((topic) => topic.title);
+  }).filter((topic) => topic.title && !isSyllabusArtifactLine(topic.title));
   if (!queue.activeTopicId || !queue.topics.some((topic) => topic.id === queue.activeTopicId)) queue.activeTopicId = queue.topics.find((topic) => topic.status !== "done")?.id || queue.topics[0]?.id || null;
   return queue;
 }
@@ -260,8 +300,11 @@ export function studyMaterialMessages(item, queue, target) {
       role: "system",
       content: [
         "You are StudentOS. Teach exactly one syllabus topic or subpart by writing actual study notes, not a study plan or daily TODO list.",
+        "Generate only for the active parent syllabus topic and active subpart supplied by StudentOS.",
         "The supplied parent syllabus topic is an immutable scope boundary. Never rename it, replace it with a friendlier title, or teach content outside it.",
+        "Do not choose an easier prerequisite as the main topic.",
         "The first heading must exactly equal the supplied note title.",
+        "Use clean Markdown. Put inline math in $...$ or \\(...\\), and block math in $$...$$ or \\[...\\].",
         "Include: concept explanation, relevant Markdown/LaTeX formulas, at least one worked example, common mistakes, short practice checks, and a summary.",
         "A short prerequisite reminder is allowed inside the note, but must not replace the title or become the main lesson.",
         "Do not output What to focus on, Study steps, broad advice, a test, answer key, grading, timer, or submission action.",

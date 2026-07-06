@@ -95,6 +95,7 @@
     "node": ">=20.16.0"
   },
   "dependencies": {
+    "katex": "^0.17.0",
     "pdf-parse": "^2.4.5"
   },
   "devDependencies": {

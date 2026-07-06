@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   --ink: #16201b;
   --muted: #66736d;
   --soft: #f4f7f2;
@@ -4031,6 +4031,32 @@ textarea:focus-visible {
   box-shadow: inset 0 0 0 2px #fff;
 }
 
+.topic-mastery-module-group {
+  list-style: none;
+}
+
+.topic-mastery-module-group summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #314f40;
+  letter-spacing: 0.02em;
+  border-radius: 8px;
+  background: rgba(53, 110, 80, 0.06);
+  user-select: none;
+}
+
+.topic-mastery-module-group summary:hover {
+  background: rgba(53, 110, 80, 0.1);
+}
+
+.topic-mastery-module-group details > .topic-mastery-list {
+  margin: 6px 0 0 6px;
+  padding-left: 8px;
+  border-left: 2px solid rgba(53, 110, 80, 0.12);
+}
+
 .study-task-details div {
   display: grid;
   gap: 4px;
@@ -4113,22 +4139,44 @@ textarea:focus-visible {
   line-height: 1.75;
 }
 
+.study-academic-copy {
+  overflow-wrap: anywhere;
+}
+
+.study-academic-copy p {
+  margin: 0 0 12px;
+  line-height: 1.7;
+}
+
+.study-academic-copy p:last-child,
+.study-academic-copy ul:last-child,
+.study-academic-copy ol:last-child,
+.study-academic-copy blockquote:last-child,
+.study-academic-copy .study-math-block:last-child {
+  margin-bottom: 0;
+}
+
 .study-generated-copy ul,
-.study-generated-copy ol {
+.study-generated-copy ol,
+.study-academic-copy ul,
+.study-academic-copy ol {
   margin: 0 0 16px;
   padding-left: 22px;
   line-height: 1.75;
 }
 
-.study-generated-copy li {
+.study-generated-copy li,
+.study-academic-copy li {
   margin: 4px 0;
 }
 
-.study-generated-copy strong {
+.study-generated-copy strong,
+.study-academic-copy strong {
   color: var(--ink);
 }
 
 .study-generated-copy code,
+.study-academic-copy code,
 .study-generated-code {
   border: 1px solid rgba(49, 79, 64, 0.12);
   border-radius: 8px;
@@ -4137,7 +4185,8 @@ textarea:focus-visible {
   font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
 }
 
-.study-generated-copy code {
+.study-generated-copy code,
+.study-academic-copy code {
   padding: 0.1rem 0.35rem;
   font-size: 0.9em;
 }
@@ -4151,23 +4200,196 @@ textarea:focus-visible {
 
 .study-math-inline,
 .study-math-block {
-  font-family: Cambria, "Times New Roman", serif;
-  color: #213a2f;
+  font-family: "Cambria Math", Cambria, "Times New Roman", "STIX Two Math", serif;
+  color: #1a3328;
+  letter-spacing: 0.01em;
 }
 
 .study-math-inline {
-  padding: 0 0.2rem;
+  padding: 0.1em 0.3em;
+  border-radius: 4px;
+  background: rgba(95, 139, 112, 0.06);
+  font-size: 0.97em;
+  white-space: nowrap;
 }
 
 .study-math-block {
-  margin: 0 0 18px;
-  padding: 14px 16px;
+  margin: 6px 0 18px;
+  padding: 16px 20px;
   border-left: 3px solid #5f8b70;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.72);
   overflow-x: auto;
-  white-space: pre-wrap;
+  font-size: 1.05em;
+  line-height: 2;
 }
+
+/* --- KaTeX integration overrides --- */
+
+/* Inline KaTeX: inherit text color, tame size, align with surrounding prose */
+.study-math-inline .katex {
+  font-size: 1em;
+  color: inherit;
+  white-space: normal;
+}
+
+/* Block KaTeX: center equation, let KaTeX handle internal layout */
+.study-math-block .katex {
+  font-size: 1.08em;
+  color: #1a3328;
+}
+
+.study-math-block .katex-display {
+  margin: 0;
+  padding: 0;
+}
+
+/* Keep test choice options compact */
+.study-test-choices .study-math-inline .katex {
+  font-size: 0.95em;
+}
+
+/* Tame KaTeX error rendering: subtle readable fallback instead of alarming red */
+.study-math-inline .katex .katex-error,
+.study-math-block .katex .katex-error {
+  color: #5a3e2b;
+  font-size: 0.92em;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Evaluation/result corrections: keep KaTeX readable */
+.study-result-copy .study-math-inline .katex {
+  font-size: 0.97em;
+}
+
+/* --- Legacy fallback styles (used when KaTeX is unavailable) --- */
+
+/* --- Fractions --- */
+.study-math-frac {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  vertical-align: middle;
+  margin: 0 0.15em;
+  font-size: 0.88em;
+  line-height: 1.15;
+}
+
+.study-math-frac-num {
+  padding: 0 0.2em 0.08em;
+}
+
+.study-math-frac-bar {
+  width: 100%;
+  min-width: 1em;
+  height: 1px;
+  background: currentColor;
+}
+
+.study-math-frac-den {
+  padding: 0.08em 0.2em 0;
+}
+
+/* --- Square root --- */
+.study-math-sqrt {
+  border-top: 1.5px solid currentColor;
+  padding: 0 0.2em 0 0.15em;
+  margin-left: 0.1em;
+  position: relative;
+}
+
+.study-math-sqrt::before {
+  content: "\221A";
+  font-size: 1.1em;
+  position: relative;
+  top: 0.05em;
+  margin-right: 0.05em;
+}
+
+.study-math-root-idx {
+  font-size: 0.7em;
+  margin-right: -0.2em;
+  vertical-align: super;
+}
+
+/* --- Aligned / multiline --- */
+.study-math-line {
+  display: block;
+  padding: 0.15em 0;
+}
+
+/* --- Cases --- */
+.study-math-cases {
+  display: inline-flex;
+  flex-direction: column;
+  border-left: 1.5px solid currentColor;
+  padding-left: 0.6em;
+  margin-left: 0.2em;
+  vertical-align: middle;
+}
+
+.study-math-case {
+  display: block;
+  padding: 0.15em 0;
+}
+
+/* --- Matrix --- */
+.study-math-matrix {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  vertical-align: middle;
+  border-left: 1.5px solid currentColor;
+  border-right: 1.5px solid currentColor;
+  border-radius: 3px;
+  padding: 0.25em 0.4em;
+  margin: 0 0.15em;
+}
+
+.study-math-matrix-row {
+  display: flex;
+  gap: 0.7em;
+}
+
+.study-math-matrix-cell {
+  min-width: 1.2em;
+  text-align: center;
+  padding: 0.1em 0.15em;
+}
+
+/* --- Text in math --- */
+.study-math-text {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-style: normal;
+  font-size: 0.93em;
+}
+
+/* --- Overline --- */
+.study-math-overline {
+  text-decoration: overline;
+}
+
+/* --- Sub/sup inside math (legacy fallback) --- */
+.study-math-inline sub,
+.study-math-inline sup,
+.study-math-block sub,
+.study-math-block sup {
+  font-size: 0.75em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+}
+
+.study-math-inline sup,
+.study-math-block sup {
+  top: -0.45em;
+}
+
+.study-math-inline sub,
+.study-math-block sub {
+  bottom: -0.25em;
+}
+
 
 .study-generated-quote {
   margin: 0 0 18px;
@@ -4182,7 +4404,8 @@ textarea:focus-visible {
   overflow-x: auto;
 }
 
-.study-generated-copy table {
+.study-generated-copy table,
+.study-academic-copy table {
   width: 100%;
   border-collapse: collapse;
   min-width: 32rem;
@@ -4193,7 +4416,9 @@ textarea:focus-visible {
 }
 
 .study-generated-copy th,
-.study-generated-copy td {
+.study-generated-copy td,
+.study-academic-copy th,
+.study-academic-copy td {
   padding: 11px 12px;
   border-bottom: 1px solid rgba(49, 79, 64, 0.1);
   text-align: left;
@@ -4201,13 +4426,15 @@ textarea:focus-visible {
   line-height: 1.55;
 }
 
-.study-generated-copy th {
+.study-generated-copy th,
+.study-academic-copy th {
   color: var(--ink);
   background: rgba(233, 241, 236, 0.74);
   font-weight: 700;
 }
 
-.study-generated-copy tr:last-child td {
+.study-generated-copy tr:last-child td,
+.study-academic-copy tr:last-child td {
   border-bottom: 0;
 }
 
@@ -4410,10 +4637,15 @@ textarea:focus-visible {
   text-transform: uppercase;
 }
 
-.study-test-question > p {
+.study-test-question > p,
+.study-test-prompt {
   margin: 16px 0;
   font-size: 1.02rem;
   line-height: 1.65;
+}
+
+.study-test-prompt p {
+  margin-bottom: 10px;
 }
 
 .study-test-choices {
@@ -4593,17 +4825,20 @@ textarea:focus-visible {
   font-weight: 700;
 }
 
-.study-result-question p {
+.study-result-question p,
+.study-result-copy {
   margin: 14px 0 0;
   line-height: 1.6;
 }
 
-.study-result-question p strong {
+.study-result-question p strong,
+.study-result-copy > strong {
   display: block;
   margin-bottom: 3px;
 }
 
-.study-result-next p {
+.study-result-next p,
+.study-result-next .study-academic-copy {
   margin: 0;
   line-height: 1.65;
 }

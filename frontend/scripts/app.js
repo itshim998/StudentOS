@@ -2368,6 +2368,22 @@ function isReadableStudyMaterial(item) {
   return ["study_material", "generated_study_material"].includes(normalizeAcademicContextKind(item));
 }
 
+/** Client-side artifact filter — mirrors the backend helper for defense-in-depth. */
+function isSyllabusArtifactLine(text) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!t || t.length < 3) return true;
+  if (/^[\d\s.,;:!?\-\u2013\u2014\u2022*#/()\[\]]+$/.test(t)) return true;
+  if (/^[-\u2013\u2014]\s*\d+\s*[-\u2013\u2014]$/.test(t)) return true;
+  if (/^page\s+\d+$/i.test(t)) return true;
+  if (/^detailed\s+syllabus(\s+continued)?$/i.test(t)) return true;
+  if (/^module\s+contents?\s+contact\s+hours?/i.test(t)) return true;
+  if (/^(s\.?\s*no|sr\.?\s*no|serial|contact\s+hours?|hours?|credits?|total)$/i.test(t)) return true;
+  if (/^([A-Z]{1,6}-)*[A-Z]{1,6}-\d{2,5}\.[A-Z]{2}\d+$/i.test(t)) return true;
+  if (/^(CO|PO|PSO)\d{1,2}(\s*,\s*(CO|PO|PSO)\d{1,2})*$/i.test(t)) return true;
+  if (/^[A-Z]{2,6}(-[A-Z]{2,6}){1,4}(-\d{2,5})?$/.test(t)) return true;
+  return false;
+}
+
 function studyMasteryQueue(item) {
   return item?.topic_mastery_queue?.topics?.length ? item.topic_mastery_queue : null;
 }
@@ -2416,8 +2432,22 @@ function relatedStudyMaterial(item) {
     .sort((left, right) => right.score - left.score)[0]?.source || null;
 }
 
-const GENERATED_STUDY_ALLOWED_TAGS = new Set(["A", "BLOCKQUOTE", "CODE", "DIV", "EM", "H5", "H6", "LI", "OL", "P", "PRE", "SPAN", "STRONG", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "UL"]);
-const GENERATED_STUDY_ALLOWED_ATTRIBUTES = new Set(["class", "href", "rel", "target"]);
+const ACADEMIC_TEXT_ALLOWED_TAGS = new Set(["A", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H5", "H6", "LI", "OL", "P", "PRE", "SPAN", "STRONG", "SUB", "SUP", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "UL",
+  /* KaTeX HTML output */
+  "MATH", "SEMANTICS", "ANNOTATION", "MROW", "MI", "MO", "MN", "MSUP", "MSUB",
+  "MFRAC", "MSQRT", "MROOT", "MOVER", "MUNDER", "MUNDEROVER", "MTABLE", "MTR", "MTD",
+  "MTEXT", "MSPACE", "MENCLOSE", "MPADDED", "MSTYLE", "MGLYPH", "ANNOTATION-XML",
+  "SVG", "LINE", "PATH", "G", "RECT", "USE",
+]);
+const ACADEMIC_TEXT_ALLOWED_ATTRIBUTES = new Set(["class", "href", "rel", "target",
+  /* KaTeX attributes */
+  "style", "mathvariant", "xmlns", "width", "height", "viewBox", "preserveAspectRatio",
+  "d", "x", "y", "x1", "x2", "y1", "y2", "fill", "stroke", "stroke-width", "transform",
+  "aria-hidden", "role", "focusable", "data-mml-node", "encoding", "fence", "separator",
+  "stretchy", "symmetric", "linebreak", "lspace", "rspace", "minsize", "maxsize",
+  "accent", "accentunder", "columnalign", "columnlines", "columnspacing",
+  "rowalign", "rowlines", "rowspacing", "displaystyle", "scriptlevel",
+]);
 
 function splitMarkdownTableRow(row) {
   const trimmed = String(row || "").trim().replace(/^\|/, "").replace(/\|$/, "");
@@ -2437,18 +2467,19 @@ function isMarkdownTableStart(lines, index) {
   return lineLooksLikeMarkdownTable(lines[index]) && isMarkdownTableDivider(lines[index + 1] || "");
 }
 
-function isGeneratedMarkdownBlockStart(lines, index) {
+function isAcademicMarkdownBlockStart(lines, index) {
   const line = String(lines[index] || "").trim();
   if (!line) return true;
   return /^```/.test(line)
     || line.startsWith("$$")
+    || line.startsWith("\\[")
     || /^(#{1,6})\s+/.test(line)
     || /^>\s?/.test(line)
     || /^(\s*)([-*+]|\d+[.)])\s+/.test(line)
     || isMarkdownTableStart(lines, index);
 }
 
-function parseGeneratedStudyMarkdown(content) {
+function parseAcademicMarkdown(content) {
   const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
   const blocks = [];
   let index = 0;
@@ -2484,6 +2515,31 @@ function parseGeneratedStudyMarkdown(content) {
         while (index < lines.length) {
           const current = String(lines[index] || "");
           const end = current.indexOf("$$");
+          if (end >= 0) {
+            math.push(current.slice(0, end));
+            index += 1;
+            break;
+          }
+          math.push(current);
+          index += 1;
+        }
+      }
+      blocks.push({ type: "math", text: math.join("\n").trim() });
+      continue;
+    }
+
+    if (line.startsWith("\\[")) {
+      const math = [];
+      const first = line.slice(2);
+      if (first.endsWith("\\]") && first.length > 2) {
+        math.push(first.slice(0, -2));
+        index += 1;
+      } else {
+        if (first.trim()) math.push(first);
+        index += 1;
+        while (index < lines.length) {
+          const current = String(lines[index] || "");
+          const end = current.indexOf("\\]");
           if (end >= 0) {
             math.push(current.slice(0, end));
             index += 1;
@@ -2543,7 +2599,7 @@ function parseGeneratedStudyMarkdown(content) {
 
     const paragraph = [line];
     index += 1;
-    while (index < lines.length && String(lines[index] || "").trim() && !isGeneratedMarkdownBlockStart(lines, index)) {
+    while (index < lines.length && String(lines[index] || "").trim() && !isAcademicMarkdownBlockStart(lines, index)) {
       paragraph.push(String(lines[index] || "").trim());
       index += 1;
     }
@@ -2578,8 +2634,8 @@ function renderMarkdownInline(value) {
   const placeholders = [];
   let text = String(value || "");
   text = text.replace(/`([^`]+)`/g, (_, code) => inlinePlaceholder(placeholders, `<code>${escapeHtml(code)}</code>`));
-  text = text.replace(/\\\((.+?)\\\)/g, (_, math) => inlinePlaceholder(placeholders, `<span class="study-math-inline">${escapeHtml(math)}</span>`));
-  text = text.replace(/\$(?!\s)([^$\n]{1,240}?)(?<!\s)\$/g, (_, math) => inlinePlaceholder(placeholders, `<span class="study-math-inline">${escapeHtml(math)}</span>`));
+  text = text.replace(/\\\((.+?)\\\)/g, (_, math) => inlinePlaceholder(placeholders, `<span class="study-math-inline">${renderLatexToHtml(math)}</span>`));
+  text = text.replace(/\$(?!\s)([^$\n]{1,240}?)(?<!\s)\$/g, (_, math) => inlinePlaceholder(placeholders, `<span class="study-math-inline">${renderLatexToHtml(math)}</span>`));
   text = text.replace(/\[([^\]\n]{1,160})\]\(([^)\s]{1,500})\)/g, (_, label, href) => {
     const safeHref = sanitizeMarkdownUrl(href);
     if (!safeHref) return `${label} (${href})`;
@@ -2593,17 +2649,168 @@ function renderMarkdownInline(value) {
   return restoreInlinePlaceholders(html, placeholders);
 }
 
-function sanitizeGeneratedStudyHtml(html) {
+const LATEX_SYMBOL_MAP = {
+  "\\alpha": "\u03b1", "\\beta": "\u03b2", "\\gamma": "\u03b3", "\\delta": "\u03b4",
+  "\\epsilon": "\u03b5", "\\varepsilon": "\u03b5", "\\zeta": "\u03b6", "\\eta": "\u03b7",
+  "\\theta": "\u03b8", "\\vartheta": "\u03d1", "\\iota": "\u03b9", "\\kappa": "\u03ba",
+  "\\lambda": "\u03bb", "\\mu": "\u03bc", "\\nu": "\u03bd", "\\xi": "\u03be",
+  "\\pi": "\u03c0", "\\rho": "\u03c1", "\\sigma": "\u03c3", "\\tau": "\u03c4",
+  "\\upsilon": "\u03c5", "\\phi": "\u03c6", "\\varphi": "\u03c6", "\\chi": "\u03c7",
+  "\\psi": "\u03c8", "\\omega": "\u03c9",
+  "\\Gamma": "\u0393", "\\Delta": "\u0394", "\\Theta": "\u0398", "\\Lambda": "\u039b",
+  "\\Xi": "\u039e", "\\Pi": "\u03a0", "\\Sigma": "\u03a3", "\\Phi": "\u03a6",
+  "\\Psi": "\u03a8", "\\Omega": "\u03a9",
+  "\\nabla": "\u2207", "\\partial": "\u2202", "\\infty": "\u221e", "\\forall": "\u2200",
+  "\\exists": "\u2203", "\\in": "\u2208", "\\notin": "\u2209", "\\subset": "\u2282",
+  "\\subseteq": "\u2286", "\\supset": "\u2283", "\\supseteq": "\u2287",
+  "\\cup": "\u222a", "\\cap": "\u2229", "\\emptyset": "\u2205", "\\varnothing": "\u2205",
+  "\\times": "\u00d7", "\\cdot": "\u22c5", "\\circ": "\u2218", "\\star": "\u22c6",
+  "\\leq": "\u2264", "\\le": "\u2264", "\\geq": "\u2265", "\\ge": "\u2265",
+  "\\neq": "\u2260", "\\ne": "\u2260", "\\approx": "\u2248", "\\equiv": "\u2261",
+  "\\sim": "\u223c", "\\simeq": "\u2243", "\\propto": "\u221d",
+  "\\pm": "\u00b1", "\\mp": "\u2213", "\\div": "\u00f7",
+  "\\to": "\u2192", "\\rightarrow": "\u2192", "\\leftarrow": "\u2190",
+  "\\Rightarrow": "\u21d2", "\\Leftarrow": "\u21d0", "\\Leftrightarrow": "\u21d4",
+  "\\iff": "\u27fa", "\\implies": "\u27f9",
+  "\\sum": "\u2211", "\\prod": "\u220f", "\\int": "\u222b",
+  "\\langle": "\u27e8", "\\rangle": "\u27e9",
+  "\\lfloor": "\u230a", "\\rfloor": "\u230b", "\\lceil": "\u2308", "\\rceil": "\u2309",
+  "\\neg": "\u00ac", "\\land": "\u2227", "\\lor": "\u2228",
+  "\\dots": "\u2026", "\\cdots": "\u22ef", "\\ldots": "\u2026", "\\vdots": "\u22ee",
+  "\\quad": "\u2003", "\\qquad": "\u2003\u2003",
+  "\\,": "\u2009", "\\;": "\u2005", "\\!": "",
+  "\\&": "&",
+};
+
+const LATEX_MATHBB_MAP = {
+  R: "\u211d", N: "\u2115", Z: "\u2124", Q: "\u211a", C: "\u2102", P: "\u2119",
+  E: "\ud835\udd3c", F: "\ud835\udd3d",
+};
+
+function renderLatexToHtml(latex, displayMode = false) {
+  const text = String(latex || "").trim();
+  if (!text) return "";
+  if (typeof window !== "undefined" && window.katex) {
+    try {
+      return window.katex.renderToString(text, {
+        throwOnError: false,
+        strict: "ignore",
+        displayMode,
+        trust: false,
+        output: "htmlAndMathml",
+      });
+    } catch {
+      /* fall through to legacy renderer */
+    }
+  }
+  return renderLatexToHtmlLegacy(text);
+}
+
+function renderLatexToHtmlLegacy(latex) {
+  let text = String(latex || "").trim();
+  if (!text) return "";
+
+  text = text.replace(/\\begin\{(?:aligned|align\*?|gather\*?|split)\}([\s\S]*?)\\end\{(?:aligned|align\*?|gather\*?|split)\}/g, (_, body) => {
+    const rows = body.split(/\\\\/).map((row) => row.replace(/&/g, " ").trim()).filter(Boolean);
+    return rows.map((row) => `<span class="study-math-line">${renderLatexFragment(row)}</span>`).join("");
+  });
+
+  text = text.replace(/\\begin\{cases\}([\s\S]*?)\\end\{cases\}/g, (_, body) => {
+    const rows = body.split(/\\\\/).map((row) => row.replace(/&/g, " ").trim()).filter(Boolean);
+    return `<span class="study-math-cases">${rows.map((row) => `<span class="study-math-case">${renderLatexFragment(row)}</span>`).join("")}</span>`;
+  });
+
+  text = text.replace(/\\begin\{(?:bmatrix|pmatrix|matrix|vmatrix)\}([\s\S]*?)\\end\{(?:bmatrix|pmatrix|matrix|vmatrix)\}/g, (_, body) => {
+    const rows = body.split(/\\\\/).map((row) => row.trim()).filter(Boolean);
+    const cells = rows.map((row) => row.split("&").map((cell) => renderLatexFragment(cell.trim())));
+    return `<span class="study-math-matrix">${cells.map((row) => `<span class="study-math-matrix-row">${row.map((cell) => `<span class="study-math-matrix-cell">${cell}</span>`).join("")}</span>`).join("")}</span>`;
+  });
+
+  text = text.replace(/\\begin\{[a-z*]+\}([\s\S]*?)\\end\{[a-z*]+\}/g, (_, body) => {
+    return renderLatexFragment(body.replace(/\\\\/g, " ").replace(/&/g, " "));
+  });
+
+  return renderLatexFragment(text);
+}
+
+function renderLatexFragment(latex) {
+  let text = String(latex || "");
+
+  text = text.replace(/\\text\{([^{}]*)\}/g, (_, content) => `<span class="study-math-text">${escapeHtml(content)}</span>`);
+  text = text.replace(/\\textbf\{([^{}]*)\}/g, (_, content) => `<strong>${escapeHtml(content)}</strong>`);
+  text = text.replace(/\\textit\{([^{}]*)\}/g, (_, content) => `<em>${escapeHtml(content)}</em>`);
+  text = text.replace(/\\mathrm\{([^{}]*)\}/g, (_, content) => `<span class="study-math-text">${escapeHtml(content)}</span>`);
+  text = text.replace(/\\operatorname\{([^{}]*)\}/g, (_, content) => `<span class="study-math-text">${escapeHtml(content)}</span>`);
+
+  text = text.replace(/\\mathbb\{([A-Z])\}/g, (_, letter) => LATEX_MATHBB_MAP[letter] || letter);
+
+  text = text.replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, (_, num, den) => {
+    return `<span class="study-math-frac"><span class="study-math-frac-num">${renderLatexFragment(num)}</span><span class="study-math-frac-bar"></span><span class="study-math-frac-den">${renderLatexFragment(den)}</span></span>`;
+  });
+  text = text.replace(/\\frac\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g, (_, num, den) => {
+    return `<span class="study-math-frac"><span class="study-math-frac-num">${renderLatexFragment(num)}</span><span class="study-math-frac-bar"></span><span class="study-math-frac-den">${renderLatexFragment(den)}</span></span>`;
+  });
+
+  text = text.replace(/\\sqrt(?:\[([^\]]*)\])?\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g, (_, index, body) => {
+    const indexHtml = index ? `<sup class="study-math-root-idx">${renderLatexFragment(index)}</sup>` : "";
+    return `${indexHtml}<span class="study-math-sqrt">${renderLatexFragment(body)}</span>`;
+  });
+
+  text = text.replace(/\\hat\{([^{}]*)\}/g, (_, body) => `${renderLatexFragment(body)}\u0302`);
+  text = text.replace(/\\bar\{([^{}]*)\}/g, (_, body) => `${renderLatexFragment(body)}\u0304`);
+  text = text.replace(/\\tilde\{([^{}]*)\}/g, (_, body) => `${renderLatexFragment(body)}\u0303`);
+  text = text.replace(/\\vec\{([^{}]*)\}/g, (_, body) => `${renderLatexFragment(body)}\u20d7`);
+  text = text.replace(/\\dot\{([^{}]*)\}/g, (_, body) => `${renderLatexFragment(body)}\u0307`);
+  text = text.replace(/\\ddot\{([^{}]*)\}/g, (_, body) => `${renderLatexFragment(body)}\u0308`);
+  text = text.replace(/\\overline\{([^{}]*)\}/g, (_, body) => `<span class="study-math-overline">${renderLatexFragment(body)}</span>`);
+
+  text = text.replace(/\^(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})/g, (_, group) => {
+    const inner = group.slice(1, -1);
+    return `<sup>${renderLatexFragment(inner)}</sup>`;
+  });
+  text = text.replace(/_(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})/g, (_, group) => {
+    const inner = group.slice(1, -1);
+    return `<sub>${renderLatexFragment(inner)}</sub>`;
+  });
+  text = text.replace(/\^([A-Za-z0-9*'+\-])/g, (_, char) => `<sup>${escapeHtml(char)}</sup>`);
+  text = text.replace(/_([A-Za-z0-9*'+\-])/g, (_, char) => `<sub>${escapeHtml(char)}</sub>`);
+
+  text = text.replace(/\\(?:left|right|big|Big|bigg|Bigg)([([{\])}|.])/g, (_, bracket) => escapeHtml(bracket));
+  text = text.replace(/\\(?:left|right|big|Big|bigg|Bigg)\./g, "");
+  text = text.replace(/\\(?:left|right|big|Big|bigg|Bigg)/g, "");
+
+  for (const [command, symbol] of Object.entries(LATEX_SYMBOL_MAP)) {
+    const escaped = command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    text = text.replace(new RegExp(escaped + "(?![a-zA-Z])", "g"), symbol);
+  }
+
+  text = text.replace(/\\(?:hspace|vspace|mspace)\{[^{}]*\}/g, " ");
+  text = text.replace(/\\(?:mathnormal|mathit)\{([^{}]*)\}/g, (_, body) => `<em>${escapeHtml(body)}</em>`);
+  text = text.replace(/\\(?:mathbf|boldsymbol)\{([^{}]*)\}/g, (_, body) => `<strong>${escapeHtml(body)}</strong>`);
+  text = text.replace(/\\mathcal\{([^{}]*)\}/g, (_, body) => `<em>${escapeHtml(body)}</em>`);
+
+  text = text.replace(/\\\\/g, "<br>");
+  text = text.replace(/\\[,;!\s]/g, " ");
+  text = text.replace(/\\(?:displaystyle|textstyle|scriptstyle)/g, "");
+  text = text.replace(/\{([^{}]*)\}/g, "$1");
+  text = text.replace(/\{([^{}]*)\}/g, "$1");
+
+  text = text.replace(/<(?!\/?(?:span|sup|sub|strong|em|br|div)\b)[^>]*>/g, "");
+
+  return text.trim();
+}
+
+function sanitizeAcademicHtml(html) {
   if (typeof document === "undefined") return html;
   const template = document.createElement("template");
   template.innerHTML = html;
   for (const element of [...template.content.querySelectorAll("*")]) {
-    if (!GENERATED_STUDY_ALLOWED_TAGS.has(element.tagName)) {
+    if (!ACADEMIC_TEXT_ALLOWED_TAGS.has(element.tagName)) {
       element.replaceWith(document.createTextNode(element.textContent || ""));
       continue;
     }
     for (const attribute of [...element.attributes]) {
-      if (!GENERATED_STUDY_ALLOWED_ATTRIBUTES.has(attribute.name)) {
+      if (!ACADEMIC_TEXT_ALLOWED_ATTRIBUTES.has(attribute.name)) {
         element.removeAttribute(attribute.name);
         continue;
       }
@@ -2615,7 +2822,7 @@ function sanitizeGeneratedStudyHtml(html) {
       if (attribute.name === "target" && attribute.value !== "_blank") element.removeAttribute("target");
       if (attribute.name === "rel") element.setAttribute("rel", "noopener noreferrer");
       if (attribute.name === "class") {
-        const safeClasses = attribute.value.split(/\s+/).filter((name) => /^study-|^language-/.test(name));
+        const safeClasses = attribute.value.split(/\s+/).filter((name) => /^study-|^language-|^katex/.test(name));
         if (safeClasses.length) element.setAttribute("class", safeClasses.join(" "));
         else element.removeAttribute("class");
       }
@@ -2624,7 +2831,7 @@ function sanitizeGeneratedStudyHtml(html) {
   return template.innerHTML;
 }
 
-function generatedStudyBlockMarkup(block) {
+function academicBlockMarkup(block) {
   if (block.type === "heading") {
     const tagName = block.level <= 2 ? "h5" : "h6";
     return `<${tagName}>${renderMarkdownInline(block.text)}</${tagName}>`;
@@ -2643,26 +2850,93 @@ function generatedStudyBlockMarkup(block) {
       </div>
     `;
   }
-  if (block.type === "math") return `<div class="study-math-block">${escapeHtml(block.text)}</div>`;
+  if (block.type === "math") return `<div class="study-math-block">${renderLatexToHtml(block.text, true)}</div>`;
   if (block.type === "code") return `<pre class="study-generated-code"><code>${escapeHtml(block.text)}</code></pre>`;
   if (block.type === "quote") return `<blockquote class="study-generated-quote">${renderMarkdownInline(block.text)}</blockquote>`;
   return `<p>${renderMarkdownInline(block.text)}</p>`;
 }
 
 function generatedStudyTextMarkup(content) {
-  const markup = parseGeneratedStudyMarkdown(content).map(generatedStudyBlockMarkup).join("");
-  return sanitizeGeneratedStudyHtml(markup);
+  return renderAcademicTextMarkup(content);
+}
+
+function renderAcademicTextMarkup(content) {
+  const markup = parseAcademicMarkdown(content).map(academicBlockMarkup).join("");
+  return sanitizeAcademicHtml(markup);
+}
+
+function renderAcademicInlineMarkup(content) {
+  return sanitizeAcademicHtml(renderMarkdownInline(content));
+}
+
+function parseGeneratedStudyMarkdown(content) {
+  return parseAcademicMarkdown(content);
+}
+
+function isInternalGeneratedId(value) {
+  return /^(?:source_generated|topic_evaluation|test_result)_/i.test(String(value || "").trim());
+}
+
+function cleanAcademicDisplayText(value, fallback = "") {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text || isInternalGeneratedId(text)) return fallback;
+  return text;
+}
+
+function findGeneratedMaterialQueueTarget(material) {
+  const item = currentStudyPlan()?.items?.find((entry) => entry.id === material?.todoItemId) || null;
+  const queue = studyMasteryQueue(item);
+  let topic = null;
+  let subpart = null;
+  if (queue) {
+    for (const candidate of queue.topics || []) {
+      if (candidate.generatedMaterialId && candidate.generatedMaterialId === material?.id) {
+        topic = candidate;
+        break;
+      }
+      const matchingPart = (candidate.subparts || []).find((part) => {
+        return part.generatedMaterialId === material?.id || (material?.subpartId && part.id === material.subpartId);
+      });
+      if (matchingPart) {
+        topic = candidate;
+        subpart = matchingPart;
+        break;
+      }
+    }
+    if (!topic && material?.parentTopicId) topic = queue.topics.find((candidate) => candidate.id === material.parentTopicId) || null;
+  }
+  return { item, topic, subpart };
+}
+
+function generatedStudyDisplayMetadata(material) {
+  const { item, topic, subpart } = findGeneratedMaterialQueueTarget(material);
+  const course = courseById(material?.courseId) || studyCourseForItem(item);
+  const courseName = cleanAcademicDisplayText(course?.title || material?.courseTitle || item?.related_course, "Course not specified");
+  const parentTopic = cleanAcademicDisplayText(topic?.title || material?.parentSyllabusTopic || item?.related_context, "");
+  const subpartTitle = cleanAcademicDisplayText(subpart?.title || material?.subpartTitle, "");
+  const savedTitle = cleanAcademicDisplayText(material?.title, "");
+  const title = subpartTitle || parentTopic || savedTitle || "Generated study note";
+  const topicName = parentTopic || (subpartTitle ? title : savedTitle) || "Generated study note";
+  const subpartName = subpartTitle && subpartTitle !== topicName ? subpartTitle : null;
+  return {
+    title,
+    courseName,
+    topicName,
+    subpartName,
+    generatedDate: formatDate(material?.generatedAt || material?.createdAt || new Date().toISOString()),
+  };
 }
 
 function studyMaterialMarkup(material) {
   if (material?.generatedContent) {
+    const metadata = generatedStudyDisplayMetadata(material);
     return `
       <article class="study-generated-material">
         <div class="study-material-heading">
-          <div><p class="eyebrow">Generated by StudentOS</p><h4>${escapeHtml(material.title)}</h4></div>
+          <div><p class="eyebrow">Generated by StudentOS</p><h4>${escapeHtml(metadata.title)}</h4></div>
           ${tag("Saved to Academic Context", "source")}
         </div>
-        <div class="study-generated-copy">${generatedStudyTextMarkup(material.generatedContent)}</div>
+        <div class="study-generated-copy study-academic-copy">${generatedStudyTextMarkup(material.generatedContent)}</div>
         <div class="study-note-actions" aria-label="Generated note actions">
           <button class="secondary-button" type="button" data-export-generated-note-pdf="${escapeHtml(material.id)}">Export as PDF</button>
         </div>
@@ -2691,6 +2965,7 @@ function plainMarkdownInline(value) {
     .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, "$1 ($2)")
     .replace(/`([^`]+)`/g, "$1")
     .replace(/\\\((.+?)\\\)/g, "$1")
+    .replace(/\\\[(.+?)\\\]/g, "$1")
     .replace(/\$(?!\s)([^$\n]{1,240}?)(?<!\s)\$/g, "$1")
     .replace(/\*\*([^*\n]+)\*\*/g, "$1")
     .replace(/__([^_\n]+)__/g, "$1")
@@ -2726,6 +3001,32 @@ function normalizePdfText(value) {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\x20-\x7E\n]/g, " ")
     .replace(/[ \t]+/g, " ")
+    .trim();
+}
+
+function readablePdfMath(value) {
+  return String(value || "")
+    .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, "($1) / ($2)")
+    .replace(/\\sqrt\{([^{}]+)\}/g, "sqrt($1)")
+    .replace(/\\(?:left|right|,|;|!)/g, "")
+    .replace(/\\times/g, "x")
+    .replace(/\\cdot/g, "*")
+    .replace(/\\leq/g, "<=")
+    .replace(/\\geq/g, ">=")
+    .replace(/\\neq/g, "!=")
+    .replace(/\\to/g, "->")
+    .replace(/\\infty/g, "infinity")
+    .replace(/\\pi/g, "pi")
+    .replace(/\\alpha/g, "alpha")
+    .replace(/\\beta/g, "beta")
+    .replace(/\\gamma/g, "gamma")
+    .replace(/\\theta/g, "theta")
+    .replace(/\\lambda/g, "lambda")
+    .replace(/\\mu/g, "mu")
+    .replace(/\\sigma/g, "sigma")
+    .replace(/\\sum/g, "sum")
+    .replace(/\\int/g, "integral")
+    .replace(/\\\\/g, " ")
     .trim();
 }
 
@@ -2765,22 +3066,13 @@ function wrapPdfText(value, maxWidth, fontSize, fontName = "F1") {
 }
 
 function generatedStudyPdfFilename(material) {
-  const title = normalizePdfText(material?.title || "study-note").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 70) || "study-note";
+  const metadata = generatedStudyDisplayMetadata(material);
+  const title = normalizePdfText(metadata.title || "study-note").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 70) || "study-note";
   return `studentos-${title}.pdf`;
 }
 
 function generatedStudyPdfMetadata(material) {
-  const item = currentStudyPlan()?.items?.find((entry) => entry.id === material?.todoItemId) || null;
-  const course = courseById(material?.courseId) || studyCourseForItem(item);
-  const topicName = material?.parentSyllabusTopic || item?.related_context || material?.title || "Study note";
-  const subpartName = material?.subpartTitle && material.subpartTitle !== topicName ? material.subpartTitle : null;
-  return {
-    title: material?.title || "Study note",
-    courseName: course?.title || material?.courseTitle || item?.related_course || "Course not specified",
-    topicName,
-    subpartName,
-    generatedDate: formatDate(material?.generatedAt || material?.createdAt || new Date().toISOString()),
-  };
+  return generatedStudyDisplayMetadata(material);
 }
 
 function buildPdfDocument(pageStreams) {
@@ -2906,7 +3198,7 @@ function createGeneratedStudyPdf(material) {
       continue;
     }
     if (block.type === "math") {
-      addText(block.text, { size: 10, font: "F3", indent: 12, before: 5, after: 8 });
+      addText(readablePdfMath(block.text), { size: 10, font: "F3", indent: 12, before: 5, after: 8 });
       continue;
     }
     if (block.type === "code") {
@@ -2963,18 +3255,39 @@ function masteryStatusLabel(status) {
 function topicMasteryChecklistMarkup(item) {
   const queue = studyMasteryQueue(item);
   if (!queue) return "";
+  const visibleTopics = queue.topics.filter((topic) => !isSyllabusArtifactLine(topic.title));
+  if (!visibleTopics.length) return "";
+  const hasModules = visibleTopics.some((topic) => topic.module);
+  function renderTopicLi(topic) {
+    const current = topic.id === queue.activeTopicId;
+    return `<li class="topic-mastery-topic ${escapeHtml(topic.status)}${current ? " current" : ""}">
+      <div><span class="topic-status-mark" aria-hidden="true"></span><strong>${escapeHtml(topic.title)}</strong><small>${escapeHtml(masteryStatusLabel(topic.status))}</small></div>
+      ${!hasModules && topic.module ? `<p>${escapeHtml(topic.module)}</p>` : ""}
+      ${topic.subparts?.length ? `<ol>${topic.subparts.map((part) => `<li class="${escapeHtml(part.status)}"><span class="topic-status-mark" aria-hidden="true"></span><span>Part ${part.index}: ${escapeHtml(part.title)}</span><small>${escapeHtml(masteryStatusLabel(part.status))}</small></li>`).join("")}</ol>` : ""}
+    </li>`;
+  }
+  let listHtml;
+  if (hasModules) {
+    const groups = new Map();
+    for (const topic of visibleTopics) {
+      const key = topic.module || "";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(topic);
+    }
+    listHtml = [...groups.entries()].map(([mod, topics]) => {
+      if (mod) {
+        return `<li class="topic-mastery-module-group"><details open><summary>${escapeHtml(mod)}</summary><ol class="topic-mastery-list">${topics.map(renderTopicLi).join("")}</ol></details></li>`;
+      }
+      return topics.map(renderTopicLi).join("");
+    }).join("");
+  } else {
+    listHtml = visibleTopics.map(renderTopicLi).join("");
+  }
   return `
     <section class="topic-mastery" aria-labelledby="topic-mastery-title">
-      <header><div><p class="eyebrow">Topic mastery</p><h4 id="topic-mastery-title">${escapeHtml([queue.courseTitle, queue.examName].filter(Boolean).join(" — "))}</h4></div></header>
+      <header><div><p class="eyebrow">Topic mastery</p><h4 id="topic-mastery-title">${escapeHtml([queue.courseTitle, queue.examName].filter(Boolean).join(" \u2014 "))}</h4></div></header>
       ${queue.guidance ? `<p class="topic-mastery-guidance">${escapeHtml(queue.guidance)}</p>` : ""}
-      <ol class="topic-mastery-list">${queue.topics.map((topic) => {
-        const current = topic.id === queue.activeTopicId;
-        return `<li class="topic-mastery-topic ${escapeHtml(topic.status)}${current ? " current" : ""}">
-          <div><span class="topic-status-mark" aria-hidden="true"></span><strong>${escapeHtml(topic.title)}</strong><small>${escapeHtml(masteryStatusLabel(topic.status))}</small></div>
-          ${topic.module ? `<p>${escapeHtml(topic.module)}</p>` : ""}
-          ${topic.subparts?.length ? `<ol>${topic.subparts.map((part) => `<li class="${escapeHtml(part.status)}"><span class="topic-status-mark" aria-hidden="true"></span><span>Part ${part.index}: ${escapeHtml(part.title)}</span><small>${escapeHtml(masteryStatusLabel(part.status))}</small></li>`).join("")}</ol>` : ""}
-        </li>`;
-      }).join("")}</ol>
+      <ol class="topic-mastery-list">${listHtml}</ol>
     </section>
   `;
 }
@@ -3004,13 +3317,31 @@ function studyTestTimerText(milliseconds) {
     : `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
 }
 
+function studyTestDisplayMetadata(session) {
+  const paper = session?.testPaper || {};
+  const course = courseById(session?.courseId);
+  const topicName = cleanAcademicDisplayText(session?.parentSyllabusTopic || paper.topic || paper.test_title, "Study topic");
+  const courseName = cleanAcademicDisplayText(course?.title || paper.course, "Course not specified");
+  return {
+    title: `${topicName} check`,
+    topicName,
+    courseName,
+  };
+}
+
 function studyTestSummaryMarkup(paper) {
+  const session = paper?.testPaper ? paper : null;
+  const resolvedPaper = session?.testPaper || paper;
+  const metadata = session ? studyTestDisplayMetadata(session) : {
+    topicName: cleanAcademicDisplayText(resolvedPaper?.topic, "Study topic"),
+    courseName: cleanAcademicDisplayText(resolvedPaper?.course, "Course not specified"),
+  };
   return `
     <dl class="study-test-summary">
-      <div><dt>Estimated time</dt><dd>${escapeHtml(`${paper.estimated_minutes} minutes`)}</dd></div>
-      <div><dt>Total marks</dt><dd>${escapeHtml(paper.total_marks)}</dd></div>
-      <div><dt>Questions</dt><dd>${paper.questions.length}</dd></div>
-      <div><dt>Topic / course</dt><dd>${escapeHtml(`${paper.topic} / ${paper.course}`)}</dd></div>
+      <div><dt>Estimated time</dt><dd>${escapeHtml(`${resolvedPaper.estimated_minutes} minutes`)}</dd></div>
+      <div><dt>Total marks</dt><dd>${escapeHtml(resolvedPaper.total_marks)}</dd></div>
+      <div><dt>Questions</dt><dd>${resolvedPaper.questions.length}</dd></div>
+      <div><dt>Topic / course</dt><dd>${renderAcademicInlineMarkup(`${metadata.topicName} / ${metadata.courseName}`)}</dd></div>
     </dl>
   `;
 }
@@ -3021,7 +3352,7 @@ function studyTestWarningMarkup(session) {
     <section class="study-test-warning" aria-labelledby="study-test-warning-title">
       <p class="eyebrow">Before you start</p>
       <h4 id="study-test-warning-title">This test cannot be paused. Start only when you can complete it in one sitting.</h4>
-      ${studyTestSummaryMarkup(paper)}
+      ${studyTestSummaryMarkup(session)}
       <fieldset class="study-answer-mode">
         <legend>How will you answer?</legend>
         <label><input type="radio" name="study-answer-mode" value="typed"> <span><strong>Type answers in StudentOS</strong><small>Your answers will be saved as you work.</small></span></label>
@@ -3036,7 +3367,7 @@ function studyTestWarningMarkup(session) {
 function studyTestQuestionMarkup(question, session) {
   const answer = session.answers?.[String(question.question_number)] || "";
   const choices = question.choices?.length
-    ? `<ol class="study-test-choices" type="A">${question.choices.map((choice) => `<li>${escapeHtml(choice)}</li>`).join("")}</ol>`
+    ? `<ol class="study-test-choices" type="A">${question.choices.map((choice) => `<li>${renderAcademicInlineMarkup(choice)}</li>`).join("")}</ol>`
     : "";
   const answerArea = session.answerMode === "typed"
     ? `<label class="study-test-answer"><span>Your answer</span><textarea data-study-test-answer="${question.question_number}" rows="${question.type === "long_answer" ? 7 : 4}">${escapeHtml(answer)}</textarea></label>`
@@ -3044,7 +3375,7 @@ function studyTestQuestionMarkup(question, session) {
   return `
     <article class="study-test-question">
       <header><span>Question ${question.question_number}</span><span>${escapeHtml(humanize(question.type))} · ${question.marks} mark${question.marks === 1 ? "" : "s"}</span></header>
-      <p>${escapeHtml(question.prompt)}</p>
+      <div class="study-test-prompt study-academic-copy">${renderAcademicTextMarkup(question.prompt)}</div>
       ${choices}
       ${answerArea}
     </article>
@@ -3053,13 +3384,14 @@ function studyTestQuestionMarkup(question, session) {
 
 function studyTestAttemptMarkup(session) {
   const paper = session.testPaper;
+  const metadata = studyTestDisplayMetadata(session);
   return `
     <section class="study-test-attempt" data-study-test-session="${escapeHtml(session.id)}">
       <header class="study-test-attempt-header">
-        <div><p class="eyebrow">Strict test</p><h4>${escapeHtml(paper.test_title)}</h4><p>${escapeHtml(`${paper.topic} · ${paper.course}`)}</p></div>
+        <div><p class="eyebrow">Strict test</p><h4>${renderAcademicInlineMarkup(metadata.title)}</h4><p>${renderAcademicInlineMarkup(`${metadata.topicName} · ${metadata.courseName}`)}</p></div>
         <div class="study-test-timer" aria-live="polite"><small>Time remaining</small><strong data-study-test-timer>${studyTestTimerText(studyTestTimeLeft(session.deadlineAt))}</strong></div>
       </header>
-      <div class="study-test-instructions"><strong>Instructions</strong><ul>${paper.instructions.map((instruction) => `<li>${escapeHtml(instruction)}</li>`).join("")}</ul></div>
+      <div class="study-test-instructions"><strong>Instructions</strong><ul>${paper.instructions.map((instruction) => `<li>${renderAcademicInlineMarkup(instruction)}</li>`).join("")}</ul></div>
       ${session.answerMode === "handwritten" ? `<p class="study-handwritten-guidance">After you finish on paper, you will upload your answer sheet for evaluation.</p>` : `<p class="study-test-save-state" data-study-test-save-state>${session.lastSavedAt ? "Answers saved." : "Answers save as you work."}</p>`}
       <div class="study-test-questions">${paper.questions.map((question) => studyTestQuestionMarkup(question, session)).join("")}</div>
       <div class="study-test-finish">
@@ -3085,7 +3417,7 @@ function studyTestClosedMarkup(session) {
       <p class="eyebrow">${escapeHtml(studyTestStatusLabel(session.status))}</p>
       <h4>${escapeHtml(title)}</h4>
       <p>${escapeHtml(copy)}</p>
-      ${studyTestSummaryMarkup(session.testPaper)}
+      ${studyTestSummaryMarkup(session)}
       <div class="study-evaluation-submit">
         ${handwritten ? `
           <label class="study-answer-sheet-field">
@@ -3102,31 +3434,32 @@ function studyTestClosedMarkup(session) {
 
 function studyTestResultMarkup(session) {
   const result = session.evaluation;
+  const metadata = studyTestDisplayMetadata(session);
   const strengths = result.strengths?.length ? result.strengths : ["You completed the test and now have a clear revision path."];
   const weakTopics = result.weak_topics?.length ? result.weak_topics : ["No specific weak topic was identified."];
   return `
     <section class="study-test-result" aria-labelledby="study-test-result-title">
       <header class="study-result-header">
         <div><p class="eyebrow">Your result</p><h4 id="study-test-result-title">${escapeHtml(`${result.scored_marks} / ${result.total_marks}`)}</h4><p>${escapeHtml(`${result.percentage}%`)}</p></div>
-        <div class="study-result-score" aria-label="Score ${escapeHtml(result.percentage)} percent"><strong>${escapeHtml(result.percentage)}%</strong><span>${escapeHtml(session.testPaper.topic)}</span></div>
+        <div class="study-result-score" aria-label="Score ${escapeHtml(result.percentage)} percent"><strong>${escapeHtml(result.percentage)}%</strong><span>${renderAcademicInlineMarkup(metadata.topicName)}</span></div>
       </header>
       <div class="study-result-overview">
-        <section><h5>What went well</h5><ul>${strengths.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}</ul></section>
-        <section><h5>What to revise</h5><ul>${weakTopics.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}</ul></section>
+        <section><h5>What went well</h5><ul>${strengths.map((entry) => `<li>${renderAcademicInlineMarkup(entry)}</li>`).join("")}</ul></section>
+        <section><h5>What to revise</h5><ul>${weakTopics.map((entry) => `<li>${renderAcademicInlineMarkup(entry)}</li>`).join("")}</ul></section>
       </div>
       <section class="study-result-questions">
         <div class="study-result-section-heading"><p class="eyebrow">Corrections</p><h5>Question-by-question feedback</h5></div>
         ${result.question_results.map((question) => `
           <article class="study-result-question">
             <header><strong>Question ${escapeHtml(question.question_number)}</strong><span>${escapeHtml(`${question.marks_awarded} / ${question.max_marks} marks`)}</span></header>
-            <p><strong>Feedback</strong>${escapeHtml(question.feedback)}</p>
-            <p><strong>Correction</strong>${escapeHtml(question.correction)}</p>
+            <div class="study-result-copy"><strong>Feedback</strong><div class="study-academic-copy">${renderAcademicTextMarkup(question.feedback)}</div></div>
+            <div class="study-result-copy"><strong>Correction</strong><div class="study-academic-copy">${renderAcademicTextMarkup(question.correction)}</div></div>
           </article>
         `).join("")}
       </section>
       <section class="study-result-next">
-        <div><h5>Next steps</h5><ul>${result.next_steps.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}</ul></div>
-        <div><h5>Short revision plan</h5><p>${escapeHtml(result.short_revision_plan)}</p></div>
+        <div><h5>Next steps</h5><ul>${result.next_steps.map((entry) => `<li>${renderAcademicInlineMarkup(entry)}</li>`).join("")}</ul></div>
+        <div><h5>Short revision plan</h5><div class="study-academic-copy">${renderAcademicTextMarkup(result.short_revision_plan)}</div></div>
       </section>
       <div class="study-result-actions" aria-label="Result actions">
         <button class="secondary-button" type="button" data-study-review-corrections>Review corrections</button>

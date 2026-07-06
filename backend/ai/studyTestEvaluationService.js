@@ -196,6 +196,7 @@ function evaluationMessages({ state, item, session, answerSheetText }) {
         "Return JSON only with total_marks, scored_marks, percentage, question_results, strengths, weak_topics, next_steps, and short_revision_plan.",
         "Each question result must include question_number, marks_awarded, max_marks, feedback, and correction.",
         "Feedback and corrections must be concise, specific, educational, and suitable for the student.",
+        "Use clean Markdown in feedback, corrections, strengths, weak topics, next steps, and revision plan. Put inline math in $...$ or \\(...\\), and block math in $$...$$ or \\[...\\].",
       ].join(" "),
     },
     {

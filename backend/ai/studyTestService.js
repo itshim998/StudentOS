@@ -111,9 +111,13 @@ function testGenerationMessages(context) {
       role: "system",
       content: [
         "You are StudentOS. Create a rigorous but fair test from only the supplied student task and study context.",
+        "Generate only for the completed parent syllabus topic supplied by StudentOS.",
         "The strictSyllabusBoundary parentTopic is immutable: keep its exact title and do not test material outside that parent syllabus topic.",
+        "Do not rename the topic, replace it with a friendlier title, or choose an easier prerequisite as the main topic.",
         "Use the generated notes as study content, but use the original syllabus parent topic as the final scope boundary.",
         "Test the full parent topic, not an individual subpart.",
+        "You may include a short prerequisite reminder inside a question, but the main test scope must stay inside the active syllabus topic.",
+        "Use clean Markdown in question prompts, instructions, and answer choices. Put inline math in $...$ or \\(...\\), and block math in $$...$$ or \\[...\\].",
         "Choose the marks, duration, question types, and difficulty for the context and urgency.",
         "Return JSON only with: test_title, course, topic, total_marks, estimated_minutes, instructions (string array), and questions.",
         "Each question must contain question_number, type (objective, short_answer, long_answer, numerical, or mixed), prompt, marks, and choices only for objective questions.",
@@ -191,7 +195,10 @@ export async function generateStudyTest({ state, item, now = new Date(), provide
   }
   paper = normalizeTestPaper(paper, { course: context.item.course, topic: context.item.topic });
   if (!paper) return { generationSucceeded: false, session: null };
-  paper.topic = context.item.topic;
+  const lockedTopic = clean(context.strictSyllabusBoundary?.parentTopic || context.item.topic, 240) || paper.topic;
+  paper.topic = lockedTopic;
+  paper.course = context.item.course || paper.course;
+  paper.test_title = `${lockedTopic} check`;
   const course = courseForItem(state, item);
   const masteryTopic = activeMasteryTopic(item);
   const timestamp = now.toISOString();
