@@ -1707,6 +1707,14 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
       dashboardActive: true,
       selectedPlanId: "starter",
       accessMode: "paid_plan",
+      paymentMethodVerified: true,
+      legalConsentComplete: true,
+      workspaceReady: true,
+      nextStep: "dashboard",
+      paymentMethodVerifiedAt: new Date().toISOString(),
+      legalConsentCompleteAt: new Date().toISOString(),
+      workspaceReadyAt: new Date().toISOString(),
+      dashboardActivatedAt: new Date().toISOString(),
     },
     planAccess: {
       ...structuredClone(baseState.planAccess || {}),
@@ -1721,6 +1729,7 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
     sourceMaterials: [],
     testSessions: [],
   };
+  let studyMaterialGenerationCalls = 0;
   await page.route("**/api/bootstrap", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify(studyState),
@@ -1788,6 +1797,7 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
     });
   });
   await page.route("**/api/study/material", async (route) => {
+    studyMaterialGenerationCalls += 1;
     const generatedMaterial = {
       id: "source_generated_physics",
       courseId: "course_study_physics",
@@ -1797,7 +1807,19 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
       origin: "studentos_generated",
       status: "ready",
       readyForStudy: true,
-      generatedContent: "Study guide: Review motion and forces\n\nWhat to focus on\nNewton's laws and force diagrams.\n\nCore lesson\nConnect net force to acceleration.\n\nStudy steps\n1. Draw a force diagram.\n\nQuick self-check\nExplain the result in your own words.",
+      generatedContent: `# Core lesson
+
+**Net force** connects force diagrams to acceleration with $F = ma$.
+
+1. Draw a force diagram.
+2. Link acceleration to the net force.
+
+| Idea | Check |
+| --- | --- |
+| Force | direction |
+
+<script>window.__studentosUnsafeRendered = true;</script>
+[unsafe link](javascript:alert)`,
       todoItemId: "todo_study_physics",
       generatedAt: new Date().toISOString(),
       academicContextIncluded: true,
@@ -1904,23 +1926,50 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
   await page.locator(".study-queue-item").nth(1).click();
   await expect(page.locator(".study-workspace")).toContainText("Integration notes");
   await expect(page.getByRole("link", { name: "Open material" })).toBeVisible();
+  await expect(page.locator("[data-export-generated-note-pdf]")).toHaveCount(0);
 
   await page.locator(".study-queue-item").first().click();
-  await expect(page.locator(".study-workspace")).toContainText("No study material is available for this task yet.");
-  await page.getByRole("button", { name: "Generate study material" }).click();
+  await expect(page.locator(".study-workspace")).toContainText("No study note is available yet.");
+  await page.getByRole("button", { name: /Generate (?:study material|note)/ }).click();
   await expect(page.locator(".study-generated-material")).toContainText("Core lesson");
   await expect(page.locator(".study-workspace")).toContainText("saved to Academic Context", { ignoreCase: true });
+  const generatedCopy = page.locator(".study-generated-copy");
+  await expect(generatedCopy.locator("h5")).toContainText("Core lesson");
+  await expect(generatedCopy.locator("strong")).toContainText("Net force");
+  await expect(generatedCopy.locator("ol > li").first()).toContainText("Draw a force diagram");
+  await expect(generatedCopy.locator(".study-math-inline")).toContainText("F = ma");
+  await expect(generatedCopy.locator("script")).toHaveCount(0);
+  await expect(generatedCopy.locator("a[href^='javascript']")).toHaveCount(0);
+  const generatedMarkup = await generatedCopy.evaluate((element) => ({ html: element.innerHTML, text: element.textContent || "" }));
+  expect(generatedMarkup.html).not.toContain("<script");
+  expect(generatedMarkup.text).toContain("<script>window.__studentosUnsafeRendered = true;</script>");
+  expect(await page.evaluate(() => window.__studentosUnsafeRendered === true)).toBe(false);
+  await expect(page.locator("[data-export-generated-note-pdf]")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Export as PDF" }).click();
+  await expect(page.locator("#academic-pdf-viewer")).toBeVisible();
+  await expect(page.locator("#academic-pdf-viewer-context")).toHaveText("StudentOS PDF Export");
+  await expect(page.getByRole("link", { name: "Download PDF" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Download PDF" })).toHaveAttribute("download", "studentos-review-motion-and-forces.pdf");
+  expect(studyMaterialGenerationCalls).toBe(1);
+  expect(studyState.sourceMaterials.map((source) => source.title)).toEqual(["Integration notes", "Review motion and forces"]);
+  expect(studyState.sourceMaterials.some((source) => /academic context pdf|pdf export/i.test(String(source.title || source.kind || source.sourceType || "")))).toBe(false);
+  await page.getByRole("button", { name: "Close document viewer" }).click();
+  await expect(page.getByRole("link", { name: "Download PDF" })).toBeHidden();
 
   await clickNav(page, "Academic Context");
   await expect(page.locator("#source-list")).toContainText("Generated by StudentOS");
   await expect(page.locator("#source-list")).toContainText("Review motion and forces");
+  await expect(page.locator("#source-list")).not.toContainText("StudentOS PDF Export");
   await clickNav(page, "Study and Evaluate");
-  await page.getByRole("button", { name: "Mark study done" }).click();
+  await page.getByRole("button", { name: /Mark (?:study|note) done/ }).click();
   await expect(page.locator(".study-workspace")).toContainText("Study marked done.");
   await expect(page.getByRole("button", { name: "Generate test" })).toBeVisible();
   await page.getByRole("button", { name: "Generate test" }).click();
   await expect(page.locator(".study-test-warning")).toContainText("This test cannot be paused. Start only when you can complete it in one sitting.");
   await expect(page.locator(".study-test-warning")).toContainText("20 minutes");
+  await expect(page.locator(".study-test-warning [data-export-generated-note-pdf], .study-test-warning [download], .study-test-warning a")).toHaveCount(0);
+  await expect(page.locator(".study-test-warning")).not.toContainText(/export|download/i);
   await expect(page.getByRole("button", { name: "Start test" })).toBeVisible();
   await page.getByRole("button", { name: "Start test" }).click();
   await expect(page.locator(".study-workspace-message")).toContainText("Choose how you will answer");
@@ -1928,6 +1977,8 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
   await page.getByRole("button", { name: "Start test" }).click();
   await expect(page.locator(".study-test-timer")).toBeVisible();
   await expect(page.locator(".study-test-question")).toHaveCount(2);
+  await expect(page.locator(".study-test-attempt [data-export-generated-note-pdf], .study-test-attempt [download], .study-test-attempt a")).toHaveCount(0);
+  await expect(page.locator(".study-test-attempt")).not.toContainText(/export|download/i);
   await page.locator('[data-study-test-answer="1"]').fill("The vector sum of all forces.");
   await page.waitForTimeout(850);
   expect(studyState.testSessions[0].answers["1"]).toBe("The vector sum of all forces.");

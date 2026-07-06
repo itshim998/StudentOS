@@ -123,10 +123,12 @@ const els = {
   academicContextDeleteCancel: document.getElementById("academic-context-delete-cancel"),
   academicContextDeleteConfirm: document.getElementById("academic-context-delete-confirm"),
   academicPdfViewer: document.getElementById("academic-pdf-viewer"),
+  academicPdfViewerContext: document.getElementById("academic-pdf-viewer-context"),
   academicPdfViewerTitle: document.getElementById("academic-pdf-viewer-title"),
   academicPdfViewerStatus: document.getElementById("academic-pdf-viewer-status"),
   academicPdfViewerObject: document.getElementById("academic-pdf-viewer-object"),
   academicPdfViewerFallback: document.getElementById("academic-pdf-viewer-fallback"),
+  academicPdfViewerDownload: document.getElementById("academic-pdf-viewer-download"),
   academicPdfViewerClose: document.getElementById("academic-pdf-viewer-close"),
   scoreTopicSelect: document.getElementById("score-topic-select"),
   extensionAssignmentSelect: document.getElementById("extension-assignment-select"),
@@ -2414,29 +2416,242 @@ function relatedStudyMaterial(item) {
     .sort((left, right) => right.score - left.score)[0]?.source || null;
 }
 
-function generatedStudyTextMarkup(content) {
-  const lines = String(content || "").split(/\r?\n/);
-  const output = [];
-  let listType = null;
-  const closeList = () => { if (listType) output.push(`</${listType}>`); listType = null; };
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) { closeList(); continue; }
-    const heading = line.match(/^#{1,6}\s+(.+)$/);
-    if (heading) { closeList(); output.push(`<h5>${escapeHtml(heading[1])}</h5>`); continue; }
-    const bullet = line.match(/^[-*]\s+(.+)$/);
-    const numbered = line.match(/^\d+[.)]\s+(.+)$/);
-    if (bullet || numbered) {
-      const desired = bullet ? "ul" : "ol";
-      if (listType !== desired) { closeList(); listType = desired; output.push(`<${desired}>`); }
-      output.push(`<li>${escapeHtml((bullet || numbered)[1])}</li>`);
+const GENERATED_STUDY_ALLOWED_TAGS = new Set(["A", "BLOCKQUOTE", "CODE", "DIV", "EM", "H5", "H6", "LI", "OL", "P", "PRE", "SPAN", "STRONG", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "UL"]);
+const GENERATED_STUDY_ALLOWED_ATTRIBUTES = new Set(["class", "href", "rel", "target"]);
+
+function splitMarkdownTableRow(row) {
+  const trimmed = String(row || "").trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function lineLooksLikeMarkdownTable(row) {
+  return String(row || "").includes("|") && splitMarkdownTableRow(row).length >= 2;
+}
+
+function isMarkdownTableDivider(row) {
+  const cells = splitMarkdownTableRow(row);
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function isMarkdownTableStart(lines, index) {
+  return lineLooksLikeMarkdownTable(lines[index]) && isMarkdownTableDivider(lines[index + 1] || "");
+}
+
+function isGeneratedMarkdownBlockStart(lines, index) {
+  const line = String(lines[index] || "").trim();
+  if (!line) return true;
+  return /^```/.test(line)
+    || line.startsWith("$$")
+    || /^(#{1,6})\s+/.test(line)
+    || /^>\s?/.test(line)
+    || /^(\s*)([-*+]|\d+[.)])\s+/.test(line)
+    || isMarkdownTableStart(lines, index);
+}
+
+function parseGeneratedStudyMarkdown(content) {
+  const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
+  const blocks = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = String(lines[index] || "").trim();
+    if (!line) {
+      index += 1;
       continue;
     }
-    closeList();
-    output.push(`<p>${escapeHtml(line)}</p>`);
+
+    if (/^```/.test(line)) {
+      const language = line.replace(/^```/, "").trim();
+      const code = [];
+      index += 1;
+      while (index < lines.length && !/^```/.test(String(lines[index] || "").trim())) {
+        code.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push({ type: "code", language, text: code.join("\n") });
+      continue;
+    }
+
+    if (line.startsWith("$$")) {
+      const math = [];
+      const first = line.slice(2);
+      if (first.endsWith("$$") && first.length > 2) {
+        math.push(first.slice(0, -2));
+        index += 1;
+      } else {
+        if (first.trim()) math.push(first);
+        index += 1;
+        while (index < lines.length) {
+          const current = String(lines[index] || "");
+          const end = current.indexOf("$$");
+          if (end >= 0) {
+            math.push(current.slice(0, end));
+            index += 1;
+            break;
+          }
+          math.push(current);
+          index += 1;
+        }
+      }
+      blocks.push({ type: "math", text: math.join("\n").trim() });
+      continue;
+    }
+
+    if (isMarkdownTableStart(lines, index)) {
+      const headers = splitMarkdownTableRow(lines[index]);
+      const rows = [];
+      index += 2;
+      while (index < lines.length && lineLooksLikeMarkdownTable(lines[index])) {
+        rows.push(splitMarkdownTableRow(lines[index]));
+        index += 1;
+      }
+      blocks.push({ type: "table", headers, rows });
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      blocks.push({ type: "heading", level: heading[1].length, text: heading[2].trim() });
+      index += 1;
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
+      const quote = [];
+      while (index < lines.length && /^>\s?/.test(String(lines[index] || "").trim())) {
+        quote.push(String(lines[index] || "").trim().replace(/^>\s?/, ""));
+        index += 1;
+      }
+      blocks.push({ type: "quote", text: quote.join(" ") });
+      continue;
+    }
+
+    const listMatch = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.+)$/);
+    if (listMatch) {
+      const ordered = /^\d/.test(listMatch[2]);
+      const items = [];
+      while (index < lines.length) {
+        const current = String(lines[index] || "").trim();
+        const match = current.match(/^(\s*)([-*+]|\d+[.)])\s+(.+)$/);
+        if (!match || /^\d/.test(match[2]) !== ordered) break;
+        items.push(match[3].trim());
+        index += 1;
+      }
+      blocks.push({ type: "list", ordered, items });
+      continue;
+    }
+
+    const paragraph = [line];
+    index += 1;
+    while (index < lines.length && String(lines[index] || "").trim() && !isGeneratedMarkdownBlockStart(lines, index)) {
+      paragraph.push(String(lines[index] || "").trim());
+      index += 1;
+    }
+    blocks.push({ type: "paragraph", text: paragraph.join(" ") });
   }
-  closeList();
-  return output.join("");
+  return blocks;
+}
+
+function inlinePlaceholder(placeholders, html) {
+  const token = `\u0007STUDENTOS_INLINE_${placeholders.length}\u0007`;
+  placeholders.push({ token, html });
+  return token;
+}
+
+function restoreInlinePlaceholders(html, placeholders) {
+  return placeholders.reduce((output, placeholder) => output.replaceAll(placeholder.token, placeholder.html), html);
+}
+
+function sanitizeMarkdownUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw || /[\u0000-\u001f\s]/.test(raw)) return null;
+  try {
+    const url = new URL(raw, window.location?.origin || "https://studentos.local");
+    if (!["http:", "https:", "mailto:"].includes(url.protocol)) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+function renderMarkdownInline(value) {
+  const placeholders = [];
+  let text = String(value || "");
+  text = text.replace(/`([^`]+)`/g, (_, code) => inlinePlaceholder(placeholders, `<code>${escapeHtml(code)}</code>`));
+  text = text.replace(/\\\((.+?)\\\)/g, (_, math) => inlinePlaceholder(placeholders, `<span class="study-math-inline">${escapeHtml(math)}</span>`));
+  text = text.replace(/\$(?!\s)([^$\n]{1,240}?)(?<!\s)\$/g, (_, math) => inlinePlaceholder(placeholders, `<span class="study-math-inline">${escapeHtml(math)}</span>`));
+  text = text.replace(/\[([^\]\n]{1,160})\]\(([^)\s]{1,500})\)/g, (_, label, href) => {
+    const safeHref = sanitizeMarkdownUrl(href);
+    if (!safeHref) return `${label} (${href})`;
+    return inlinePlaceholder(placeholders, `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`);
+  });
+  let html = escapeHtml(text);
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/__([^_\n]+)__/g, "<strong>$1</strong>");
+  html = html.replace(/(^|[\s(])\*([^*\n]{1,160})\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>");
+  html = html.replace(/(^|[\s(])_([^_\n]{1,160})_(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>");
+  return restoreInlinePlaceholders(html, placeholders);
+}
+
+function sanitizeGeneratedStudyHtml(html) {
+  if (typeof document === "undefined") return html;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  for (const element of [...template.content.querySelectorAll("*")]) {
+    if (!GENERATED_STUDY_ALLOWED_TAGS.has(element.tagName)) {
+      element.replaceWith(document.createTextNode(element.textContent || ""));
+      continue;
+    }
+    for (const attribute of [...element.attributes]) {
+      if (!GENERATED_STUDY_ALLOWED_ATTRIBUTES.has(attribute.name)) {
+        element.removeAttribute(attribute.name);
+        continue;
+      }
+      if (attribute.name === "href") {
+        const safeHref = sanitizeMarkdownUrl(attribute.value);
+        if (safeHref) element.setAttribute("href", safeHref);
+        else element.removeAttribute("href");
+      }
+      if (attribute.name === "target" && attribute.value !== "_blank") element.removeAttribute("target");
+      if (attribute.name === "rel") element.setAttribute("rel", "noopener noreferrer");
+      if (attribute.name === "class") {
+        const safeClasses = attribute.value.split(/\s+/).filter((name) => /^study-|^language-/.test(name));
+        if (safeClasses.length) element.setAttribute("class", safeClasses.join(" "));
+        else element.removeAttribute("class");
+      }
+    }
+  }
+  return template.innerHTML;
+}
+
+function generatedStudyBlockMarkup(block) {
+  if (block.type === "heading") {
+    const tagName = block.level <= 2 ? "h5" : "h6";
+    return `<${tagName}>${renderMarkdownInline(block.text)}</${tagName}>`;
+  }
+  if (block.type === "list") {
+    const tagName = block.ordered ? "ol" : "ul";
+    return `<${tagName}>${block.items.map((item) => `<li>${renderMarkdownInline(item)}</li>`).join("")}</${tagName}>`;
+  }
+  if (block.type === "table") {
+    return `
+      <div class="study-generated-table-wrap">
+        <table>
+          <thead><tr>${block.headers.map((cell) => `<th>${renderMarkdownInline(cell)}</th>`).join("")}</tr></thead>
+          <tbody>${block.rows.map((row) => `<tr>${block.headers.map((_, cellIndex) => `<td>${renderMarkdownInline(row[cellIndex] || "")}</td>`).join("")}</tr>`).join("")}</tbody>
+        </table>
+      </div>
+    `;
+  }
+  if (block.type === "math") return `<div class="study-math-block">${escapeHtml(block.text)}</div>`;
+  if (block.type === "code") return `<pre class="study-generated-code"><code>${escapeHtml(block.text)}</code></pre>`;
+  if (block.type === "quote") return `<blockquote class="study-generated-quote">${renderMarkdownInline(block.text)}</blockquote>`;
+  return `<p>${renderMarkdownInline(block.text)}</p>`;
+}
+
+function generatedStudyTextMarkup(content) {
+  const markup = parseGeneratedStudyMarkdown(content).map(generatedStudyBlockMarkup).join("");
+  return sanitizeGeneratedStudyHtml(markup);
 }
 
 function studyMaterialMarkup(material) {
@@ -2448,6 +2663,9 @@ function studyMaterialMarkup(material) {
           ${tag("Saved to Academic Context", "source")}
         </div>
         <div class="study-generated-copy">${generatedStudyTextMarkup(material.generatedContent)}</div>
+        <div class="study-note-actions" aria-label="Generated note actions">
+          <button class="secondary-button" type="button" data-export-generated-note-pdf="${escapeHtml(material.id)}">Export as PDF</button>
+        </div>
       </article>
     `;
   }
@@ -2466,6 +2684,255 @@ function studyMaterialMarkup(material) {
           : ""}
     </article>
   `;
+}
+
+function plainMarkdownInline(value) {
+  return String(value || "")
+    .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, "$1 ($2)")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\\\((.+?)\\\)/g, "$1")
+    .replace(/\$(?!\s)([^$\n]{1,240}?)(?<!\s)\$/g, "$1")
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/__([^_\n]+)__/g, "$1")
+    .replace(/(^|[\s(])\*([^*\n]{1,160})\*(?=[\s).,;:!?]|$)/g, "$1$2")
+    .replace(/(^|[\s(])_([^_\n]{1,160})_(?=[\s).,;:!?]|$)/g, "$1$2")
+    .replace(/<\/?[a-z][^>]*>/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizePdfText(value) {
+  const replacements = {
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201c": "\"",
+    "\u201d": "\"",
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2026": "...",
+    "\u2022": "-",
+    "\u00d7": "x",
+    "\u00f7": "/",
+    "\u2264": "<=",
+    "\u2265": ">=",
+    "\u2260": "!=",
+    "\u2192": "->",
+    "\u03c0": "pi",
+    "\u221a": "sqrt",
+  };
+  return String(value || "")
+    .replace(/[\u2018\u2019\u201c\u201d\u2013\u2014\u2026\u2022\u00d7\u00f7\u2264\u2265\u2260\u2192\u03c0\u221a]/g, (char) => replacements[char] || " ")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E\n]/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+}
+
+function pdfEscapeText(value) {
+  return normalizePdfText(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+
+function wrapPdfText(value, maxWidth, fontSize, fontName = "F1") {
+  const text = normalizePdfText(value);
+  if (!text) return [];
+  const averageWidth = fontName === "F3" ? fontSize * 0.58 : fontSize * 0.52;
+  const maxChars = Math.max(18, Math.floor(maxWidth / averageWidth));
+  const lines = [];
+  for (const sourceLine of text.split(/\n/)) {
+    const words = sourceLine.split(/\s+/).filter(Boolean);
+    let line = "";
+    for (const word of words) {
+      if (word.length > maxChars) {
+        if (line) {
+          lines.push(line);
+          line = "";
+        }
+        for (let index = 0; index < word.length; index += maxChars) lines.push(word.slice(index, index + maxChars));
+        continue;
+      }
+      const candidate = line ? `${line} ${word}` : word;
+      if (candidate.length > maxChars && line) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    }
+    if (line) lines.push(line);
+  }
+  return lines;
+}
+
+function generatedStudyPdfFilename(material) {
+  const title = normalizePdfText(material?.title || "study-note").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 70) || "study-note";
+  return `studentos-${title}.pdf`;
+}
+
+function generatedStudyPdfMetadata(material) {
+  const item = currentStudyPlan()?.items?.find((entry) => entry.id === material?.todoItemId) || null;
+  const course = courseById(material?.courseId) || studyCourseForItem(item);
+  const topicName = material?.parentSyllabusTopic || item?.related_context || material?.title || "Study note";
+  const subpartName = material?.subpartTitle && material.subpartTitle !== topicName ? material.subpartTitle : null;
+  return {
+    title: material?.title || "Study note",
+    courseName: course?.title || material?.courseTitle || item?.related_course || "Course not specified",
+    topicName,
+    subpartName,
+    generatedDate: formatDate(material?.generatedAt || material?.createdAt || new Date().toISOString()),
+  };
+}
+
+function buildPdfDocument(pageStreams) {
+  const pageCount = Math.max(1, pageStreams.length);
+  const pageIds = Array.from({ length: pageCount }, (_, index) => 3 + index * 2);
+  const fontBaseId = 3 + pageCount * 2;
+  const objects = [
+    { id: 1, body: "<< /Type /Catalog /Pages 2 0 R >>" },
+    { id: 2, body: `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageCount} >>` },
+  ];
+  pageStreams.forEach((stream, index) => {
+    const pageId = 3 + index * 2;
+    const contentId = pageId + 1;
+    objects.push({
+      id: pageId,
+      body: `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontBaseId} 0 R /F2 ${fontBaseId + 1} 0 R /F3 ${fontBaseId + 2} 0 R >> >> /Contents ${contentId} 0 R >>`,
+    });
+    objects.push({ id: contentId, body: `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream` });
+  });
+  objects.push({ id: fontBaseId, body: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>" });
+  objects.push({ id: fontBaseId + 1, body: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>" });
+  objects.push({ id: fontBaseId + 2, body: "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>" });
+
+  let pdf = "%PDF-1.4\n";
+  const offsets = [];
+  for (const object of objects.sort((left, right) => left.id - right.id)) {
+    offsets[object.id] = pdf.length;
+    pdf += `${object.id} 0 obj\n${object.body}\nendobj\n`;
+  }
+  const xrefStart = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (let id = 1; id <= objects.length; id += 1) pdf += `${String(offsets[id]).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  return pdf;
+}
+
+function createGeneratedStudyPdf(material) {
+  const metadata = generatedStudyPdfMetadata(material);
+  const blocks = parseGeneratedStudyMarkdown(material?.generatedContent || "");
+  const width = 612;
+  const height = 792;
+  const margin = 54;
+  const contentWidth = width - margin * 2;
+  const streams = [];
+  let operations = [];
+  let y = height - 72;
+
+  const pushText = (x, baseline, text, { size = 10.5, font = "F1", color = "0.16 0.23 0.19 rg" } = {}) => {
+    operations.push(`${color} BT /${font} ${size} Tf ${x.toFixed(2)} ${baseline.toFixed(2)} Td (${pdfEscapeText(text)}) Tj ET`);
+  };
+  const startPage = () => {
+    operations = [];
+    y = height - 72;
+    pushText(margin, height - 34, "StudentOS", { size: 12, font: "F2", color: "0.14 0.34 0.23 rg" });
+    pushText(width - margin - 78, height - 34, "Study Note", { size: 9, color: "0.42 0.48 0.44 rg" });
+    operations.push("0.72 0.80 0.74 rg 54.00 740.00 504.00 0.80 re f");
+  };
+  const commitPage = () => {
+    streams.push(operations.join("\n"));
+    startPage();
+  };
+  const ensureSpace = (space) => {
+    if (y - space < 54) commitPage();
+  };
+  const addText = (text, options = {}) => {
+    const {
+      size = 10.5,
+      font = "F1",
+      color = "0.16 0.23 0.19 rg",
+      indent = 0,
+      leading = size * 1.45,
+      before = 0,
+      after = 8,
+    } = options;
+    if (before) {
+      ensureSpace(before);
+      y -= before;
+    }
+    const lines = wrapPdfText(text, contentWidth - indent, size, font);
+    if (!lines.length) return;
+    for (const line of lines) {
+      ensureSpace(leading);
+      pushText(margin + indent, y, line, { size, font, color });
+      y -= leading;
+    }
+    y -= after;
+  };
+  const addRule = () => {
+    ensureSpace(10);
+    operations.push("0.82 0.87 0.83 rg 54.00 " + y.toFixed(2) + " 504.00 0.60 re f");
+    y -= 14;
+  };
+
+  startPage();
+  addText("StudentOS Study Note", { size: 18, font: "F2", before: 4, after: 6, color: "0.12 0.20 0.16 rg" });
+  addText(metadata.title, { size: 14, font: "F2", after: 10, color: "0.12 0.20 0.16 rg" });
+  addText(`Course: ${metadata.courseName}`, { size: 9.5, after: 2, color: "0.35 0.42 0.38 rg" });
+  addText(`Topic: ${metadata.topicName}`, { size: 9.5, after: 2, color: "0.35 0.42 0.38 rg" });
+  if (metadata.subpartName) addText(`Subpart: ${metadata.subpartName}`, { size: 9.5, after: 2, color: "0.35 0.42 0.38 rg" });
+  addText(`Generated: ${metadata.generatedDate}`, { size: 9.5, after: 12, color: "0.35 0.42 0.38 rg" });
+  addRule();
+
+  for (const block of blocks) {
+    if (block.type === "heading") {
+      addText(plainMarkdownInline(block.text), {
+        size: block.level <= 2 ? 13 : 11.5,
+        font: "F2",
+        before: block.level <= 2 ? 8 : 5,
+        after: 5,
+        color: "0.12 0.20 0.16 rg",
+      });
+      continue;
+    }
+    if (block.type === "list") {
+      block.items.forEach((item, itemIndex) => addText(`${block.ordered ? `${itemIndex + 1}.` : "-"} ${plainMarkdownInline(item)}`, { indent: 12, after: 3 }));
+      y -= 4;
+      continue;
+    }
+    if (block.type === "table") {
+      addText(block.headers.map(plainMarkdownInline).join(" | "), { size: 9.5, font: "F2", before: 5, after: 3 });
+      block.rows.forEach((row) => addText(row.map(plainMarkdownInline).join(" | "), { size: 9.2, font: "F3", after: 2 }));
+      y -= 5;
+      continue;
+    }
+    if (block.type === "math") {
+      addText(block.text, { size: 10, font: "F3", indent: 12, before: 5, after: 8 });
+      continue;
+    }
+    if (block.type === "code") {
+      addText(block.text, { size: 9.2, font: "F3", indent: 12, before: 5, after: 8 });
+      continue;
+    }
+    addText(plainMarkdownInline(block.text), { after: 9 });
+  }
+  streams.push(operations.join("\n"));
+  return new Blob([buildPdfDocument(streams)], { type: "application/pdf" });
+}
+
+function exportGeneratedStudyNotePdf(materialId) {
+  const material = (state.sourceMaterials || []).find((source) => source.id === materialId && !source.deletedAt && source.generatedContent);
+  if (!material || normalizeAcademicContextKind(material) !== "generated_study_material") {
+    studyWorkspaceMessage = "This PDF export is available only for generated study notes.";
+    renderStudyAndEvaluate();
+    return;
+  }
+  const metadata = generatedStudyPdfMetadata(material);
+  const blob = createGeneratedStudyPdf(material);
+  openPdfBlobInViewer(blob, {
+    title: metadata.title,
+    contextLabel: "StudentOS PDF Export",
+    downloadFilename: generatedStudyPdfFilename(material),
+  });
 }
 
 function studyMaterialEmptyCopy(item) {
@@ -2737,6 +3204,7 @@ function renderStudyAndEvaluate() {
   const material = relatedStudyMaterial(selected);
   const testSession = currentStudyTestSession(selected);
   const status = selected ? studyStatusLabel(selected.study_status) : "";
+  const testReady = activeTopic?.status === "done" || (!activeTopic && selected?.study_status === "done");
   els.studyEvaluateContent.innerHTML = `
     <aside class="study-queue" aria-labelledby="study-queue-title">
       <div class="study-section-heading">
@@ -2773,8 +3241,8 @@ function renderStudyAndEvaluate() {
             `}
           </div>
           <div class="study-completion-area">
-            ${activeTopic?.status === "done" ? `
-              <div><strong>Topic notes complete.</strong><p>The test covers the full syllabus topic, not one subpart.</p></div>
+            ${testReady ? `
+              <div><strong>${activeTopic ? "Topic notes complete." : "Study complete."}</strong><p>${activeTopic ? "The test covers the full syllabus topic, not one subpart." : "Generate a strict test when you are ready."}</p></div>
               <button class="secondary-button" type="button" data-study-generate-test ${studyTestGenerating ? "disabled" : ""}>${studyTestGenerating ? "Generating test..." : "Generate test"}</button>
             ` : material ? `
               <div><strong>Finished this note?</strong><p>Mark it done to continue in syllabus order.</p></div>
@@ -4453,18 +4921,50 @@ function closeAcademicPdfViewer() {
   else dialog.removeAttribute("open");
 }
 
-async function openAcademicPdf(materialId, title = "Academic Context PDF") {
+function prepareAcademicPdfViewer({ title = "Document", contextLabel = "Academic Context", status = "Opening document..." } = {}) {
   const dialog = els.academicPdfViewer;
-  if (!dialog) return;
+  if (!dialog) return false;
   releaseAcademicPdfObjectUrl();
-  els.academicPdfViewerTitle.textContent = title;
-  els.academicPdfViewerStatus.textContent = "Opening document...";
-  els.academicPdfViewerStatus.hidden = false;
-  els.academicPdfViewerObject.hidden = true;
-  els.academicPdfViewerObject.removeAttribute("data");
-  els.academicPdfViewerFallback.removeAttribute("href");
+  if (els.academicPdfViewerContext) els.academicPdfViewerContext.textContent = contextLabel;
+  if (els.academicPdfViewerTitle) els.academicPdfViewerTitle.textContent = title;
+  if (els.academicPdfViewerStatus) {
+    els.academicPdfViewerStatus.textContent = status;
+    els.academicPdfViewerStatus.hidden = false;
+  }
+  els.academicPdfViewerObject?.removeAttribute("data");
+  if (els.academicPdfViewerObject) els.academicPdfViewerObject.hidden = true;
+  els.academicPdfViewerFallback?.removeAttribute("href");
+  if (els.academicPdfViewerDownload) {
+    els.academicPdfViewerDownload.hidden = true;
+    els.academicPdfViewerDownload.removeAttribute("href");
+    els.academicPdfViewerDownload.removeAttribute("download");
+  }
   if (typeof dialog.showModal === "function") dialog.showModal();
   else dialog.setAttribute("open", "");
+  return true;
+}
+
+function showPdfBlobUrlInViewer(url, { downloadFilename = "" } = {}) {
+  if (!url) return;
+  els.academicPdfViewerFallback.href = url;
+  els.academicPdfViewerObject.data = url;
+  els.academicPdfViewerObject.hidden = false;
+  els.academicPdfViewerStatus.hidden = true;
+  if (downloadFilename && els.academicPdfViewerDownload) {
+    els.academicPdfViewerDownload.href = url;
+    els.academicPdfViewerDownload.download = downloadFilename;
+    els.academicPdfViewerDownload.hidden = false;
+  }
+}
+
+function openPdfBlobInViewer(blob, options = {}) {
+  if (!blob || !prepareAcademicPdfViewer(options)) return;
+  academicPdfObjectUrl = URL.createObjectURL(blob);
+  showPdfBlobUrlInViewer(academicPdfObjectUrl, options);
+}
+
+async function openAcademicPdf(materialId, title = "Academic Context PDF") {
+  if (!prepareAcademicPdfViewer({ title, contextLabel: "Academic Context" })) return;
   try {
     const headers = {};
     if (authSession?.access_token) headers.Authorization = `Bearer ${authSession.access_token}`;
@@ -4474,10 +4974,7 @@ async function openAcademicPdf(materialId, title = "Academic Context PDF") {
       throw new Error(studentFacingRequestError(body.error || "This material could not be opened.", response.status));
     }
     academicPdfObjectUrl = URL.createObjectURL(await response.blob());
-    els.academicPdfViewerFallback.href = academicPdfObjectUrl;
-    els.academicPdfViewerObject.data = academicPdfObjectUrl;
-    els.academicPdfViewerObject.hidden = false;
-    els.academicPdfViewerStatus.hidden = true;
+    showPdfBlobUrlInViewer(academicPdfObjectUrl);
   } catch (error) {
     els.academicPdfViewerStatus.textContent = error.message;
     els.academicPdfViewerStatus.hidden = false;
@@ -5385,6 +5882,11 @@ function wireEvents() {
       openAcademicPdf(openAcademicPdfButton.dataset.openAcademicPdf, openAcademicPdfButton.dataset.pdfTitle);
       return;
     }
+    const exportGeneratedNotePdfButton = event.target.closest("[data-export-generated-note-pdf]");
+    if (exportGeneratedNotePdfButton) {
+      exportGeneratedStudyNotePdf(exportGeneratedNotePdfButton.dataset.exportGeneratedNotePdf);
+      return;
+    }
     const generateStudyMaterialButton = event.target.closest("[data-study-generate-material]");
     if (generateStudyMaterialButton) {
       createStudyMaterial();
@@ -5562,6 +6064,9 @@ function wireEvents() {
   els.academicPdfViewerClose?.addEventListener("click", closeAcademicPdfViewer);
   els.academicPdfViewer?.addEventListener("close", () => {
     els.academicPdfViewerObject?.removeAttribute("data");
+    els.academicPdfViewerDownload?.removeAttribute("href");
+    els.academicPdfViewerDownload?.removeAttribute("download");
+    if (els.academicPdfViewerDownload) els.academicPdfViewerDownload.hidden = true;
     releaseAcademicPdfObjectUrl();
   });
   document.querySelectorAll(".verb-tab").forEach((button) => {

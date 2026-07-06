@@ -871,10 +871,13 @@
       <div class="academic-pdf-viewer-shell">
         <header class="academic-pdf-viewer-header">
           <div>
-            <p class="eyebrow">Academic Context</p>
+            <p id="academic-pdf-viewer-context" class="eyebrow">Academic Context</p>
             <h3 id="academic-pdf-viewer-title">Document</h3>
           </div>
-          <button id="academic-pdf-viewer-close" class="icon-button" type="button" aria-label="Close document viewer">X</button>
+          <div class="academic-pdf-viewer-actions">
+            <a id="academic-pdf-viewer-download" class="secondary-button" download hidden>Download PDF</a>
+            <button id="academic-pdf-viewer-close" class="icon-button" type="button" aria-label="Close document viewer">X</button>
+          </div>
         </header>
         <p id="academic-pdf-viewer-status" class="academic-pdf-viewer-status" role="status">Opening document...</p>
         <object id="academic-pdf-viewer-object" class="academic-pdf-viewer-object" type="application/pdf" aria-label="PDF document" hidden>
