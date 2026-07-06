@@ -2366,8 +2366,30 @@ function isReadableStudyMaterial(item) {
   return ["study_material", "generated_study_material"].includes(normalizeAcademicContextKind(item));
 }
 
+function studyMasteryQueue(item) {
+  return item?.topic_mastery_queue?.topics?.length ? item.topic_mastery_queue : null;
+}
+
+function activeStudyMasteryTopic(item) {
+  const queue = studyMasteryQueue(item);
+  return queue?.topics.find((topic) => topic.id === queue.activeTopicId) || queue?.topics.find((topic) => topic.status !== "done") || queue?.topics[0] || null;
+}
+
+function currentStudyMasteryTarget(item) {
+  const topic = activeStudyMasteryTopic(item);
+  if (!topic || topic.status === "done") return { topic, subpart: null, materialId: topic?.generatedMaterialId || topic?.subparts?.at(-1)?.generatedMaterialId || null };
+  const subpart = topic.subparts?.find((part) => part.status !== "done") || null;
+  return { topic, subpart, materialId: subpart?.generatedMaterialId || topic.generatedMaterialId || null };
+}
+
 function relatedStudyMaterial(item) {
   if (!item) return null;
+  const target = currentStudyMasteryTarget(item);
+  if (target?.materialId) {
+    const exact = (state.sourceMaterials || []).find((source) => source.id === target.materialId && !source.deletedAt && isReadableStudyMaterial(source));
+    if (exact) return exact;
+  }
+  if (studyMasteryQueue(item)) return null;
   if (item.generated_material_id) {
     const generated = (state.sourceMaterials || []).find((source) => source.id === item.generated_material_id && !source.deletedAt && isReadableStudyMaterial(source));
     if (generated) return generated;
@@ -2393,16 +2415,28 @@ function relatedStudyMaterial(item) {
 }
 
 function generatedStudyTextMarkup(content) {
-  const headings = new Set(["What to focus on", "Core lesson", "Study steps", "Quick self-check"]);
-  return String(content || "")
-    .split(/\n{2,}/)
-    .map((block) => {
-      const value = block.trim();
-      if (!value) return "";
-      if (headings.has(value) || value.startsWith("Study guide:")) return `<h5>${escapeHtml(value)}</h5>`;
-      return `<p>${escapeHtml(value).replace(/\n/g, "<br>")}</p>`;
-    })
-    .join("");
+  const lines = String(content || "").split(/\r?\n/);
+  const output = [];
+  let listType = null;
+  const closeList = () => { if (listType) output.push(`</${listType}>`); listType = null; };
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) { closeList(); continue; }
+    const heading = line.match(/^#{1,6}\s+(.+)$/);
+    if (heading) { closeList(); output.push(`<h5>${escapeHtml(heading[1])}</h5>`); continue; }
+    const bullet = line.match(/^[-*]\s+(.+)$/);
+    const numbered = line.match(/^\d+[.)]\s+(.+)$/);
+    if (bullet || numbered) {
+      const desired = bullet ? "ul" : "ol";
+      if (listType !== desired) { closeList(); listType = desired; output.push(`<${desired}>`); }
+      output.push(`<li>${escapeHtml((bullet || numbered)[1])}</li>`);
+      continue;
+    }
+    closeList();
+    output.push(`<p>${escapeHtml(line)}</p>`);
+  }
+  closeList();
+  return output.join("");
 }
 
 function studyMaterialMarkup(material) {
@@ -2451,7 +2485,31 @@ function studyMaterialEmptyCopy(item) {
 
 function currentStudyTestSession(item) {
   if (!item) return null;
-  return (state.testSessions || []).find((session) => session.todoItemId === item.id) || null;
+  const topic = activeStudyMasteryTopic(item);
+  return (state.testSessions || []).find((session) => session.todoItemId === item.id && (!topic?.id || !session.parentTopicId || session.parentTopicId === topic.id)) || null;
+}
+
+function masteryStatusLabel(status) {
+  return status === "done" ? "Done" : status === "studying" ? "Studying" : "Pending";
+}
+
+function topicMasteryChecklistMarkup(item) {
+  const queue = studyMasteryQueue(item);
+  if (!queue) return "";
+  return `
+    <section class="topic-mastery" aria-labelledby="topic-mastery-title">
+      <header><div><p class="eyebrow">Topic mastery</p><h4 id="topic-mastery-title">${escapeHtml([queue.courseTitle, queue.examName].filter(Boolean).join(" — "))}</h4></div></header>
+      ${queue.guidance ? `<p class="topic-mastery-guidance">${escapeHtml(queue.guidance)}</p>` : ""}
+      <ol class="topic-mastery-list">${queue.topics.map((topic) => {
+        const current = topic.id === queue.activeTopicId;
+        return `<li class="topic-mastery-topic ${escapeHtml(topic.status)}${current ? " current" : ""}">
+          <div><span class="topic-status-mark" aria-hidden="true"></span><strong>${escapeHtml(topic.title)}</strong><small>${escapeHtml(masteryStatusLabel(topic.status))}</small></div>
+          ${topic.module ? `<p>${escapeHtml(topic.module)}</p>` : ""}
+          ${topic.subparts?.length ? `<ol>${topic.subparts.map((part) => `<li class="${escapeHtml(part.status)}"><span class="topic-status-mark" aria-hidden="true"></span><span>Part ${part.index}: ${escapeHtml(part.title)}</span><small>${escapeHtml(masteryStatusLabel(part.status))}</small></li>`).join("")}</ol>` : ""}
+        </li>`;
+      }).join("")}</ol>
+    </section>
+  `;
 }
 
 function studyTestStatusLabel(status) {
@@ -2674,6 +2732,8 @@ function renderStudyAndEvaluate() {
   }
   if (selectedStudyItemId && !plan.items.some((item) => item.id === selectedStudyItemId)) selectedStudyItemId = null;
   const selected = plan.items.find((item) => item.id === selectedStudyItemId) || null;
+  const masteryTarget = currentStudyMasteryTarget(selected);
+  const activeTopic = masteryTarget?.topic || null;
   const material = relatedStudyMaterial(selected);
   const testSession = currentStudyTestSession(selected);
   const status = selected ? studyStatusLabel(selected.study_status) : "";
@@ -2695,6 +2755,7 @@ function renderStudyAndEvaluate() {
           </div>
           ${tag(status, selected.study_status === "done" ? "source" : selected.study_status === "studying" ? "medium" : "low")}
         </header>
+        ${topicMasteryChecklistMarkup(selected)}
         ${testSession ? studyTestMarkup(testSession) : `
           <dl class="study-task-details">
             <div><dt>Course</dt><dd>${escapeHtml(selected.related_course || "Not specified")}</dd></div>
@@ -2705,19 +2766,21 @@ function renderStudyAndEvaluate() {
           <div class="study-material-area">
             ${material ? studyMaterialMarkup(material) : `
               <div class="study-material-empty">
-                <h4>No study material is available for this task yet.</h4>
-                <p>${escapeHtml(studyMaterialEmptyCopy(selected))}</p>
-                <button class="primary-button" type="button" data-study-generate-material ${studyMaterialGenerating ? "disabled" : ""}>${studyMaterialGenerating ? "Creating material..." : "Generate study material"}</button>
+                <h4>${escapeHtml(masteryTarget?.subpart?.title || activeTopic?.title || "No study note is available yet.")}</h4>
+                <p>${activeTopic ? "Create the next note in the exact syllabus order." : escapeHtml(studyMaterialEmptyCopy(selected))}</p>
+                <button class="primary-button" type="button" data-study-generate-material ${studyMaterialGenerating || activeTopic?.status === "done" ? "disabled" : ""}>${studyMaterialGenerating ? "Creating note..." : activeTopic?.subparts?.some((part) => part.status === "done") ? "Generate next note" : "Generate note"}</button>
               </div>
             `}
           </div>
           <div class="study-completion-area">
-            ${selected.study_status === "done" ? `
-              <div><strong>Study marked done.</strong><p>You can return to the material whenever you need it.</p></div>
+            ${activeTopic?.status === "done" ? `
+              <div><strong>Topic notes complete.</strong><p>The test covers the full syllabus topic, not one subpart.</p></div>
               <button class="secondary-button" type="button" data-study-generate-test ${studyTestGenerating ? "disabled" : ""}>${studyTestGenerating ? "Generating test..." : "Generate test"}</button>
+            ` : material ? `
+              <div><strong>Finished this note?</strong><p>Mark it done to continue in syllabus order.</p></div>
+              <button class="primary-button" type="button" data-study-mark-done>Mark note done</button>
             ` : `
-              <div><strong>Finish this study item when you are ready.</strong><p>No timer or test session will start.</p></div>
-              <button class="primary-button" type="button" data-study-mark-done>Mark study done</button>
+              <div><strong>Generate one note at a time.</strong><p>The next action appears after you read and complete the current note.</p></div>
             `}
           </div>
         `}

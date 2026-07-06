@@ -273,9 +273,18 @@ export function applyStudyTestEvaluation({ state, item, session, evaluation, ans
     };
   }
   delete session.answerSheetDraft;
-  item.study_status = "done";
-  item.study_completed_at = item.study_completed_at || timestamp;
-  item.workflow_status = "completed";
+  const queue = item.topic_mastery_queue;
+  const testedTopic = queue?.topics?.find((topic) => topic.id === session.parentTopicId) || null;
+  const nextTopic = testedTopic ? queue.topics.find((topic) => topic.order > testedTopic.order && topic.status !== "done") : null;
+  if (nextTopic) {
+    queue.activeTopicId = nextTopic.id;
+    item.study_status = "studying";
+    item.workflow_status = "in_progress";
+  } else {
+    item.study_status = "done";
+    item.study_completed_at = item.study_completed_at || timestamp;
+    item.workflow_status = "completed";
+  }
   item.evaluation_completed_at = timestamp;
   item.test_session_id = session.id;
   item.latest_score_percentage = evaluation.percentage;

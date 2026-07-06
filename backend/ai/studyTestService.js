@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getAiProviderConfig } from "./providerConfig.js";
 import { runProviderFallback } from "./providers.js";
-import { relatedMaterialsForTodo } from "./studyMaterialService.js";
+import { activeMasteryTopic, isActiveTopicTestUnlocked, relatedMaterialsForTodo } from "./studyMaterialService.js";
 
 const QUESTION_TYPES = new Set(["objective", "short_answer", "long_answer", "numerical", "mixed"]);
 const ANSWER_MODES = new Set(["typed", "handwritten"]);
@@ -43,7 +43,10 @@ function urgencyContext(state, item, course) {
 
 function generationContext(state, item) {
   const course = courseForItem(state, item);
-  const materials = relatedMaterialsForTodo(state, item).slice(0, 3).map((material) => ({
+  const masteryTopic = activeMasteryTopic(item);
+  const materials = relatedMaterialsForTodo(state, item)
+    .filter((material) => !masteryTopic?.id || !material.parentTopicId || material.parentTopicId === masteryTopic.id)
+    .slice(0, 6).map((material) => ({
     title: clean(material.title, 180),
     summary: clean(material.extractionSummary || material.extractedSnippet, 1_200),
     generatedLesson: clean(material.generatedContent, 5_000),
@@ -52,11 +55,17 @@ function generationContext(state, item) {
     item: {
       title: clean(item?.title, 180),
       course: clean(item?.related_course || course?.title, 140),
-      topic: clean(item?.related_context || item?.title, 240),
+      topic: clean(masteryTopic?.title || item?.related_context || item?.title, 240),
       reason: clean(item?.reason, 320),
       suggestedStudyTime: clean(item?.time_hint, 80),
     },
     materials,
+    strictSyllabusBoundary: masteryTopic ? {
+      parentTopic: masteryTopic.title,
+      syllabusOrder: masteryTopic.order,
+      module: masteryTopic.module || null,
+      completedSubparts: (masteryTopic.subparts || []).map((part) => part.title),
+    } : null,
     ...urgencyContext(state, item, course),
   };
 }
@@ -102,6 +111,9 @@ function testGenerationMessages(context) {
       role: "system",
       content: [
         "You are StudentOS. Create a rigorous but fair test from only the supplied student task and study context.",
+        "The strictSyllabusBoundary parentTopic is immutable: keep its exact title and do not test material outside that parent syllabus topic.",
+        "Use the generated notes as study content, but use the original syllabus parent topic as the final scope boundary.",
+        "Test the full parent topic, not an individual subpart.",
         "Choose the marks, duration, question types, and difficulty for the context and urgency.",
         "Return JSON only with: test_title, course, topic, total_marks, estimated_minutes, instructions (string array), and questions.",
         "Each question must contain question_number, type (objective, short_answer, long_answer, numerical, or mixed), prompt, marks, and choices only for objective questions.",
@@ -158,8 +170,9 @@ export function normalizeTestPaper(input, fallback = {}) {
 }
 
 export async function generateStudyTest({ state, item, now = new Date(), providerConfig = getAiProviderConfig(), fetchImpl = globalThis.fetch } = {}) {
-  if (!item || item.study_status !== "done") {
-    const error = new Error("Mark this study item done before generating its test.");
+  const queueReady = Boolean(item?.topic_mastery_queue?.topics?.length);
+  if (!item || (queueReady ? !isActiveTopicTestUnlocked(item) : item.study_status !== "done")) {
+    const error = new Error(queueReady ? "Complete every note in this syllabus topic before generating its test." : "Mark this study item done before generating its test.");
     error.status = 409;
     throw error;
   }
@@ -178,12 +191,16 @@ export async function generateStudyTest({ state, item, now = new Date(), provide
   }
   paper = normalizeTestPaper(paper, { course: context.item.course, topic: context.item.topic });
   if (!paper) return { generationSucceeded: false, session: null };
+  paper.topic = context.item.topic;
   const course = courseForItem(state, item);
+  const masteryTopic = activeMasteryTopic(item);
   const timestamp = now.toISOString();
   const session = {
     id: randomUUID(),
     userId: state.studentProfile.id,
     todoItemId: item.id,
+    parentTopicId: masteryTopic?.id || null,
+    parentSyllabusTopic: masteryTopic?.title || paper.topic,
     courseId: course?.id || null,
     topicId: null,
     questionFormat: paper.questions.every((question) => question.type === "objective") ? "mcq" : "mixed",
@@ -207,10 +224,10 @@ export async function generateStudyTest({ state, item, now = new Date(), provide
   return { generationSucceeded: true, session };
 }
 
-export function findStudyTestSession(state, { sessionId, todoItemId } = {}) {
+export function findStudyTestSession(state, { sessionId, todoItemId, parentTopicId } = {}) {
   return (state?.testSessions || []).find((session) => {
     if (sessionId) return session.id === String(sessionId);
-    return session.todoItemId === String(todoItemId || "");
+    return session.todoItemId === String(todoItemId || "") && (!parentTopicId || session.parentTopicId === String(parentTopicId));
   }) || null;
 }
 

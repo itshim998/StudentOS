@@ -105,10 +105,14 @@ import { savePersistentClassroomToken } from "./connectors/googleClassroom/token
 import { runStudentOsVerb } from "./ai/studentBrainAdapter.js";
 import { generateDailyTodoPlan } from "./ai/dailyTodoService.js";
 import {
+  completeCurrentMasteryTarget,
+  activeMasteryTopic,
   ensureDailyTodoStudyState,
+  ensureTopicMasteryQueue,
   findDailyTodoItem,
   generateStudyMaterial,
-  relatedMaterialsForTodo,
+  isActiveTopicTestUnlocked,
+  nextPendingMasteryTarget,
   updateDailyTodoStudyStatus,
 } from "./ai/studyMaterialService.js";
 import {
@@ -2024,11 +2028,23 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
-    const item = updateDailyTodoStudyStatus(state, body.itemId, body.status);
+    const item = findDailyTodoItem(state, body.itemId);
+    if (!item) {
+      const error = new Error("That item is no longer in today’s study queue.");
+      error.status = 404;
+      throw error;
+    }
+    ensureTopicMasteryQueue(state, item);
+    let completion = null;
+    if (body.status === "done") completion = completeCurrentMasteryTarget(state, item);
+    else updateDailyTodoStudyStatus(state, body.itemId, body.status);
     await repository.saveState(session, state);
     sendJson(res, 200, {
       item,
-      message: body.status === "done" ? "Study marked done." : "Study started.",
+      completion,
+      message: body.status === "done"
+        ? (completion.topicComplete ? "Topic notes complete. You can generate its test." : "Note marked done. Generate the next note when you are ready.")
+        : "Study started.",
       state: publicState(state, persistence),
       testSessionStarted: false,
       secretsPrinted: false,
@@ -2048,7 +2064,11 @@ async function handleApi(req, res, url) {
       error.status = 404;
       throw error;
     }
-    const existing = relatedMaterialsForTodo(state, item).find((material) => material.todoItemId === item.id);
+    ensureTopicMasteryQueue(state, item);
+    const pendingTarget = nextPendingMasteryTarget(item);
+    const existing = pendingTarget?.materialId
+      ? (state.sourceMaterials || []).find((material) => material.id === pendingTarget.materialId && !material.deletedAt)
+      : null;
     if (existing) {
       item.generated_material_id = existing.id;
       await repository.saveState(session, state);
@@ -2131,7 +2151,7 @@ async function handleApi(req, res, url) {
       });
       return;
     }
-    state.sourceMaterials.push(result.material);
+    if (!result.reused && !(state.sourceMaterials || []).some((material) => material.id === result.material.id)) state.sourceMaterials.push(result.material);
     item.generated_material_id = result.material.id;
     if (item.study_status === "not_started") item.study_status = "studying";
     await repository.saveState(session, state);
@@ -2141,7 +2161,7 @@ async function handleApi(req, res, url) {
       material: safeState.sourceMaterials.find((source) => source.id === result.material.id),
       weeklyAiHelp,
       state: safeState,
-      message: "Study material created and saved to Academic Context.",
+      message: "Study note created and saved to Academic Context.",
       secretsPrinted: false,
     });
     return;
@@ -2159,12 +2179,13 @@ async function handleApi(req, res, url) {
       error.status = 404;
       throw error;
     }
-    if (item.study_status !== "done") {
-      const error = new Error("Mark this study item done before generating its test.");
+    ensureTopicMasteryQueue(state, item);
+    if (!isActiveTopicTestUnlocked(item)) {
+      const error = new Error("Complete every note in this syllabus topic before generating its test.");
       error.status = 409;
       throw error;
     }
-    const existing = findStudyTestSession(state, { todoItemId: item.id });
+    const existing = findStudyTestSession(state, { todoItemId: item.id, parentTopicId: activeMasteryTopic(item)?.id });
     if (existing) {
       const previousStatus = existing.status;
       synchronizeTestSession(existing);
