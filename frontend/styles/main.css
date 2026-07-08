@@ -64,10 +64,21 @@
   margin: 0 auto;
 }
 
+/* When plan is active, let it use full width */
+.starter-today-flow .today-command-center:has(.starter-today-plan) {
+  max-width: 100%;
+}
+
 .starter-today-flow .today-brief {
   min-height: min(68vh, 680px);
   display: grid;
   align-items: center;
+}
+
+/* When plan is showing, don't vertically center — sit at the top */
+.starter-today-flow .today-brief:has(.starter-today-plan) {
+  min-height: auto;
+  align-items: start;
 }
 
 .starter-today-state {
@@ -79,6 +90,32 @@
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 245, 0.94));
   box-shadow: 0 24px 70px rgba(29, 45, 37, 0.08);
   text-align: center;
+}
+
+/* When the plan is showing, remove the boxy card — open workspace feel */
+.starter-today-state.starter-today-plan {
+  width: 100%;
+  max-width: 100%;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.starter-today-state.starter-today-plan h3 {
+  margin: 0 0 0.3rem;
+  max-width: none;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.3;
+}
+
+.starter-today-state.starter-today-plan > p:not(.eyebrow),
+.starter-today-state.starter-today-plan .journey-rail-header p {
+  max-width: none;
+  margin: 0;
+  text-align: left;
 }
 
 .starter-today-state h3 {
@@ -156,7 +193,7 @@
 
 .starter-today-plan {
   text-align: left;
-  padding: clamp(1.5rem, 5vw, 3rem);
+  padding: 0;
 }
 
 .starter-today-plan-header {
@@ -224,6 +261,337 @@
   flex: 0 0 auto;
   font-size: 0.9rem;
   color: var(--ink);
+}
+
+/* ─── Study Journey Rail ─── */
+
+.journey-rail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: none;
+}
+
+.journey-rail-header h3 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 0 0 0.3rem;
+  color: var(--ink);
+}
+
+.journey-rail-header h3,
+.journey-rail-header p {
+  margin-left: 0;
+  text-align: left;
+}
+
+.journey-rail-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.journey-generated-at {
+  color: var(--muted);
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+
+.journey-regenerate-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--button-secondary-bg);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.journey-regenerate-btn:hover {
+  background: var(--button-hover-bg);
+  border-color: var(--border-strong);
+}
+
+.journey-regenerate-btn:active {
+  transform: rotate(45deg);
+}
+
+.journey-regenerate-btn:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+
+.journey-rail {
+  padding: 1.6rem 0 0.8rem;
+}
+
+.journey-rail-track {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+  position: relative;
+}
+
+.journey-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 56px;
+  max-width: 140px;
+  padding-bottom: 0.5rem;
+}
+
+/* Connecting line between dots */
+.journey-node:not(.journey-node--last)::after {
+  content: "";
+  position: absolute;
+  top: 10px;
+  left: calc(50% + 11px);
+  right: 0;
+  width: calc(100% - 22px);
+  height: 2.5px;
+  background: #1a2b22;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.journey-node--done:not(.journey-node--last)::after {
+  background: #2f9c7b;
+  opacity: 0.7;
+}
+
+.journey-dot-button {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.journey-dot-button:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 3px;
+  border-radius: 50%;
+}
+
+.journey-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid #1a2b22;
+  background: var(--surface);
+  transition: background 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease, transform 0.22s ease;
+}
+
+.journey-dot-button:hover .journey-dot {
+  transform: scale(1.25);
+  box-shadow: 0 0 0 4px var(--focus-ring);
+}
+
+/* Status colors */
+.journey-node--pending .journey-dot {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: #1a2b22;
+}
+
+.journey-node--studying .journey-dot {
+  background: #dff3ea;
+  border-color: #1a2b22;
+  box-shadow: 0 0 0 4px rgba(47, 156, 123, 0.15), 0 0 8px rgba(47, 156, 123, 0.1);
+}
+
+.journey-node--done .journey-dot {
+  background: #b8e6cf;
+  border-color: #1a2b22;
+}
+
+.journey-node--blocked .journey-dot {
+  background: var(--amber-soft);
+  border-color: #1a2b22;
+}
+
+/* Hover/focus card */
+.journey-card {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%) translateY(6px);
+  width: max-content;
+  max-width: 240px;
+  padding: 0.75rem 0.9rem;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid rgba(22, 31, 27, 0.08);
+  box-shadow: 0 6px 24px rgba(18, 31, 25, 0.10), 0 1px 4px rgba(18, 31, 25, 0.06);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 10;
+  cursor: pointer;
+  text-align: left;
+}
+
+.journey-node:hover .journey-card,
+.journey-node:focus-within .journey-card {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+
+/* Prevent card from going off-screen on first node */
+.journey-node--first .journey-card {
+  left: 0;
+  transform: translateX(0) translateY(6px);
+}
+
+.journey-node--first:hover .journey-card,
+.journey-node--first:focus-within .journey-card {
+  transform: translateX(0) translateY(0);
+}
+
+/* Prevent card from going off-screen on last node */
+.journey-node--last .journey-card {
+  left: auto;
+  right: 0;
+  transform: translateX(0) translateY(6px);
+}
+
+.journey-node--last:hover .journey-card,
+.journey-node--last:focus-within .journey-card {
+  transform: translateX(0) translateY(0);
+}
+
+.journey-card-title {
+  display: block;
+  font-size: 0.88rem;
+  font-weight: 620;
+  line-height: 1.3;
+  color: var(--ink);
+  margin-bottom: 0.3rem;
+}
+
+.journey-card-time {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 580;
+  color: var(--ink);
+  margin-bottom: 0.15rem;
+}
+
+.journey-card-course {
+  display: block;
+  font-size: 0.76rem;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+
+.journey-card-meta {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.journey-card-meta .tag {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.45rem;
+}
+
+/* Mobile / narrow responsive */
+@media (max-width: 680px) {
+  .journey-rail-header {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .journey-rail-header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .journey-rail-track {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    padding-left: 1rem;
+  }
+
+  .journey-node {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: unset;
+    max-width: unset;
+    width: 100%;
+    padding-bottom: 0;
+    min-height: 48px;
+  }
+
+  /* Vertical connecting line on mobile */
+  .journey-node:not(.journey-node--last)::after {
+    top: calc(50% + 11px);
+    left: 10px;
+    right: auto;
+    width: 2px;
+    height: calc(100% - 10px);
+  }
+
+  .journey-card {
+    position: static;
+    transform: none;
+    opacity: 1;
+    pointer-events: auto;
+    max-width: unset;
+    width: 100%;
+    box-shadow: none;
+    border: none;
+    border-left: 2px solid var(--line);
+    border-radius: 0;
+    padding: 0.5rem 0 0.5rem 0.6rem;
+    background: transparent;
+  }
+
+  .journey-node--first .journey-card,
+  .journey-node--last .journey-card {
+    left: unset;
+    right: unset;
+    transform: none;
+  }
+
+  .journey-node--done .journey-card {
+    border-left-color: var(--status-success);
+  }
+
+  .journey-node--studying .journey-card {
+    border-left-color: var(--mint);
+  }
+}
+
+/* Mid-width snake path */
+@media (min-width: 681px) and (max-width: 1024px) {
+  .journey-node {
+    flex: 0 0 calc(20% - 2px);
+    max-width: unset;
+  }
 }
 
 .academic-context-hero-actions {
@@ -303,6 +671,11 @@
     border-radius: 22px;
   }
 
+  .starter-today-state.starter-today-plan {
+    padding: 0;
+    border-radius: 0;
+  }
+
   .starter-today-plan-header,
   .today-todo-item,
   .exam-entry-card {
@@ -371,20 +744,20 @@ input[type="file"] {
   color: var(--ink);
   display: grid;
   place-items: center;
-  padding: 32px;
+  padding: 48px 32px;
 }
 
 .public-auth-content {
-  width: min(1120px, 100%);
+  width: min(1140px, 100%);
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) 420px;
-  gap: 32px;
+  grid-template-columns: minmax(0, 1.15fr) 400px;
+  gap: 64px;
   align-items: center;
 }
 
 .public-auth-brand {
   display: grid;
-  gap: 24px;
+  gap: 40px;
 }
 
 .auth-brand-lockup {
@@ -393,15 +766,17 @@ input[type="file"] {
 
 .auth-hero-copy {
   display: grid;
-  gap: 12px;
-  max-width: 680px;
+  gap: 16px;
+  max-width: 540px;
 }
 
 .auth-hero-copy h2 {
   margin: 0;
-  font-size: 2.35rem;
-  line-height: 1.05;
-  letter-spacing: 0;
+  font-size: clamp(2.2rem, 4.5vw, 3rem);
+  line-height: 1.06;
+  letter-spacing: -0.025em;
+  font-weight: 780;
+  color: var(--ink);
 }
 
 .auth-hero-copy p {
@@ -410,10 +785,9 @@ input[type="file"] {
   max-width: 58ch;
 }
 
+/* Safety net: hidden in redesign */
 .auth-value-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  display: none;
 }
 
 .auth-value-strip span {
@@ -426,33 +800,34 @@ input[type="file"] {
 }
 
 .auth-panel.public-auth-panel {
-  padding: 24px;
-  gap: 16px;
+  padding: 36px;
+  gap: 28px;
+  border-radius: 16px;
 }
 
 .auth-panel-heading {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .auth-panel-heading h2 {
   margin: 0;
-  letter-spacing: 0;
+  font-size: 1.5rem;
+  font-weight: 720;
+  letter-spacing: -0.01em;
+  color: var(--ink);
 }
 
 .auth-panel-heading p {
   margin: 0;
   color: var(--muted);
+  font-size: var(--font-size-body);
+  line-height: 1.5;
 }
 
+/* Safety net: hidden in redesign */
 .auth-mode-tabs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  padding: 4px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
-  background: rgba(220, 236, 228, 0.035);
+  display: none;
 }
 
 .auth-mode-tab {
@@ -470,17 +845,122 @@ input[type="file"] {
   color: #f7fffb;
 }
 
-.public-auth-form label {
+/* --- Auth form field layout --- */
+.auth-field {
   display: grid;
   gap: 6px;
-  color: #c8d4cf;
+}
+
+.public-auth-form label {
+  display: block;
+  color: var(--ink);
   font-size: var(--font-size-small);
-  font-weight: 700;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.public-auth-form .auth-field input {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid rgba(49, 79, 64, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  font-size: var(--font-size-body);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.public-auth-form .auth-field input::placeholder {
+  color: #8e9a93;
+}
+
+.public-auth-form .auth-field input:focus {
+  outline: none;
+  border-color: #1f6f58;
+  box-shadow: 0 0 0 3px rgba(31, 111, 88, 0.1);
+}
+
+/* --- Auth submit button --- */
+.auth-submit-btn {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 4px;
+  border: none;
+  border-radius: 10px;
+  background: #1f6f58;
+  color: #ffffff;
+  font-size: var(--font-size-body);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.auth-submit-btn:hover {
+  background: #1a5f4c;
+  box-shadow: 0 4px 14px rgba(31, 111, 88, 0.2);
+}
+
+.auth-submit-btn:active {
+  background: #175443;
+}
+
+/* --- Forgot password link --- */
+.auth-forgot-link {
+  display: block;
+  width: fit-content;
+  margin: 0 auto;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: var(--font-size-small);
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+
+.auth-forgot-link:hover {
+  color: #1f6f58;
+}
+
+/* --- Card footer --- */
+.auth-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(49, 79, 64, 0.08);
+  font-size: var(--font-size-small);
+  color: var(--muted);
+}
+
+.auth-create-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: #1f6f58;
+  font-size: inherit;
+  font-weight: 650;
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+
+.auth-create-link:hover {
+  color: #175443;
 }
 
 .auth-result {
   display: grid;
   gap: 6px;
+}
+
+.auth-result:empty,
+.auth-help:empty,
+.auth-session:empty {
+  display: none;
 }
 
 .auth-message:empty {
@@ -631,20 +1111,24 @@ input[type="file"] {
 
 .auth-form {
   display: grid;
-  gap: 8px;
+  gap: 18px;
 }
 
 .auth-form input {
-  min-height: 34px;
-  border-color: rgba(255,255,255,0.16);
-  background: rgba(255,255,255,0.08);
-  color: #f6faf6;
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid rgba(49, 79, 64, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  font-size: var(--font-size-body);
 }
 
 .auth-form input::placeholder {
-  color: #b7c7bf;
+  color: #8e9a93;
 }
 
+/* Legacy selectors kept for sidebar auth panel */
 .auth-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2012,6 +2496,7 @@ textarea:focus {
 @media (max-width: 1180px) {
   .public-auth-content {
     grid-template-columns: minmax(0, 1fr) 380px;
+    gap: 40px;
   }
   .app-shell {
     grid-template-columns: 220px minmax(0, 1fr);
@@ -2041,13 +2526,21 @@ textarea:focus {
 @media (max-width: 860px) {
   .public-auth-shell {
     align-items: start;
-    padding: 20px;
+    padding: 24px 20px;
   }
   .public-auth-content {
     grid-template-columns: 1fr;
+    gap: 32px;
+    max-width: 480px;
+  }
+  .public-auth-brand {
+    gap: 24px;
   }
   .auth-hero-copy h2 {
-    font-size: 1.9rem;
+    font-size: 1.85rem;
+  }
+  .auth-panel.public-auth-panel {
+    padding: 28px;
   }
   .app-shell {
     grid-template-columns: 1fr;
@@ -2262,9 +2755,12 @@ textarea:focus {
   .auth-hero-copy h2 {
     font-size: 1.55rem;
   }
-  .auth-actions,
-  .auth-mode-tabs {
-    grid-template-columns: 1fr;
+  .auth-panel.public-auth-panel {
+    padding: 24px 20px;
+  }
+  .auth-card-footer {
+    flex-direction: column;
+    gap: 2px;
   }
   .rail { padding: 14px; }
   .brand-lockup {
@@ -3799,7 +4295,8 @@ textarea:focus-visible {
 
 .study-evaluate-header {
   max-width: 720px;
-  margin-bottom: 30px;
+  margin-top: -14px;
+  margin-bottom: 24px;
 }
 
 .study-evaluate-header h3 {
@@ -3825,6 +4322,19 @@ textarea:focus-visible {
 .study-queue {
   position: sticky;
   top: 24px;
+}
+
+@media (min-width: 981px) {
+  .study-evaluate-content {
+    gap: 0;
+  }
+  .study-queue {
+    padding-right: 34px;
+  }
+  .study-workspace {
+    padding-left: 34px;
+    border-left: 1px solid rgba(49, 79, 64, 0.08);
+  }
 }
 
 .study-section-heading,
@@ -3859,6 +4369,87 @@ textarea:focus-visible {
   gap: 10px;
 }
 
+/* Collapsible Page Stack styling */
+.study-queue-list.collapsed,
+.study-queue-list.expanded {
+  position: relative;
+  display: block;
+}
+
+.study-queue-list.collapsed.transition-active,
+.study-queue-list.expanded.transition-active {
+  transition: height 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.study-queue-list.collapsed .study-queue-item,
+.study-queue-list.expanded .study-queue-item {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  margin: 0;
+  width: auto;
+  box-shadow: 0 4px 12px rgba(49, 79, 64, 0.04);
+  /* Hover and active borders/backgrounds transitions are always active */
+  transition: border-color 160ms ease,
+              background 160ms ease,
+              box-shadow 160ms ease,
+              top 0.2s ease;
+}
+
+/* Transform and opacity transitions only active during stack expansion/collapse transitions */
+.study-queue-list.collapsed.transition-active .study-queue-item,
+.study-queue-list.expanded.transition-active .study-queue-item {
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1),
+              opacity 0.3s cubic-bezier(0.25, 0.8, 0.25, 1),
+              border-color 160ms ease,
+              background 160ms ease,
+              box-shadow 160ms ease,
+              top 0.2s ease;
+}
+
+.study-queue-list.collapsed.transition-active .study-queue-item > * {
+  transition: opacity 0.3s cubic-bezier(0.25, 0.8, 0.25, 1),
+              visibility 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+.study-queue-list.expanded.transition-active .study-queue-item > * {
+  transition: opacity 0.3s cubic-bezier(0.25, 0.8, 0.25, 1),
+              visibility 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+/* Opaque background for top card to prevent bleed-through */
+.study-queue-list.collapsed .study-queue-item:first-child {
+  background: #ffffff;
+}
+
+/* Hide inner details of lower cards when collapsed to completely prevent text overlap/bleed */
+.study-queue-list.collapsed .study-queue-item:not(:first-child) > * {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Hover effects for stacked states */
+.study-queue-list.collapsed .study-queue-item:first-child:hover {
+  border-color: rgba(43, 97, 70, 0.34);
+  background: rgba(255, 255, 255, 0.94);
+  transform: translateY(-2px) scale(1) !important;
+  box-shadow: 0 6px 16px rgba(49, 79, 64, 0.08);
+}
+
+.study-queue-list.expanded .study-queue-item:hover {
+  border-color: rgba(43, 97, 70, 0.34);
+  background: rgba(255, 255, 255, 0.94);
+  top: -2px;
+  box-shadow: 0 6px 16px rgba(49, 79, 64, 0.08);
+}
+
+.study-queue-list.expanded .study-queue-item.active {
+  border-color: rgba(43, 97, 70, 0.34);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 4px 12px rgba(49, 79, 64, 0.04);
+}
+
 .study-queue-item {
   width: 100%;
   display: grid;
@@ -3879,6 +4470,39 @@ textarea:focus-visible {
   border-color: rgba(43, 97, 70, 0.34);
   background: rgba(255, 255, 255, 0.94);
   transform: translateY(-1px);
+}
+
+/* Minimal floating collapse button */
+.study-queue-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 16px auto 0;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 8px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-10px);
+  /* Hover transition is always active */
+  transition: color 0.2s ease;
+}
+
+/* Only transition opacity and transform when transition-active is on the queue list */
+.study-queue-list.transition-active ~ .study-queue-collapse-btn {
+  transition: opacity 0.3s ease, transform 0.3s ease, color 0.2s ease, visibility 0.3s;
+}
+
+.study-queue-collapse-btn:hover {
+  color: var(--ink);
+}
+
+.study-queue-collapse-btn.visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 
 .study-queue-main,
@@ -3913,11 +4537,11 @@ textarea:focus-visible {
 
 .study-workspace {
   min-height: 460px;
-  padding: clamp(24px, 4vw, 40px);
-  border: 1px solid rgba(49, 79, 64, 0.1);
-  border-radius: 26px;
-  background: rgba(255, 255, 255, 0.74);
-  box-shadow: 0 22px 52px rgba(35, 58, 46, 0.08);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .study-workspace-header > div {
@@ -6295,53 +6919,44 @@ textarea:focus-visible {
 
 .public-auth-shell {
   background:
-    radial-gradient(circle at 10% 10%, rgba(72, 137, 108, 0.11), transparent 30rem),
+    radial-gradient(circle at 8% 20%, rgba(72, 137, 108, 0.09), transparent 34rem),
+    radial-gradient(circle at 92% 80%, rgba(72, 137, 108, 0.05), transparent 28rem),
     var(--soft);
 }
 
 .public-auth-panel {
   color: var(--ink);
-  border: 0;
-  border-radius: var(--radius);
-  background: rgba(248, 251, 248, 0.88);
-  box-shadow: var(--shadow-panel);
-}
-
-.auth-value-strip span {
-  color: #4f665a;
-  border-color: rgba(49, 79, 64, 0.12);
-  background: rgba(248, 251, 248, 0.55);
-}
-
-.auth-mode-tabs {
-  border: 0;
-  background: rgba(225, 235, 229, 0.78);
-}
-
-.auth-mode-tab {
-  color: var(--muted);
-}
-
-.auth-mode-tab.active {
-  color: #245642;
-  background: rgba(248, 251, 248, 0.86);
-  box-shadow: 0 6px 16px rgba(37, 56, 47, 0.07);
+  border: 1px solid rgba(49, 79, 64, 0.06);
+  border-radius: 16px;
+  background: rgba(248, 251, 248, 0.92);
+  box-shadow:
+    0 1px 2px rgba(18, 31, 25, 0.04),
+    0 8px 24px rgba(18, 31, 25, 0.06),
+    0 24px 48px rgba(18, 31, 25, 0.04);
 }
 
 .public-auth-form label {
   color: var(--ink);
 }
 
-.public-auth-form input,
+.public-auth-form .auth-field input,
 .auth-form input {
   color: var(--ink);
-  border-color: rgba(49, 79, 64, 0.16);
-  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(49, 79, 64, 0.14);
+  background: rgba(255, 255, 255, 0.78);
 }
 
-.public-auth-form input::placeholder,
+.public-auth-form .auth-field input:hover {
+  border-color: rgba(49, 79, 64, 0.24);
+}
+
+.public-auth-form .auth-field input::placeholder,
 .auth-form input::placeholder {
-  color: #7b8982;
+  color: #8e9a93;
+}
+
+.auth-card-footer {
+  border-top-color: rgba(49, 79, 64, 0.06);
 }
 
 /* Today */
@@ -6980,5 +7595,334 @@ textarea:focus-visible {
   .ai-launcher {
     right: 14px;
     bottom: max(14px, env(safe-area-inset-bottom));
+  }
+}
+
+/* Compact Top Bar Status Dropdown */
+.status-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.status-dropdown-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(49, 79, 64, 0.12);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(18, 31, 25, 0.04);
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+  padding: 0;
+}
+
+.status-dropdown-trigger:hover {
+  background: var(--button-hover-bg);
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
+.status-dropdown-trigger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* Custom geometric head-and-shoulders icon style matching left nav */
+.workspace-status-icon {
+  width: 17px;
+  height: 17px;
+  display: inline-block;
+  position: relative;
+  flex: 0 0 auto;
+  color: inherit;
+}
+
+/* Head */
+.workspace-status-icon::before {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+}
+
+/* Shoulders */
+.workspace-status-icon::after {
+  content: "";
+  position: absolute;
+  bottom: 1px;
+  left: 0px;
+  width: 17px;
+  height: 6px;
+  border: 2px solid currentColor;
+  border-bottom: none;
+  border-radius: 5px 5px 0 0;
+}
+
+.status-dropdown-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-panel);
+  padding: 16px;
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 1000;
+  animation: dropdownFadeIn 0.15s ease-out;
+}
+
+.status-dropdown-panel.active {
+  display: flex;
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.status-dropdown-header {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.status-dropdown-header .student-chip {
+  width: 100%;
+  box-shadow: none;
+  background: var(--surface-2);
+  border-color: rgba(49, 79, 64, 0.08);
+  padding: 6px 12px;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.status-dropdown-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 0;
+}
+
+.status-dropdown-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.status-dropdown-body .metric-pill {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  box-shadow: none;
+  background: var(--soft);
+  border-color: rgba(49, 79, 64, 0.06);
+  margin: 0;
+  min-width: 0 !important;
+}
+
+.status-dropdown-body .metric-pill span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.status-dropdown-body .metric-pill strong {
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   Setup Page - Immersive Polish
+   ========================================================================== */
+
+/* 1. Shift the main setup form to the left and style the setup layout */
+.setup-layout {
+  grid-template-columns: 1fr !important;
+  position: relative !important;
+}
+
+/* 2. Position setup-intro-panel as a soft, spacious background layer behind the form */
+.setup-intro-panel {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: auto !important;
+  height: auto !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: rgba(231, 239, 234, 0.35) !important; /* Safely softened background */
+  border-radius: 16px !important; /* Soft rounded decorative surface */
+  border: 0 !important;
+  box-shadow: none !important;
+  z-index: 0 !important;
+  pointer-events: none !important;
+}
+
+/* 3. Style the setup form container to sit correctly above the decorative background layer */
+.onboarding-panel {
+  position: relative !important;
+  z-index: 1 !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: clamp(20px, 3.5vw, 38px) !important; /* Generous immersive padding */
+  border-radius: 0 !important;
+}
+
+/* On mobile views, preserve clean alignment and adjust padding */
+@media (max-width: 620px) {
+  .onboarding-panel {
+    padding: 16px !important;
+  }
+}
+
+/* 2. Format the courses card to match the section-based layout */
+.setup-courses-card {
+  margin-bottom: 24px !important;
+  padding: 24px 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  border-top: 1px solid var(--line) !important;
+  box-shadow: none !important;
+}
+
+/* 3. Refine the fieldset sections for a uniform divider-based layout */
+.setup-section {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  padding: 24px 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  border-top: 1px solid var(--line) !important;
+  box-shadow: none !important;
+}
+
+/* Remove default browser fieldset margins if any */
+fieldset.setup-section {
+  margin-inline-start: 0 !important;
+  margin-inline-end: 0 !important;
+  padding-block-start: 24px !important;
+  padding-block-end: 24px !important;
+  padding-inline-start: 0 !important;
+  padding-inline-end: 0 !important;
+}
+
+/* 4. Position legend as a standard block element to avoid border overlaps */
+.setup-section legend {
+  display: block !important;
+  float: none !important;
+  position: static !important;
+  width: 100% !important;
+  padding: 0 0 4px 0 !important;
+  margin: 0 !important;
+  font-size: 1.05rem !important;
+  font-weight: 700 !important;
+  color: var(--ink) !important;
+  background: transparent !important;
+}
+
+/* 5. Format the generate/submit banner to match the divider-based layout */
+.setup-submit-row {
+  margin-top: 24px !important;
+  padding: 24px 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  border-top: 1px solid var(--line) !important;
+  box-shadow: none !important;
+}
+
+/* PASS - Fixed Left Navigation Panel Layout Fix */
+@media (min-width: 861px) {
+  .rail {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    bottom: 0 !important;
+    width: 236px !important;
+    height: 100vh !important;
+    overflow-y: auto !important;
+    box-sizing: border-box !important;
+    z-index: 100 !important;
+  }
+
+  .workspace {
+    grid-column: 2 !important;
+  }
+}
+
+@media (min-width: 861px) and (max-width: 1180px) {
+  .rail {
+    width: 220px !important;
+  }
+}
+
+/* ==========================================================================
+   Studio Page - Immersive Cleanup
+   ========================================================================== */
+
+/* 1. Remove boxed card containers around workflows for an immersive look */
+.studio-primary-workflow,
+.studio-workflow-card {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+/* 2. Add subtle horizontal divider between primary and support workflows */
+.studio-workflow-support-grid {
+  border-top: 1px solid var(--line) !important;
+  padding-top: 32px !important;
+  margin-top: 32px !important;
+}
+
+/* 3. Spacing and dividers within the two-column grid on desktop */
+@media (min-width: 861px) {
+  .studio-workflow-support-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 48px !important;
+  }
+
+  .studio-workflow-support-grid > .studio-workflow-card:nth-child(2) {
+    border-left: 1px solid var(--line) !important;
+    padding-left: 48px !important;
+  }
+}
+
+/* 4. Spacing and dividers when stacked on mobile */
+@media (max-width: 860px) {
+  .studio-workflow-support-grid {
+    gap: 32px !important;
+  }
+
+  .studio-workflow-support-grid > .studio-workflow-card:nth-child(2) {
+    border-top: 1px solid var(--line) !important;
+    padding-top: 32px !important;
   }
 }

@@ -31,6 +31,7 @@ let academicContextPreparationPoll = null;
 let todayTodoGenerating = false;
 let todayTodoMessage = "";
 let selectedStudyItemId = null;
+let studyQueueExpanded = false;
 let studyWorkspaceMessage = "";
 let studyMaterialGenerating = false;
 let studyTestGenerating = false;
@@ -82,6 +83,7 @@ const els = {
   timetableList: document.getElementById("timetable-list"),
   assignmentList: document.getElementById("assignment-list"),
   coursesGrid: document.getElementById("courses-grid"),
+  coursesReconnectContainer: document.getElementById("courses-reconnect-container"),
   sourceSearchInput: document.getElementById("source-search-input"),
   sourceList: document.getElementById("source-list"),
   academicContextSummary: document.getElementById("academic-context-summary"),
@@ -2145,21 +2147,43 @@ function academicContextReadiness() {
   };
 }
 
-function todayTodoItemMarkup(item) {
-  const related = [item.related_course, item.related_context].filter(Boolean);
-  return `
-    <li class="today-todo-item" data-priority="${escapeHtml(item.priority || "medium")}">
-      <div class="today-todo-item-copy">
-        <div class="today-todo-title-row">
-          <h4>${escapeHtml(item.title)}</h4>
-          ${tag(humanize(item.priority || "medium"), item.priority === "high" ? "urgent" : item.priority || "medium")}
+function journeyNodeStatusClass(item) {
+  if (item.study_status === "done") return "journey-node--done";
+  if (item.study_status === "studying") return "journey-node--studying";
+  return "journey-node--pending";
+}
+
+function journeyRailMarkup(items) {
+  if (!items || !items.length) return "";
+  const nodes = items.map((item, index) => {
+    const statusClass = journeyNodeStatusClass(item);
+    const title = cleanAcademicDisplayText(item.title, "Study task");
+    const course = friendlyContextLabel(item);
+    const timeHint = item.time_hint || "";
+    const priorityLabel = item.priority ? (item.priority === "high" ? "Important" : humanize(item.priority)) : "Study focus";
+    const statusLabel = studyStatusLabel(item.study_status);
+    const isFirst = index === 0;
+    const isLast = index === items.length - 1;
+    return `
+      <div class="journey-node ${statusClass}${isFirst ? " journey-node--first" : ""}${isLast ? " journey-node--last" : ""}" data-journey-index="${index}">
+        <button class="journey-dot-button" type="button" data-open-generated-study="${escapeHtml(item.id)}" aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}">
+          <span class="journey-dot" aria-hidden="true"></span>
+        </button>
+        <div class="journey-card" data-open-generated-study="${escapeHtml(item.id)}" role="tooltip">
+          <strong class="journey-card-title">${escapeHtml(title)}</strong>
+          ${timeHint ? `<span class="journey-card-time">${escapeHtml(timeHint)}</span>` : ""}
+          ${course ? `<span class="journey-card-course">${escapeHtml(course)}</span>` : ""}
+          <div class="journey-card-meta">
+            ${tag(priorityLabel, item.priority === "high" ? "urgent" : item.priority || "medium")}
+            ${tag(statusLabel, item.study_status === "done" ? "source" : item.study_status === "studying" ? "medium" : "low")}
+          </div>
         </div>
-        <p>${escapeHtml(item.reason)}</p>
-        ${related.length ? `<small>${escapeHtml(related.join(" / "))}</small>` : ""}
       </div>
-      <strong class="today-todo-time">${escapeHtml(item.time_hint)}</strong>
-    </li>
-  `;
+    `;
+  }).join("");
+  return `<div class="journey-rail" role="list" aria-label="Today's study journey">
+    <div class="journey-rail-track">${nodes}</div>
+  </div>`;
 }
 
 function contextPreparationSummaryMarkup(readiness) {
@@ -2285,18 +2309,25 @@ function renderStarterToday() {
     return;
   }
 
+  const planItems = (currentPlan.items || []).map((item, index) => ({
+    ...item,
+    id: item.id || `todo_${currentPlan.date}_${index + 1}_${String(item.title || "study-item").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 42)}`,
+    study_status: ["not_started", "studying", "done"].includes(item.study_status) ? item.study_status : "not_started",
+  }));
   setResult(els.dashboardSummary, `
     <article class="starter-today-state starter-today-plan">
-      <div class="starter-today-plan-header">
+      <div class="journey-rail-header">
         <div>
-          <p class="eyebrow">Today</p>
-          <h3>Today’s focused plan</h3>
+          <h3>TO-DO</h3>
           <p>${escapeHtml(currentPlan.summary || "A focused plan for the rest of today.")}</p>
         </div>
-        <span>Generated ${escapeHtml(formatTime(currentPlan.generated_at))}</span>
+        <div class="journey-rail-header-actions">
+          <button class="journey-regenerate-btn" type="button" data-today-action="generate-todo" title="Regenerate plan" aria-label="Regenerate plan">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+          </button>
+        </div>
       </div>
-      <ol class="today-todo-list">${(currentPlan.items || []).map(todayTodoItemMarkup).join("")}</ol>
-      <div class="starter-today-actions"><button class="secondary-button" type="button" data-today-action="generate-todo">Regenerate</button></div>
+      ${journeyRailMarkup(planItems)}
     </article>
   `);
 }
@@ -2874,13 +2905,23 @@ function parseGeneratedStudyMarkdown(content) {
 }
 
 function isInternalGeneratedId(value) {
-  return /^(?:source_generated|topic_evaluation|test_result)_/i.test(String(value || "").trim());
+  const text = String(value || "").trim();
+  if (/^(?:source_generated|source_uploaded|topic_evaluation|test_result)_/i.test(text)) return true;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i.test(text)) return true;
+  if (/^(?:storage|supabase|private_)/i.test(text)) return true;
+  return false;
 }
 
 function cleanAcademicDisplayText(value, fallback = "") {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text || isInternalGeneratedId(text)) return fallback;
   return text;
+}
+
+function friendlyContextLabel(item) {
+  const course = cleanAcademicDisplayText(item?.related_course, "");
+  const context = cleanAcademicDisplayText(item?.related_context, "");
+  return course || context || "Study material";
 }
 
 function findGeneratedMaterialQueueTarget(material) {
@@ -3545,6 +3586,13 @@ function renderStudyAndEvaluate() {
         <span>${plan.items.length} item${plan.items.length === 1 ? "" : "s"}</span>
       </div>
       <div class="study-queue-list">${plan.items.map(studyQueueItemMarkup).join("")}</div>
+      ${plan.items.length > 1 ? `
+        <button class="study-queue-collapse-btn" type="button" aria-label="Collapse study queue" title="Collapse study queue">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="18 15 12 9 6 15"></polyline>
+          </svg>
+        </button>
+      ` : ""}
     </aside>
     <section class="study-workspace" aria-label="Selected task workspace">
       ${selected ? `
@@ -3596,6 +3644,7 @@ function renderStudyAndEvaluate() {
     </section>
   `;
   startStudyTestCountdown(testSession);
+  updateStudyQueuePositions();
 }
 
 function renderDashboardSummary() {
@@ -4008,7 +4057,18 @@ function renderCourses() {
       <p>Add your subjects in Setup so StudentOS can plan today.</p>
     </article>
   `;
-  els.coursesGrid.innerHTML = `${classroomStatusCard()}${courseCards || empty}`;
+  els.coursesGrid.innerHTML = courseCards || empty;
+
+  if (els.coursesReconnectContainer) {
+    const connector = activeClassroomConnector();
+    const stateName = normalizedClassroomState(connector);
+    if (["disconnected", "reconnect_required"].includes(stateName)) {
+      const label = stateName === "reconnect_required" ? "Reconnect Classroom" : "Connect Classroom";
+      els.coursesReconnectContainer.innerHTML = `<button class="text-button" type="button" data-course-connect>${label}</button>`;
+    } else {
+      els.coursesReconnectContainer.innerHTML = "";
+    }
+  }
 }
 
 function academicContextAssignmentStatus(assignment) {
@@ -4596,6 +4656,10 @@ function setView(viewName) {
   if (viewName === "account") {
     loadAccountSnapshot().catch(() => null);
   }
+  if (viewName === "study") {
+    studyQueueExpanded = false;
+    updateStudyQueuePositions();
+  }
 }
 
 function setVerb(verb) {
@@ -4687,7 +4751,7 @@ async function loadBootstrap(options = {}) {
 }
 
 function renderLesson(lesson) {
-  if (!lesson) return;
+  if (!lesson || !els.lessonResult) return;
   els.lessonResult.innerHTML = `
     <strong>${escapeHtml(lesson.title)}</strong>
     <p>${escapeHtml(lesson.conceptExplanation)}</p>
@@ -5046,6 +5110,91 @@ async function generateTodayTodo() {
     todayTodoGenerating = false;
     render();
     setView("today");
+  }
+}
+
+function updateStudyQueuePositions() {
+  const studyView = document.getElementById("view-study");
+  if (!studyView || !studyView.classList.contains("active")) return;
+
+  const queueList = studyView.querySelector(".study-queue-list");
+  if (!queueList) return;
+
+  const items = Array.from(queueList.querySelectorAll(".study-queue-item"));
+  if (items.length <= 1) {
+    queueList.classList.remove("collapsed", "expanded");
+    items.forEach((item) => {
+      item.style.transform = "";
+      item.style.transformOrigin = "";
+      item.style.opacity = "";
+      item.style.zIndex = "";
+      item.style.pointerEvents = "";
+      item.style.visibility = "";
+      item.removeAttribute("tabindex");
+    });
+    queueList.style.height = "";
+    return;
+  }
+
+  const isCollapsed = !studyQueueExpanded;
+  if (isCollapsed) {
+    queueList.classList.add("collapsed");
+    queueList.classList.remove("expanded");
+  } else {
+    queueList.classList.add("expanded");
+    queueList.classList.remove("collapsed");
+  }
+
+  const gap = 10;
+  let currentTop = 0;
+
+  items.forEach((item, index) => {
+    item.style.transformOrigin = "top center";
+    if (isCollapsed) {
+      const offset = index * 8; // 8px visual offset for page stack
+      const scale = Math.max(0.85, 1 - index * 0.03); // e.g. 1, 0.97, 0.94...
+      const opacity = index === 0 ? 1 : index === 1 ? 0.85 : index === 2 ? 0.65 : 0;
+      const zIndex = 10 - index;
+
+      item.style.transform = `translateY(${offset}px) scale(${scale})`;
+      item.style.opacity = String(opacity);
+      item.style.zIndex = String(zIndex);
+      item.style.pointerEvents = index === 0 ? "auto" : "none";
+      item.style.visibility = opacity > 0 ? "visible" : "hidden";
+
+      if (index === 0) {
+        item.removeAttribute("tabindex");
+        // Measure first item to define container height (add visual overflow margin for peeking stack cards)
+        currentTop = item.offsetHeight + 18;
+      } else {
+        item.setAttribute("tabindex", "-1");
+      }
+    } else {
+      // Expanded layout
+      const itemHeight = item.offsetHeight;
+      item.style.transform = `translateY(${currentTop}px) scale(1)`;
+      item.style.opacity = "1";
+      item.style.zIndex = "";
+      item.style.pointerEvents = "auto";
+      item.style.visibility = "visible";
+      item.removeAttribute("tabindex");
+
+      currentTop += itemHeight + gap;
+    }
+  });
+
+  // Subtract gap for the last expanded element's height computation
+  const finalHeight = isCollapsed ? currentTop : (currentTop - gap);
+  queueList.style.height = `${finalHeight}px`;
+
+  // Update collapse button visibility
+  const collapseBtn = studyView.querySelector(".study-queue-collapse-btn");
+  if (collapseBtn) {
+    if (isCollapsed) {
+      collapseBtn.classList.remove("visible");
+    } else {
+      collapseBtn.classList.add("visible");
+    }
   }
 }
 
@@ -6168,6 +6317,28 @@ function toggleProductFlowAsk() {
     : "Finish the current setup step to activate your academic assistant. I can guide you through what comes next.";
 }
 
+function toggleStatusDropdown() {
+  const trigger = document.getElementById("status-dropdown-trigger");
+  const panel = document.getElementById("status-dropdown-panel");
+  if (!trigger || !panel) return;
+  const isExpanded = trigger.getAttribute("aria-expanded") === "true";
+  trigger.setAttribute("aria-expanded", !isExpanded ? "true" : "false");
+  panel.classList.toggle("active", !isExpanded);
+}
+
+function closeStatusDropdown() {
+  const trigger = document.getElementById("status-dropdown-trigger");
+  const panel = document.getElementById("status-dropdown-panel");
+  if (!trigger || !panel) return;
+  trigger.setAttribute("aria-expanded", "false");
+  panel.classList.remove("active");
+}
+
+function isStatusDropdownOpen() {
+  const panel = document.getElementById("status-dropdown-panel");
+  return panel && panel.classList.contains("active");
+}
+
 function wireEvents() {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.addEventListener("click", () => setView(button.dataset.view));
@@ -6183,18 +6354,65 @@ function wireEvents() {
   els.productFlowLogoutBtn?.addEventListener("click", () => {
     logout().catch((error) => productFlowMessage(error.message));
   });
+  document.getElementById("status-dropdown-trigger")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleStatusDropdown();
+  });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && isAiDrawerOpen()) {
       closeAiDrawer();
     }
+    if (event.key === "Escape" && isStatusDropdownOpen()) {
+      closeStatusDropdown();
+    }
   });
   window.addEventListener("hashchange", handleAuthLocationChange);
+  window.addEventListener("resize", updateStudyQueuePositions);
   document.addEventListener("input", (event) => {
     if (event.target.matches("[data-study-test-answer]")) scheduleStudyTestAutosave(event.target);
   });
   document.addEventListener("click", (event) => {
+    const panel = document.getElementById("status-dropdown-panel");
+    const trigger = document.getElementById("status-dropdown-trigger");
+    if (panel && trigger && !panel.contains(event.target) && !trigger.contains(event.target)) {
+      closeStatusDropdown();
+    }
+
+    const collapseBtn = event.target.closest(".study-queue-collapse-btn");
+    if (collapseBtn) {
+      studyQueueExpanded = false;
+      const queueList = document.querySelector(".study-queue-list");
+      if (queueList) {
+        queueList.classList.add("transition-active");
+        updateStudyQueuePositions();
+        setTimeout(() => {
+          queueList.classList.remove("transition-active");
+        }, 350);
+      } else {
+        updateStudyQueuePositions();
+      }
+      const firstItem = document.querySelector(".study-queue-list .study-queue-item");
+      if (firstItem) firstItem.focus();
+      return;
+    }
+
     const studyItem = event.target.closest("[data-study-item-id]");
     if (studyItem) {
+      const plan = currentStudyPlan();
+      if (plan?.items?.length > 1 && !studyQueueExpanded) {
+        studyQueueExpanded = true;
+        const queueList = document.querySelector(".study-queue-list");
+        if (queueList) {
+          queueList.classList.add("transition-active");
+          updateStudyQueuePositions();
+          setTimeout(() => {
+            queueList.classList.remove("transition-active");
+          }, 350);
+        } else {
+          updateStudyQueuePositions();
+        }
+        return;
+      }
       selectStudyItem(studyItem.dataset.studyItemId);
       return;
     }
