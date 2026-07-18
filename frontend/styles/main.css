@@ -5089,6 +5089,47 @@ textarea:focus-visible {
   color: #304b3e;
 }
 
+/* Study workspace loading guard */
+.study-workspace-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 460px;
+  animation: study-workspace-fade-in 150ms ease-out both;
+}
+
+.study-workspace-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2.5px solid rgba(0, 0, 0, 0.1);
+  border-top-color: #1a1a1a;
+  border-radius: 50%;
+  animation: study-workspace-spin 700ms linear infinite;
+}
+
+@keyframes study-workspace-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes study-workspace-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.study-workspace-ready {
+  animation: study-workspace-fade-in 180ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .study-workspace-loading,
+  .study-workspace-ready {
+    animation: none;
+  }
+  .study-workspace-spinner {
+    animation-duration: 1.4s;
+  }
+}
+
 .study-test-warning,
 .study-test-closed,
 .study-test-result {
@@ -7925,4 +7966,20 @@ fieldset.setup-section {
     border-top: 1px solid var(--line) !important;
     padding-top: 32px !important;
   }
+}
+
+/* Streaming text cursor for Ask StudentOS */
+.streaming-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 15px;
+  background-color: var(--mint);
+  margin-left: 3px;
+  vertical-align: middle;
+  animation: streaming-blink 0.8s step-end infinite;
+}
+
+@keyframes streaming-blink {
+  from, to { background-color: transparent; }
+  50% { background-color: var(--mint); }
 }

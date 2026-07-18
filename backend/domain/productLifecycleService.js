@@ -86,10 +86,17 @@ function productError(message, status = 400) {
   return error;
 }
 
+function isTierOperational(env) {
+  const raw = String(env?.STUDENTOS_TIER_OPERATIONAL ?? "").trim().toLowerCase();
+  return raw !== "false";
+}
+
 export function getProductFlowConfig(env = process.env, deployment = "development") {
   const nonProduction = String(deployment || "development").toLowerCase() !== "production";
+  const tierOperational = isTierOperational(env);
   return {
-    paymentPlaceholderEnabled: nonProduction && readBool(env, "STUDENTOS_PAYMENT_PLACEHOLDER_ENABLED", true),
+    paymentPlaceholderEnabled: (!tierOperational) || (nonProduction && readBool(env, "STUDENTOS_PAYMENT_PLACEHOLDER_ENABLED", true)),
+    proDemoUpgradeEnabled: !tierOperational,
     workspacePreparationSimulationEnabled: nonProduction && readBool(env, "STUDENTOS_WORKSPACE_PREPARATION_SIMULATION_ENABLED", true),
     realPaymentEnabled: false,
     placeholderCanCreateCharge: false,

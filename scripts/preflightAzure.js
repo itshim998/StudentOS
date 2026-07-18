@@ -7,6 +7,11 @@ import {
   isAzureContainerAppSafeSecretName,
   validateAzureGroqSecrets,
 } from "./validateAzureGroqSecrets.js";
+import {
+  AZURE_GEMINI_SECRET_MAPPINGS,
+  AZURE_GEMINI_SECRET_NAMES,
+  validateAzureAiProviderSecrets,
+} from "./validateAzureAiProviderSecrets.js";
 
 const ROOT = process.cwd();
 const checks = [];
@@ -116,6 +121,7 @@ const frontendSecretMarkers = [
   /SUPABASE_SERVICE_ROLE/i,
   /GOOGLE_CLIENT_SECRET/i,
   /GROQ_API_KEY/i,
+  /GEMINI_API_KEY/i,
   /POLLINATIONS_API_KEY/i,
   /AZURE_CREDENTIALS/i,
   /TOKEN_ENCRYPTION_SECRET/i,
@@ -143,6 +149,8 @@ const dangerousDefaults = [
   ["STUDENTOS_INTERNAL_OPS_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_BILLING_LIVE_CHARGES_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_BACKGROUND_WORKERS_ENABLED=false", envExample, envTemplate],
+  ["STUDENTOS_AI_PROVIDER_CYCLE_ENABLED=false", envExample, envTemplate],
+  ["STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT=0", envExample, envTemplate],
 ];
 for (const [line, ...texts] of dangerousDefaults) {
   addCheck(`dangerous default ${line}`, texts.every((text) => text.includes(line)));
@@ -172,7 +180,7 @@ const azureLoginStart = workflow.indexOf("- name: Azure login");
 const buildWorkflowBlock = buildWorkflowStart >= 0 && azureLoginStart > buildWorkflowStart
   ? workflow.slice(buildWorkflowStart, azureLoginStart)
   : workflow;
-addCheck("workflow does not use secret build args", !/build-args:|--build-arg|STUDENTOS_SUPABASE_SERVICE_ROLE_KEY|GOOGLE_CLIENT_SECRET|GROQ_API_KEY|POLLINATIONS_API_KEY/.test(buildWorkflowBlock));
+addCheck("workflow does not use secret build args", !/build-args:|--build-arg|STUDENTOS_SUPABASE_SERVICE_ROLE_KEY|GOOGLE_CLIENT_SECRET|GROQ_API_KEY|GEMINI_API_KEY|POLLINATIONS_API_KEY/.test(buildWorkflowBlock));
 const requiredAzureSupabaseSecrets = [
   "STUDENTOS_SUPABASE_URL_1",
   "STUDENTOS_SUPABASE_ANON_KEY_1",
@@ -202,11 +210,12 @@ addCheck("workflow maps Supabase backend secrets to ACA secret refs", includesAl
 addCheck(
   "workflow validates either legacy or numbered Groq secrets",
   AZURE_GROQ_SECRET_NAMES.every((name) => workflow.includes(`${name}: \${{ secrets.${name} }}`)) &&
-    workflow.includes("node scripts/validateAzureGroqSecrets.js") &&
+    workflow.includes("node scripts/validateAzureAiProviderSecrets.js") &&
     workflow.includes("STUDENTOS_AI_MODE=auto"),
 );
 const optionalAzureAiSecrets = [
   ...AZURE_GROQ_SECRET_MAPPINGS.map((item) => [item.envName, item.secretName]),
+  ...AZURE_GEMINI_SECRET_MAPPINGS.map((item) => [item.envName, item.secretName]),
   ["POLLINATIONS_API_KEY", "pollinations-api-key"],
 ];
 addCheck(
@@ -221,6 +230,23 @@ addCheck(
     /^GROQ_API_KEY(?:_[1-5])?$/.test(envName) &&
       isAzureContainerAppSafeSecretName(secretName) &&
       !/[A-Z_]/.test(secretName)),
+);
+addCheck(
+  "Gemini runtime env names map to ACA-safe secret refs",
+  AZURE_GEMINI_SECRET_MAPPINGS.every(({ envName, secretName }) =>
+    /^GEMINI_API_KEY_[1-5]$/.test(envName) &&
+      isAzureContainerAppSafeSecretName(secretName) &&
+      !/[A-Z_]/.test(secretName)),
+);
+addCheck(
+  "workflow accepts all five Gemini secrets",
+  AZURE_GEMINI_SECRET_NAMES.every((name) => workflow.includes(`${name}: \${{ secrets.${name} }}`)),
+);
+addCheck(
+  "workflow exposes independent provider kill switches",
+  ["GROQ", "GEMINI", "POLLINATIONS"].every((provider) =>
+    workflow.includes(`STUDENTOS_AI_${provider}_ENABLED: \${{ vars.STUDENTOS_AI_${provider}_ENABLED || 'true' }}`) &&
+    workflow.includes(`STUDENTOS_AI_${provider}_ENABLED="$STUDENTOS_AI_${provider}_ENABLED"`)),
 );
 addCheck(
   "workflow tolerates empty optional provider secrets",
@@ -247,6 +273,34 @@ addCheck(
   "Azure Groq validation never prints secret values",
   !JSON.stringify([legacyGroqValidation, numberedGroqValidation, missingGroqValidation]).includes("probe-key"),
 );
+const cycleProviderValidation = validateAzureAiProviderSecrets({
+  STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: "true",
+  GROQ_API_KEY_1: "groq-slot-1",
+  GEMINI_API_KEY_1: "gemini-slot-1",
+  GEMINI_API_KEY_2: "gemini-slot-2",
+  GEMINI_API_KEY_3: "gemini-slot-3",
+  GEMINI_API_KEY_4: "gemini-slot-4",
+  GEMINI_API_KEY_5: "gemini-slot-5",
+  POLLINATIONS_API_KEY: "pollinations-slot-1",
+});
+const incompleteCycleProviderValidation = validateAzureAiProviderSecrets({
+  STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: "true",
+  GROQ_API_KEY_1: "groq-slot-1",
+  GEMINI_API_KEY_1: "duplicate-gemini-slot",
+  GEMINI_API_KEY_2: "duplicate-gemini-slot",
+  POLLINATIONS_API_KEY: "pollinations-slot-1",
+});
+addCheck("Azure cyclic provider validation requires five distinct Gemini slots", cycleProviderValidation.ok && !incompleteCycleProviderValidation.ok);
+addCheck("Azure cyclic provider validation requires Pollinations authentication", !validateAzureAiProviderSecrets({
+  STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: "true",
+  GROQ_API_KEY_1: "groq-slot-1",
+  GEMINI_API_KEY_1: "gemini-slot-1",
+  GEMINI_API_KEY_2: "gemini-slot-2",
+  GEMINI_API_KEY_3: "gemini-slot-3",
+  GEMINI_API_KEY_4: "gemini-slot-4",
+  GEMINI_API_KEY_5: "gemini-slot-5",
+}).ok);
+addCheck("Azure provider validation never returns secret values", !JSON.stringify([cycleProviderValidation, incompleteCycleProviderValidation]).includes("slot-"));
 addCheck("workflow configures production storage buckets", workflow.includes("STUDENTOS_STORAGE_BUCKET=studentos-source-materials") && workflow.includes("STUDENTOS_EXPORT_STORAGE_BUCKET=studentos-data-exports"));
 const runtimeConfigText = `${read("frontend/runtime-config.js")}\n${read("scripts/writeCloudflareFrontendConfig.js")}`;
 addCheck("frontend runtime config remains public-only", !/STUDENTOS_SUPABASE|SUPABASE_SERVICE_ROLE|SERVICE_ROLE_KEY|JWT_SECRET/i.test(runtimeConfigText));

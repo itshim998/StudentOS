@@ -332,7 +332,7 @@ function enforceExactNoteTitle(content, title) {
   return `# ${title}\n\n${body}`.slice(0, MAX_CONTENT_LENGTH);
 }
 
-export async function generateStudyMaterial({ state, item, now = new Date(), providerConfig = getAiProviderConfig(), fetchImpl = globalThis.fetch } = {}) {
+export async function generateStudyMaterial({ state, item, now = new Date(), providerConfig = getAiProviderConfig(), fetchImpl = globalThis.fetch, providerExecutor = runProviderFallback } = {}) {
   if (!item) {
     const error = new Error("Choose a study item from today’s queue first.");
     error.status = 404;
@@ -354,7 +354,7 @@ export async function generateStudyMaterial({ state, item, now = new Date(), pro
   let content;
   if (["mock", "bridge"].includes(providerConfig.requestedMode)) content = buildDeterministicStudyMaterial(item, target);
   else {
-    const result = await runProviderFallback({ messages: studyMaterialMessages(item, queue, target), config: providerConfig, fetchImpl });
+    const result = await providerExecutor({ messages: studyMaterialMessages(item, queue, target), config: providerConfig, fetchImpl, responseMode: "text" });
     if (result.providerFailure || !result.text) return { generationSucceeded: false, material: null, queue, target };
     content = enforceExactNoteTitle(result.text, target.title);
   }

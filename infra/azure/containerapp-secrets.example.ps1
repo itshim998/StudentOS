@@ -27,6 +27,9 @@ az containerapp update --resource-group $ResourceGroup --name $ContainerAppName 
   STUDENTOS_BILLING_PROVIDER=none `
   STUDENTOS_BILLING_LIVE_CHARGES_ENABLED=false `
   STUDENTOS_BILLING_CHECKOUT_REDIRECT_ENABLED=false `
+  STUDENTOS_AI_PROVIDER_CYCLE_ENABLED=false `
+  STUDENTOS_AI_PROVIDER_CYCLE_SHADOW=false `
+  STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT=0 `
   STUDENTOS_QUOTA_ENFORCEMENT=false `
   STUDENTOS_RATE_LIMIT_ENABLED=true `
   CORS_ORIGINS="https://studentos.sentiqlabs.com,https://studentos-39s.pages.dev,http://localhost:3101,http://localhost:3102,http://127.0.0.1:3101,http://127.0.0.1:3102"
@@ -51,6 +54,11 @@ az containerapp secret set --resource-group $ResourceGroup --name $ContainerAppN
   groq-api-key-3="<optional-groq-key-3>" `
   groq-api-key-4="<optional-groq-key-4>" `
   groq-api-key-5="<optional-groq-key-5>" `
+  gemini-api-key-1="<gemini-key-1>" `
+  gemini-api-key-2="<gemini-key-2>" `
+  gemini-api-key-3="<gemini-key-3>" `
+  gemini-api-key-4="<gemini-key-4>" `
+  gemini-api-key-5="<gemini-key-5>" `
   pollinations-api-key="<optional-pollinations-key>" `
   google-client-id="<later-google-client-id>" `
   google-client-secret="<later-google-client-secret>" `
@@ -78,4 +86,9 @@ az containerapp update --resource-group $ResourceGroup --name $ContainerAppName 
   GROQ_API_KEY_3=secretref:groq-api-key-3 `
   GROQ_API_KEY_4=secretref:groq-api-key-4 `
   GROQ_API_KEY_5=secretref:groq-api-key-5 `
+  GEMINI_API_KEY_1=secretref:gemini-api-key-1 `
+  GEMINI_API_KEY_2=secretref:gemini-api-key-2 `
+  GEMINI_API_KEY_3=secretref:gemini-api-key-3 `
+  GEMINI_API_KEY_4=secretref:gemini-api-key-4 `
+  GEMINI_API_KEY_5=secretref:gemini-api-key-5 `
   POLLINATIONS_API_KEY=secretref:pollinations-api-key

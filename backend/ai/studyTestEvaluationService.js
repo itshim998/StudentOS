@@ -227,7 +227,7 @@ function parseJsonObject(text) {
   }
 }
 
-export async function evaluateStudyTest({ state, item, session, answerSheetText = "", providerConfig = getAiProviderConfig(), fetchImpl = globalThis.fetch } = {}) {
+export async function evaluateStudyTest({ state, item, session, answerSheetText = "", providerConfig = getAiProviderConfig(), fetchImpl = globalThis.fetch, providerExecutor = runProviderFallback } = {}) {
   if (!session || (!EVALUATABLE_STATUSES.has(session.status) && session.status !== "evaluated")) {
     const error = new Error("This test is not ready for evaluation.");
     error.status = 409;
@@ -243,7 +243,7 @@ export async function evaluateStudyTest({ state, item, session, answerSheetText 
   if (["mock", "bridge"].includes(providerConfig.requestedMode)) {
     evaluation = buildDeterministicTestEvaluation({ session, answerSheetText });
   } else {
-    const result = await runProviderFallback({ messages: evaluationMessages({ state, item, session, answerSheetText }), config: providerConfig, fetchImpl });
+    const result = await providerExecutor({ messages: evaluationMessages({ state, item, session, answerSheetText }), config: providerConfig, fetchImpl, responseMode: "json" });
     if (result.providerFailure || !result.text) return { evaluationSucceeded: false, evaluation: null };
     evaluation = normalizeTestEvaluation(parseJsonObject(result.text), session.testPaper);
   }

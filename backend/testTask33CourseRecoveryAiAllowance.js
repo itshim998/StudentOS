@@ -10,7 +10,7 @@ import {
   getDeterministicAiResponse,
 } from "./ai/aiWeeklyAllowanceService.js";
 import { getAiProviderConfig } from "./ai/providerConfig.js";
-import { GroqGroundedProvider } from "./ai/providers.js";
+import { GroqGroundedProvider, resetProviderRuntimeForTests } from "./ai/providers.js";
 import { runStudentOsVerb } from "./ai/studentBrainAdapter.js";
 import {
   getClassroomDueWork,
@@ -200,6 +200,7 @@ const supportedProviderConfig = getAiProviderConfig({
   GROQ_API_KEY: "test-only-key",
   GROQ_CHAT_MODEL: "openai/gpt-oss-120b",
 });
+resetProviderRuntimeForTests();
 let providerBody = null;
 const provider = new GroqGroundedProvider({
   config: supportedProviderConfig,

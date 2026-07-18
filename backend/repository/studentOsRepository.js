@@ -977,6 +977,165 @@ class MockStudentOsRepository {
     return { entryId: entry.id, status: entry.status, periodKey: entry.periodKey, creditCost: entry.creditCost, used };
   }
 
+  async beginRoutedAiOperation(session, request = {}) {
+    const userId = session.user.id;
+    const now = Date.now();
+    for (const entry of this.aiUsageLedger) {
+      if (entry.userId !== userId || entry.periodKey !== request.periodKey || entry.routingStatus !== "running") continue;
+      if (Date.parse(entry.routingLeaseExpiresAt || 0) > now) continue;
+      if (entry.status === "reserved") entry.status = "refunded";
+      entry.routingStatus = "failed";
+      entry.routingLeaseExpiresAt = null;
+      entry.routingAttempts = [...(entry.routingAttempts || []), { outcome: "lease_expired" }];
+      entry.updatedAt = nowIso();
+    }
+
+    let existing = this.aiUsageLedger.find((entry) => entry.userId === userId && entry.requestId === request.requestId);
+    if (existing && existing.requestFingerprint !== request.requestFingerprint) {
+      const error = new Error("idempotency_key_reused_with_different_request");
+      error.status = 409;
+      throw error;
+    }
+
+    const usage = () => this.aiUsageLedger
+      .filter((entry) => entry.userId === userId && entry.periodKey === request.periodKey && ["reserved", "charged"].includes(entry.status))
+      .reduce((sum, entry) => sum + Number(entry.creditCost || 0), 0);
+    const successCount = () => this.aiUsageLedger
+      .filter((entry) => entry.userId === userId && entry.periodKey === request.periodKey && entry.status === "charged")
+      .length;
+    const result = (entry, fields = {}) => {
+      const used = usage();
+      return {
+        allowed: false,
+        busy: false,
+        sameOperation: false,
+        replay: false,
+        allowance: Number(request.allowance || 0),
+        used,
+        remaining: Math.max(0, Number(request.allowance || 0) - used),
+        entryId: entry?.id || null,
+        status: entry?.status || null,
+        routingStatus: entry?.routingStatus || null,
+        successfulCount: successCount(),
+        selectedOrdinal: entry?.routingOrdinal || null,
+        leaseExpiresAt: entry?.routingLeaseExpiresAt || null,
+        outcome: entry?.outcome ? clone(entry.outcome) : null,
+        ...fields,
+      };
+    };
+
+    if (existing?.routingStatus === "succeeded" && existing.status === "charged") {
+      return result(existing, { allowed: true, sameOperation: true, replay: true });
+    }
+    if (existing?.routingStatus === "failed" && existing.status === "refunded" && existing.outcome) {
+      return result(existing, { allowed: true, sameOperation: true, replay: true });
+    }
+    if (existing?.routingStatus === "running") {
+      return result(existing, { allowed: true, busy: true, sameOperation: true });
+    }
+    if (existing?.status === "blocked") {
+      return result(existing, { sameOperation: true, replay: true });
+    }
+
+    const active = this.aiUsageLedger.find((entry) => (
+      entry.userId === userId
+      && entry.periodKey === request.periodKey
+      && entry.routingStatus === "running"
+    ));
+    if (active) return result(active, { busy: true });
+
+    const used = usage();
+    const allowed = Number(request.creditCost || 0) <= Math.max(0, Number(request.allowance || 0) - used);
+    if (!allowed) {
+      if (!existing) {
+        existing = {
+          id: `ai_usage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          userId,
+          requestId: request.requestId,
+          requestFingerprint: request.requestFingerprint,
+          periodKey: request.periodKey,
+          planTier: request.planTier,
+          actionType: request.actionType,
+          creditCost: Number(request.creditCost || 0),
+          metadata: request.metadata || {},
+          createdAt: nowIso(),
+        };
+        this.aiUsageLedger.push(existing);
+      }
+      Object.assign(existing, { status: "blocked", routingStatus: "blocked", updatedAt: nowIso() });
+      return result(existing);
+    }
+
+    const ordinal = successCount() + 1;
+    if (!existing) {
+      existing = {
+        id: `ai_usage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        userId,
+        requestId: request.requestId,
+        requestFingerprint: request.requestFingerprint,
+        periodKey: request.periodKey,
+        createdAt: nowIso(),
+      };
+      this.aiUsageLedger.push(existing);
+    }
+    Object.assign(existing, {
+      planTier: request.planTier,
+      actionType: request.actionType,
+      creditCost: Number(request.creditCost || 0),
+      status: "reserved",
+      metadata: request.metadata || {},
+      routingStatus: "running",
+      routingOrdinal: ordinal,
+      routingLeaseExpiresAt: new Date(now + Math.max(1_000, Number(request.leaseMs || 180_000))).toISOString(),
+      routingPrimaryProvider: null,
+      routingFinalProvider: null,
+      routingAttempts: [],
+      outcome: null,
+      updatedAt: nowIso(),
+    });
+    return result(existing, { allowed: true });
+  }
+
+  async completeRoutedAiOperation(session, completion = {}) {
+    const entry = this.aiUsageLedger.find((item) => item.userId === session.user.id && item.requestId === completion.requestId);
+    if (!entry) return null;
+    let changed = false;
+    if (entry.status === "reserved" && entry.routingStatus === "running") {
+      entry.status = completion.succeeded ? "charged" : "refunded";
+      entry.routingStatus = completion.succeeded ? "succeeded" : "failed";
+      entry.routingLeaseExpiresAt = null;
+      entry.routingPrimaryProvider = completion.primaryProvider || null;
+      entry.routingFinalProvider = completion.succeeded ? completion.finalProvider || null : null;
+      entry.routingAttempts = clone(Array.isArray(completion.attempts) ? completion.attempts : []);
+      entry.outcome = completion.outcome ? clone(completion.outcome) : null;
+      entry.updatedAt = nowIso();
+      changed = true;
+    }
+    const used = this.aiUsageLedger
+      .filter((item) => item.userId === session.user.id && item.periodKey === entry.periodKey && ["reserved", "charged"].includes(item.status))
+      .reduce((sum, item) => sum + Number(item.creditCost || 0), 0);
+    const successfulCount = this.aiUsageLedger
+      .filter((item) => item.userId === session.user.id && item.periodKey === entry.periodKey && item.status === "charged")
+      .length;
+    return {
+      entryId: entry.id,
+      status: entry.status,
+      routingStatus: entry.routingStatus,
+      periodKey: entry.periodKey,
+      creditCost: entry.creditCost,
+      used,
+      successfulCount,
+      changed,
+      outcome: entry.outcome ? clone(entry.outcome) : null,
+    };
+  }
+
+  async getAiWeeklySuccessfulRequestCount(session, { periodKey } = {}) {
+    return this.aiUsageLedger.filter((entry) => (
+      entry.userId === session.user.id && entry.periodKey === periodKey && entry.status === "charged"
+    )).length;
+  }
+
   async uploadExportPackage(session, { bucket, path, bytes }) {
     assertOwnedExportPath(session.user.id, path);
     this.exportPackages.set(`${bucket}/${path}`, Buffer.from(bytes));
@@ -1121,8 +1280,14 @@ class MockStudentOsRepository {
 
   async saveAiConversation(session, conversation, messages) {
     const state = await this.loadState(session);
-    state.aiConversations.push(conversation);
-    state.aiMessages.push(...messages);
+    const conversationIndex = state.aiConversations.findIndex((item) => item.id === conversation.id);
+    if (conversationIndex >= 0) state.aiConversations[conversationIndex] = conversation;
+    else state.aiConversations.push(conversation);
+    for (const message of messages) {
+      const messageIndex = state.aiMessages.findIndex((item) => item.id === message.id);
+      if (messageIndex >= 0) state.aiMessages[messageIndex] = message;
+      else state.aiMessages.push(message);
+    }
     await this.saveState(session, state);
   }
 
@@ -1514,6 +1679,77 @@ class SupabaseStudentOsRepository {
     } : null;
   }
 
+  async beginRoutedAiOperation(session, request = {}) {
+    const route = this.route(session);
+    const rows = await route.client.rpc("begin_routed_ai_operation", {
+      p_user_id: session.user.id,
+      p_plan_tier: request.planTier,
+      p_period_key: request.periodKey,
+      p_allowance: request.allowance,
+      p_action_type: request.actionType,
+      p_credit_cost: request.creditCost,
+      p_request_id: request.requestId,
+      p_request_fingerprint: request.requestFingerprint,
+      p_lease_ms: request.leaseMs,
+      p_metadata: request.metadata || {},
+    });
+    const row = rows?.[0] || {};
+    return {
+      allowed: row.allowed === true,
+      busy: row.busy === true,
+      sameOperation: row.same_operation === true,
+      replay: row.replay === true,
+      allowance: Number(row.allowance || request.allowance || 0),
+      used: Number(row.used || 0),
+      remaining: Number(row.remaining || 0),
+      entryId: row.entry_id || null,
+      status: row.entry_status || null,
+      routingStatus: row.routing_status || null,
+      successfulCount: Number(row.successful_count || 0),
+      selectedOrdinal: row.selected_ordinal ? Number(row.selected_ordinal) : null,
+      leaseExpiresAt: row.lease_expires_at || null,
+      outcome: row.outcome || null,
+    };
+  }
+
+  async completeRoutedAiOperation(session, completion = {}) {
+    const route = this.route(session);
+    const rows = await route.client.rpc("complete_routed_ai_operation", {
+      p_user_id: session.user.id,
+      p_request_id: completion.requestId,
+      p_succeeded: completion.succeeded === true,
+      p_primary_provider: completion.primaryProvider || null,
+      p_final_provider: completion.finalProvider || null,
+      p_attempts: Array.isArray(completion.attempts) ? completion.attempts : [],
+      p_outcome: completion.outcome || null,
+    });
+    const row = rows?.[0];
+    return row ? {
+      entryId: row.entry_id,
+      status: row.entry_status,
+      routingStatus: row.routing_status,
+      periodKey: row.period_key,
+      creditCost: Number(row.credit_cost || 0),
+      used: Number(row.used || 0),
+      successfulCount: Number(row.successful_count || 0),
+      changed: row.changed === true,
+      outcome: row.outcome || null,
+    } : null;
+  }
+
+  async getAiWeeklySuccessfulRequestCount(session, { periodKey } = {}) {
+    const route = this.route(session);
+    const rows = await route.client.select("ai_usage_ledger", {
+      columns: "id",
+      filters: {
+        user_id: `eq.${session.user.id}`,
+        period_key: `eq.${periodKey}`,
+        status: "eq.charged",
+      },
+    });
+    return rows.length;
+  }
+
   async uploadExportPackage(session, { bucket, path, bytes, mimeType }) {
     assertOwnedExportPath(session.user.id, path);
     const route = this.route(session);
@@ -1873,8 +2109,14 @@ class SupabaseStudentOsRepository {
 
   async saveAiConversation(session, conversation, messages) {
     const state = await this.loadState(session);
-    state.aiConversations.push(conversation);
-    state.aiMessages.push(...messages);
+    const conversationIndex = state.aiConversations.findIndex((item) => item.id === conversation.id);
+    if (conversationIndex >= 0) state.aiConversations[conversationIndex] = conversation;
+    else state.aiConversations.push(conversation);
+    for (const message of messages) {
+      const messageIndex = state.aiMessages.findIndex((item) => item.id === message.id);
+      if (messageIndex >= 0) state.aiMessages[messageIndex] = message;
+      else state.aiMessages.push(message);
+    }
     await this.saveChangedCollections(session, state, ["aiConversations", "aiMessages"]);
   }
 
@@ -2133,6 +2375,24 @@ export class StudentOsRepository {
     return this.useSupabase(session)
       ? this.supabase.settleAiWeeklyAllowance(session, settlement)
       : this.mock.settleAiWeeklyAllowance(session, settlement);
+  }
+
+  async beginRoutedAiOperation(session, request) {
+    return this.useSupabase(session)
+      ? this.supabase.beginRoutedAiOperation(session, request)
+      : this.mock.beginRoutedAiOperation(session, request);
+  }
+
+  async completeRoutedAiOperation(session, completion) {
+    return this.useSupabase(session)
+      ? this.supabase.completeRoutedAiOperation(session, completion)
+      : this.mock.completeRoutedAiOperation(session, completion);
+  }
+
+  async getAiWeeklySuccessfulRequestCount(session, request) {
+    return this.useSupabase(session)
+      ? this.supabase.getAiWeeklySuccessfulRequestCount(session, request)
+      : this.mock.getAiWeeklySuccessfulRequestCount(session, request);
   }
 
   async uploadExportPackage(session, storageObject) {

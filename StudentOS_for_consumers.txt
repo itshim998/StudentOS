@@ -1,0 +1,189 @@
+# StudentOS
+
+## Your semester, made clearer
+
+StudentOS is an AI-native academic workspace built around the semester you are actually living through.
+
+Bring together your courses, syllabus, assignments, exams, timetable, and study materials. StudentOS uses that academic context to help you understand what deserves attention now, what should come next, and how to prepare with greater purpose.
+
+Academic life is rarely short of information. The harder problem is deciding what matters today.
+
+StudentOS helps make that decision clearer.
+
+---
+
+## Begin with what matters next
+
+Today is the centre of StudentOS.
+
+Instead of opening your workspace to an empty page, a collection of disconnected tools, or an overwhelming list of everything you could do, you begin with a focused view of the work in front of you.
+
+Your Today view brings together the study tasks, approaching deadlines, examinations, and academic priorities that deserve your attention. It helps turn a busy semester into a sequence of manageable next steps.
+
+Open StudentOS, understand where to begin, and move forward one useful action at a time.
+
+---
+
+## Built around your academic context
+
+A useful study plan needs to understand more than a deadline.
+
+StudentOS organises your academic life through **Courses** and **Academic Context**.
+
+Add the subjects you are studying, record important dates, and bring in the syllabus, assignments, lecture material, revision documents, or other resources that shape your semester.
+
+This gives StudentOS a more grounded understanding of your work. A study task can remain connected to its subject. An assignment can be considered alongside the topics it depends on. Exam preparation can follow the structure of the syllabus rather than becoming a collection of unrelated revision sessions.
+
+Your academic context remains under your control. Add what is useful, remove what is no longer relevant, and update the workspace as your semester changes.
+
+---
+
+## A study plan shaped by real work
+
+StudentOS helps transform academic information into an organised study path.
+
+Your To-Do view gives you a clearer order for the work ahead. Topics, assignments, and preparation tasks can be arranged around your current priorities instead of remaining scattered across documents, classroom pages, calendars, and memory.
+
+Work through one task at a time, mark your progress, and return to Today whenever you need a clean starting point.
+
+The purpose is not to fill every available hour. It is to help you use the time you have with greater direction.
+
+---
+
+## Learn, practise, evaluate
+
+Studying becomes more useful when learning and evaluation remain connected.
+
+With **Study and Evaluate**, you can move through a focused cycle:
+
+**Understand the topic. Practise what you learned. Review the result. Decide what needs attention next.**
+
+StudentOS can help prepare structured study material for the selected topic and keep the session aligned with your course and syllabus.
+
+When you are ready, create a focused test and attempt it in one sitting. Depending on the format, you can answer within StudentOS or complete the work separately and return with your answers for evaluation.
+
+The result is more than a final score. StudentOS can help identify what was understood, where mistakes occurred, what needs revision, and which step would be most useful next.
+
+A weak result does not have to become another source of uncertainty. It can become a clearer revision plan.
+
+---
+
+## Ask StudentOS
+
+Some academic questions do not belong in a fixed workflow.
+
+Ask StudentOS when you need another explanation, help understanding a difficult topic, support organising revision, or guidance on what to study next.
+
+You can ask a general question or ask StudentOS to work with the academic context you have added. It can help you understand an assignment, break down a topic, prepare a study session, or turn an unclear workload into a more manageable plan.
+
+It can also help draft academic communication, such as a respectful extension request, when circumstances change.
+
+You remain responsible for every final decision and submission. A draft remains a draft until you choose what to do with it.
+
+---
+
+## Bring Google Classroom into view
+
+On supported plans, StudentOS can connect with Google Classroom and bring selected academic information into your workspace.
+
+You choose the courses and material that belong in your academic context. StudentOS does not need to pull everything into your study space simply because it exists.
+
+The Classroom connection is read-only. StudentOS does not submit assignments, turn in work, alter grades, edit classroom content, or delete anything from your account.
+
+Students whose institutions do not use Google Classroom can use the manual workflow instead. Add courses, upload academic material, and build the same focused workspace around the resources you already have.
+
+Your classroom remains your classroom. StudentOS helps you make better use of the information inside it.
+
+---
+
+## Preparation, not replacement
+
+StudentOS is designed to help you prepare for academic work—not complete your responsibilities in your place.
+
+It can help you identify the concepts behind an assignment, understand what knowledge may be required, organise the work into smaller steps, and check whether you are ready to proceed.
+
+You remain the person who thinks, writes, reviews, decides, and submits.
+
+That boundary matters. StudentOS is most useful when it strengthens the way you study rather than removing you from the learning process.
+
+---
+
+## More than a planner. More focused than a general assistant.
+
+A conventional planner can remind you that an examination is approaching, but it may not understand the syllabus behind it.
+
+A general AI assistant can explain a topic, but it may not know how that topic fits into the rest of your semester.
+
+StudentOS connects both sides of the problem.
+
+It brings together the academic material that defines your work and the daily decisions that determine whether the work gets done.
+
+The result is not simply another place to store tasks or ask questions. It is a workspace designed around the full academic cycle—from understanding what is required to preparing, practising, reviewing, and moving forward.
+
+---
+
+## Plans for different semesters
+
+StudentOS is available through focused paid plans, beginning at **₹99 per month**.
+
+A limited seven-day Trial Mode may also be available, giving you an opportunity to experience the central StudentOS workflow before continuing with a paid plan.
+
+### Starter — ₹99/month
+
+For students who want a simple and dependable structure for one focused semester.
+
+Starter includes daily planning, an organised To-Do workflow, manual academic material uploads, core study and revision support, and access to Ask StudentOS.
+
+Google Classroom can assist with course setup, while assignments and learning materials can be added manually.
+
+### Essential — ₹159/month
+
+The recommended plan for regular school, college, or university use.
+
+Essential includes everything in Starter, with more room for a fuller semester, periodic Google Classroom coursework checks, and broader support across study, testing, revision, and academic material.
+
+It is designed for students who want StudentOS to become part of their regular academic routine.
+
+### Plus — ₹259/month
+
+For demanding semesters, deeper preparation, and heavier academic workloads.
+
+Plus provides more frequent Classroom updates, expanded study support, stronger planning, deeper explanations, and greater room for mock tests and assignment preparation.
+
+It is suited to periods when several courses, examinations, and deadlines are moving at once.
+
+### Pro — ₹549/month
+
+For intensive academic use and high-stakes preparation periods.
+
+Pro provides the highest available level of planning, study, testing, revision, and assignment support across the StudentOS plan range.
+
+It is intended for students managing particularly demanding semesters or sustained exam preparation.
+
+Choose the level that reflects the semester you have now. Move to a larger plan when the work genuinely requires more room.
+
+---
+
+## Designed for the reality of student life
+
+StudentOS is built for students managing structured academic work—whether that means school, college, university, competitive examinations, or a serious independent study path.
+
+It understands that several subjects may be moving at once. Deadlines can arrive together. Examination preparation often competes with classes, assignments, and limited time.
+
+StudentOS does not promise marks, rankings, admissions, or perfect academic outcomes.
+
+It offers something more practical: a clearer place to organise the semester, prepare consistently, understand your progress, and decide what to do next.
+
+---
+
+## A quieter way to move forward
+
+You should not need to reorganise your entire academic life every time you sit down to study.
+
+Bring your courses into one workspace. Add the material that matters. Let StudentOS help turn it into a focused plan.
+
+Begin with Today.
+
+Continue with the next useful step.
+
+**Bring your semester into focus.**

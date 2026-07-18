@@ -31,6 +31,7 @@ let academicContextPreparationPoll = null;
 let todayTodoGenerating = false;
 let todayTodoMessage = "";
 let selectedStudyItemId = null;
+let studyWorkspaceLoadingId = null;
 let studyQueueExpanded = false;
 let studyWorkspaceMessage = "";
 let studyMaterialGenerating = false;
@@ -618,6 +619,22 @@ async function api(path, options = {}) {
     throw new Error(studentFacingRequestError(body.error || `HTTP ${response.status}`, response.status));
   }
   return body;
+}
+
+function aiActionIdempotencyKey() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `studentos-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+async function providerBackedApi(path, options = {}) {
+  const idempotencyKey = aiActionIdempotencyKey();
+  return api(path, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      "Idempotency-Key": idempotencyKey,
+    },
+  });
 }
 
 async function loadRuntimeConfig() {
@@ -3558,10 +3575,11 @@ function renderStudyAndEvaluate() {
   const plan = currentStudyPlan();
   if (!plan?.items?.length) {
     selectedStudyItemId = null;
+    studyWorkspaceLoadingId = null;
     els.studyEvaluateContent.innerHTML = `
       <section class="study-empty-state">
-        <h4>Generate today’s TO-DO list first.</h4>
-        <p>Your study queue will use the real items in today’s plan.</p>
+        <h4>Generate today's TO-DO list first.</h4>
+        <p>Your study queue will use the real items in today's plan.</p>
         <button class="primary-button" type="button" data-study-go-today>Go to Today</button>
       </section>
     `;
@@ -3573,16 +3591,17 @@ function renderStudyAndEvaluate() {
   }
   if (selectedStudyItemId && !plan.items.some((item) => item.id === selectedStudyItemId)) selectedStudyItemId = null;
   const selected = plan.items.find((item) => item.id === selectedStudyItemId) || null;
-  const masteryTarget = currentStudyMasteryTarget(selected);
+  const isWorkspaceLoading = selected && studyWorkspaceLoadingId === selected.id;
+  const masteryTarget = isWorkspaceLoading ? null : currentStudyMasteryTarget(selected);
   const activeTopic = masteryTarget?.topic || null;
-  const material = relatedStudyMaterial(selected);
-  const testSession = currentStudyTestSession(selected);
+  const material = isWorkspaceLoading ? null : relatedStudyMaterial(selected);
+  const testSession = isWorkspaceLoading ? null : currentStudyTestSession(selected);
   const status = selected ? studyStatusLabel(selected.study_status) : "";
   const testReady = activeTopic?.status === "done" || (!activeTopic && selected?.study_status === "done");
   els.studyEvaluateContent.innerHTML = `
     <aside class="study-queue" aria-labelledby="study-queue-title">
       <div class="study-section-heading">
-        <div><p class="eyebrow">Today</p><h4 id="study-queue-title">Today’s study queue</h4></div>
+        <div><p class="eyebrow">Today</p><h4 id="study-queue-title">Today's study queue</h4></div>
         <span>${plan.items.length} item${plan.items.length === 1 ? "" : "s"}</span>
       </div>
       <div class="study-queue-list">${plan.items.map(studyQueueItemMarkup).join("")}</div>
@@ -3595,7 +3614,12 @@ function renderStudyAndEvaluate() {
       ` : ""}
     </aside>
     <section class="study-workspace" aria-label="Selected task workspace">
-      ${selected ? `
+      ${isWorkspaceLoading ? `
+        <div class="study-workspace-loading" aria-live="polite" aria-label="Loading task details">
+          <div class="study-workspace-spinner"></div>
+        </div>
+      ` : selected ? `
+        <div class="study-workspace-ready">
         <header class="study-workspace-header">
           <div>
             <p class="eyebrow">Selected task</p>
@@ -3634,11 +3658,12 @@ function renderStudyAndEvaluate() {
           </div>
         `}
         ${studyWorkspaceMessage ? `<p class="study-workspace-message" role="status">${escapeHtml(studyWorkspaceMessage)}</p>` : ""}
+        </div>
       ` : `
         <div class="study-choose-state">
           <p class="eyebrow">Study workspace</p>
           <h4>Choose what you want to study now.</h4>
-          <p>Select an item from today’s queue to open its material and study details.</p>
+          <p>Select an item from today's queue to open its material and study details.</p>
         </div>
       `}
     </section>
@@ -4695,6 +4720,7 @@ function openAiDrawer(options = {}) {
 
 function closeAiDrawer({ restoreFocus = true } = {}) {
   if (!isAiDrawerOpen()) return;
+  cancelAiStreamingAnimation();
   document.body.classList.remove("ai-drawer-open");
   els.aiPanel.setAttribute("aria-hidden", "true");
   els.aiLauncher.setAttribute("aria-expanded", "false");
@@ -4767,6 +4793,114 @@ function renderLesson(lesson) {
   `;
 }
 
+let activeAiStreamingAnimation = null;
+
+function cancelAiStreamingAnimation() {
+  if (activeAiStreamingAnimation) {
+    activeAiStreamingAnimation.cancel();
+    activeAiStreamingAnimation = null;
+  }
+}
+
+function startAiStreamingAnimation(result, extra, usedSourceLabels) {
+  cancelAiStreamingAnimation();
+
+  const answerText = result.answer || "";
+  const targetEl = els.aiResponse;
+  if (!targetEl) return;
+
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (prefersReducedMotion || !answerText) {
+    renderFullAiResponse(result, extra, usedSourceLabels);
+    return;
+  }
+
+  // Pre-render the layout structure, but keep the copy area empty (with a white-space: pre-wrap and cursor)
+  targetEl.removeAttribute("aria-busy");
+  targetEl.innerHTML = `
+    <strong>StudentOS response</strong>
+    <div class="study-academic-copy" style="white-space: pre-wrap;"></div>
+    <div class="tag-row">
+      ${result.coverage?.status ? tag(humanize(result.coverage.status), toneForCoverage(result.coverage.status)) : ""}
+      ${result.grounding?.insufficientContext ? tag("not enough material yet", "urgent") : ""}
+      ${usedSourceLabels.map((source) => tag(source.label, "source")).join("")}
+    </div>
+    ${result.grounding?.insufficiencyReason ? `<p>${escapeHtml(result.grounding.insufficiencyReason)}</p>` : ""}
+    ${extra.join("")}
+  `;
+
+  const copyContainer = targetEl.querySelector(".study-academic-copy");
+  if (!copyContainer) {
+    renderFullAiResponse(result, extra, usedSourceLabels);
+    return;
+  }
+
+  let cancelled = false;
+  let animationFrameId = null;
+
+  // Let's compute a dynamic calm speed depending on text length
+  const totalLength = answerText.length;
+  // A calm speed, typing ~60 chars/sec, scaling for larger responses up to ~300 chars/sec to complete in at most ~4 seconds
+  const charsPerSecond = Math.max(50, Math.min(300, Math.ceil(totalLength / 4)));
+
+  let startTime = null;
+
+  function tick(timestamp) {
+    if (cancelled) return;
+
+    if (!startTime) startTime = timestamp;
+    const elapsedMs = timestamp - startTime;
+    const charCount = Math.floor((elapsedMs / 1000) * charsPerSecond);
+
+    if (charCount >= totalLength) {
+      // Finished reveal. Remove pre-wrap style to avoid altering final rendered HTML whitespace behaviors,
+      // and do a clean final render with the full Markdown renderer.
+      copyContainer.style.whiteSpace = "";
+      copyContainer.innerHTML = renderAcademicTextMarkup(answerText);
+      activeAiStreamingAnimation = null;
+      if (els.aiPanel) {
+        els.aiPanel.scrollTop = els.aiPanel.scrollHeight;
+      }
+      return;
+    }
+
+    const partialText = answerText.substring(0, charCount);
+    copyContainer.innerHTML = `${escapeHtml(partialText)}<span class="streaming-cursor"></span>`;
+
+    // Auto-scroll the drawer to keep the latest text visible
+    if (els.aiPanel) {
+      els.aiPanel.scrollTop = els.aiPanel.scrollHeight;
+    }
+
+    animationFrameId = requestAnimationFrame(tick);
+  }
+
+  animationFrameId = requestAnimationFrame(tick);
+
+  activeAiStreamingAnimation = {
+    cancel() {
+      cancelled = true;
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+    }
+  };
+}
+
+function renderFullAiResponse(result, extra, usedSourceLabels) {
+  setResult(els.aiResponse, `
+    <strong>StudentOS response</strong>
+    <div class="study-academic-copy">${renderAcademicTextMarkup(result.answer)}</div>
+    <div class="tag-row">
+      ${result.coverage?.status ? tag(humanize(result.coverage.status), toneForCoverage(result.coverage.status)) : ""}
+      ${result.grounding?.insufficientContext ? tag("not enough material yet", "urgent") : ""}
+      ${usedSourceLabels.map((source) => tag(source.label, "source")).join("")}
+    </div>
+    ${result.grounding?.insufficiencyReason ? `<p>${escapeHtml(result.grounding.insufficiencyReason)}</p>` : ""}
+    ${extra.join("")}
+  `);
+}
+
 function renderAiPayload(result) {
   const extra = [];
   const usedMaterialSnippets = result.grounding?.uploadedMaterialUsed === true
@@ -4805,25 +4939,16 @@ function renderAiPayload(result) {
     extra.push(`<p>You are close to this week’s AI help limit. AI help remaining this week: ${Number(result.weeklyAiHelp.remaining || 0)}.</p>`);
   }
 
-  setResult(els.aiResponse, `
-    <strong>StudentOS response</strong>
-    <p>${escapeHtml(result.answer)}</p>
-      <div class="tag-row">
-        ${result.coverage?.status ? tag(humanize(result.coverage.status), toneForCoverage(result.coverage.status)) : ""}
-      ${result.grounding?.insufficientContext ? tag("not enough material yet", "urgent") : ""}
-      ${usedSourceLabels.map((source) => tag(source.label, "source")).join("")}
-    </div>
-    ${result.grounding?.insufficiencyReason ? `<p>${escapeHtml(result.grounding.insufficiencyReason)}</p>` : ""}
-    ${extra.join("")}
-  `);
+  startAiStreamingAnimation(result, extra, usedSourceLabels);
 }
 
 async function runAi(event) {
   event.preventDefault();
+  cancelAiStreamingAnimation();
   await withButtonLoading(event.submitter || els.aiForm.querySelector("button[type='submit']"), "Running...", async () => {
     setLoading(els.aiResponse, "Preparing your answer...");
     try {
-      const result = await api("/api/ai/verb", {
+      const result = await providerBackedApi("/api/ai/verb", {
         method: "POST",
         body: JSON.stringify({ verb: activeVerb, message: els.aiMessage.value }),
       });
@@ -5098,7 +5223,7 @@ async function generateTodayTodo() {
   todayTodoMessage = "";
   render();
   try {
-    const result = await api("/api/today/todo", {
+    const result = await providerBackedApi("/api/today/todo", {
       method: "POST",
       body: JSON.stringify(browserTodoClock()),
     });
@@ -5203,17 +5328,23 @@ async function selectStudyItem(itemId) {
   if (!item) return;
   selectedStudyItemId = itemId;
   studyWorkspaceMessage = "";
-  renderStudyAndEvaluate();
-  if (item.study_status !== "not_started") return;
-  try {
-    const result = await api("/api/study/status", {
-      method: "POST",
-      body: JSON.stringify({ itemId, status: "studying" }),
-    });
-    state = result.state || state;
+  if (item.study_status === "not_started") {
+    studyWorkspaceLoadingId = itemId;
     renderStudyAndEvaluate();
-  } catch (error) {
-    studyWorkspaceMessage = error.message;
+    try {
+      const result = await api("/api/study/status", {
+        method: "POST",
+        body: JSON.stringify({ itemId, status: "studying" }),
+      });
+      state = result.state || state;
+    } catch (error) {
+      studyWorkspaceMessage = error.message;
+    } finally {
+      if (studyWorkspaceLoadingId === itemId) studyWorkspaceLoadingId = null;
+      renderStudyAndEvaluate();
+    }
+  } else {
+    studyWorkspaceLoadingId = null;
     renderStudyAndEvaluate();
   }
 }
@@ -5224,7 +5355,7 @@ async function createStudyMaterial() {
   studyWorkspaceMessage = "";
   renderStudyAndEvaluate();
   try {
-    const result = await api("/api/study/material", {
+    const result = await providerBackedApi("/api/study/material", {
       method: "POST",
       body: JSON.stringify({ itemId: selectedStudyItemId }),
     });
@@ -5259,7 +5390,7 @@ async function createStudyTest() {
   studyWorkspaceMessage = "";
   renderStudyAndEvaluate();
   try {
-    const result = await api("/api/study/test", {
+    const result = await providerBackedApi("/api/study/test", {
       method: "POST",
       body: JSON.stringify({ itemId: selectedStudyItemId }),
     });
@@ -5360,9 +5491,10 @@ async function evaluateStudyTestAttempt(sessionId) {
       body.append("answerSheet", file);
     }
   }
-  const result = await api(`/api/study/tests/${encodeURIComponent(sessionId)}/evaluate`, { method: "POST", body });
+  const result = await providerBackedApi(`/api/study/tests/${encodeURIComponent(sessionId)}/evaluate`, { method: "POST", body });
   state = result.state || state;
   studyWorkspaceMessage = result.message || (result.evaluated ? "Your result is ready." : "StudentOS could not evaluate this test right now. Your answers are safe. Please try again.");
+  studyWorkspaceLoadingId = null;
   render();
   setView("study");
 }
@@ -5371,6 +5503,7 @@ function continueStudyAndEvaluate() {
   const items = currentStudyPlan()?.items || [];
   const next = items.find((item) => currentStudyTestSession(item)?.status !== "evaluated") || null;
   if (next) selectedStudyItemId = next.id;
+  studyWorkspaceLoadingId = null;
   studyWorkspaceMessage = next ? "Choose the next step for this study item." : "Today’s Study and Evaluate items are complete.";
   renderStudyAndEvaluate();
 }
@@ -5790,6 +5923,35 @@ async function previewGuardianGroundwork() {
 }
 
 async function previewPlanUpgrade(planId = "pro") {
+  if (runtimeConfig.productFlow?.proDemoUpgradeEnabled === true && planId === "pro") {
+    setLoading(els.accountActionResult, "Selecting Pro...");
+    const result = await api("/api/billing/demo-upgrade", {
+      method: "POST",
+      body: JSON.stringify({ planId: "pro" }),
+    });
+    if (result.ok) {
+      if (result.account) {
+        accountSnapshot = result.account;
+      }
+      await loadBootstrap({ showLoading: false });
+      renderAccount();
+      const selectedPlan = productPlan("pro");
+      if (selectedPlan && els.planBadge) {
+        els.planBadge.textContent = selectedPlan.displayName || selectedPlan.label || "Pro";
+      }
+      setResult(els.accountActionResult, `
+        <strong>Pro is now your active plan</strong>
+        <p>Pro entitlements are applied. Your academic workspace has Pro-level access.</p>
+        <div class="tag-row">
+          ${tag("Pro", "source")}
+          ${tag("active", "medium")}
+        </div>
+      `);
+    } else {
+      setResult(els.accountActionResult, `<p>${escapeHtml(result.error || "Could not select Pro. Try again.")}</p>`);
+    }
+    return;
+  }
   setLoading(els.accountActionResult, "Preparing billing preview...");
   const result = await api("/api/billing/checkout-preview", {
     method: "POST",
@@ -6423,6 +6585,7 @@ function wireEvents() {
     const openGeneratedStudy = event.target.closest("[data-open-generated-study]");
     if (openGeneratedStudy) {
       selectedStudyItemId = openGeneratedStudy.dataset.openGeneratedStudy;
+      studyWorkspaceLoadingId = null;
       studyWorkspaceMessage = "";
       renderStudyAndEvaluate();
       setView("study");

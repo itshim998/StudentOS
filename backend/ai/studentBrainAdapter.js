@@ -151,6 +151,7 @@ export async function runStudentOsVerb({
   assistantPolicy = {},
   fetchImpl = globalThis.fetch,
   providerConfig = getAiProviderConfig(),
+  providerExecutor = runProviderFallback,
 }) {
   const config = providerConfig;
   const baseAnswer = answerFromStudentMaterials({ verb, message, state, retrievalOverride, assistantPolicy });
@@ -172,7 +173,7 @@ export async function runStudentOsVerb({
   }
 
   const messages = buildGroundedMessages({ verb, message, state, baseAnswer, assistantPolicy });
-  const providerResult = await runProviderFallback({ messages, config, fetchImpl });
+  const providerResult = await providerExecutor({ messages, config, fetchImpl, responseMode: "text" });
   if (providerResult.providerFailure) {
     return applyAssistantPolicy({
       ...baseAnswer,

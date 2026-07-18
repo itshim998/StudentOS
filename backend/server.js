@@ -1,4 +1,4 @@
-﻿import { createServer } from "node:http";
+import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
@@ -141,6 +141,12 @@ import {
   getDeterministicAiResponse,
 } from "./ai/aiWeeklyAllowanceService.js";
 import {
+  executeAuthorizedAiOperation,
+  fingerprintAiOperation,
+  getAiOperationId,
+  isProviderCycleEnabledForUser,
+} from "./ai/authorizedAiExecutionService.js";
+import {
   contentHash,
   embedSourceChunks,
   getEmbeddingConfig,
@@ -242,6 +248,7 @@ import {
   getSafeMonitoringAlertStatus,
 } from "./monitoring/alertService.js";
 import {
+  ensureBillingState,
   getBillingSnapshot,
   normalizeProviderWebhook,
   processBillingWebhook,
@@ -386,7 +393,7 @@ function sendJson(res, status, payload) {
     "Cache-Control": "no-store",
     "X-Request-Id": res.requestId || "",
     "Vary": "Origin",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-StudentOS-Internal-Token",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, Idempotency-Key, X-StudentOS-Internal-Token",
     "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
   };
   if (res.corsOrigin) headers["Access-Control-Allow-Origin"] = res.corsOrigin;
@@ -619,7 +626,7 @@ function publicState(state, persistence) {
 }
 
 function getPublicAiStatus(config) {
-  const realConfigured = Boolean(config?.groq?.configured || config?.pollinations?.configured);
+  const realConfigured = Boolean(config?.groq?.configured || config?.gemini?.configured || config?.pollinations?.configured);
   return {
     label: "StudentOS AI",
     configured: realConfigured,
@@ -1007,9 +1014,10 @@ function enforceUsage(state, action, context = {}) {
   return result;
 }
 
-function createAiPersistencePayload({ session, body, result }) {
+function createAiPersistencePayload({ session, body, result, operationId = "" }) {
   const now = new Date().toISOString();
-  const idSuffix = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const stableSuffix = operationId ? fingerprintAiOperation({ userId: session.user.id, operationId }).slice(0, 24) : "";
+  const idSuffix = stableSuffix || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const conversation = {
     id: `conv_${idSuffix}`,
     userId: session.user.id,
@@ -1043,6 +1051,42 @@ function createAiPersistencePayload({ session, body, result }) {
     },
   ];
   return { conversation, messages };
+}
+
+function aiOperationIdentity(req, workflow, input) {
+  const operationId = getAiOperationId({
+    idempotencyKey: req.headers["idempotency-key"],
+    requestId: req.requestId,
+  });
+  return {
+    operationId,
+    requestFingerprint: fingerprintAiOperation({ workflow, input }),
+  };
+}
+
+function weeklyAiHelpForExecution({ execution, allowance, creditCost, refreshesAt, blocked = false }) {
+  const reservation = execution?.reservation || {};
+  const used = execution?.settlement?.used
+    ?? (execution?.replay || execution?.blocked || execution?.success
+      ? Number(reservation.used || 0)
+      : Math.max(0, Number(reservation.used || 0) - Number(creditCost || 0)));
+  return buildPublicAiAllowance({
+    allowance,
+    used,
+    remaining: Math.max(0, allowance - used),
+    refreshesAt,
+    blocked,
+  });
+}
+
+function routedOperationBusyPayload(state, persistence, kind = "generated") {
+  return {
+    [kind]: false,
+    retryable: true,
+    message: "StudentOS is finishing another study request. Please try again in a moment.",
+    state: publicState(state, persistence),
+    secretsPrinted: false,
+  };
 }
 
 async function handleApi(req, res, url) {
@@ -1238,6 +1282,57 @@ async function handleApi(req, res, url) {
       planId: body.planId || "pro",
       userId: session.user.id,
     }), "checkout"));
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/billing/demo-upgrade") {
+    const body = await readJsonBody(req);
+    const { session, state } = await getStateContext(req);
+    requireAccountSession(session);
+    if (productFlowConfig.proDemoUpgradeEnabled !== true) {
+      sendJson(res, 403, { error: "Plan upgrade is not available in this mode.", secretsPrinted: false });
+      return;
+    }
+    const requestedPlan = normalizePlanKey(body.planId);
+    if (requestedPlan !== PLAN_KEYS.PRO) {
+      sendJson(res, 400, { error: "Only the Pro plan is available for selection in this mode.", secretsPrinted: false });
+      return;
+    }
+    const now = new Date();
+    const timestamp = now.toISOString();
+    ensureBillingState(state);
+    const subscriptionId = `billing_subscription_${session.user.id}`;
+    const demoSubscription = {
+      id: subscriptionId,
+      userId: session.user.id,
+      planId: PLAN_KEYS.PRO,
+      status: "active",
+      provider: "mock",
+      providerCustomerId: null,
+      providerSubscriptionId: null,
+      renewalAt: null,
+      cancelAtPeriodEnd: false,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const existingIndex = state.billingSubscriptions.findIndex((s) => s.id === subscriptionId);
+    if (existingIndex >= 0) state.billingSubscriptions[existingIndex] = demoSubscription;
+    else state.billingSubscriptions.push(demoSubscription);
+    state.studentProfile.productLifecycle = state.studentProfile.productLifecycle || {};
+    state.studentProfile.productLifecycle.selectedPlanId = PLAN_KEYS.PRO;
+    state.studentProfile.productLifecycle.accessMode = "paid_plan";
+    state.studentProfile.preferences = state.studentProfile.preferences || {};
+    state.studentProfile.preferences.billingPlan = PLAN_KEYS.PRO;
+    await repository.saveState(session, state);
+    logger.info("billing.demo_upgrade.completed", { planId: PLAN_KEYS.PRO, userId: session.user.id });
+    sendJson(res, 200, {
+      ok: true,
+      planId: PLAN_KEYS.PRO,
+      status: "active",
+      mode: "demo_override",
+      account: getAccountSnapshot({ session, state, saasConfig, lifecycleConfig }),
+      secretsPrinted: false,
+    });
     return;
   }
 
@@ -1940,19 +2035,45 @@ async function handleApi(req, res, url) {
     const allowance = getAiWeeklyAllowance(activePlanKey);
     const period = getAiWeeklyPeriod();
     const task = classifyAiTask({ verb: "Plan", message: "Generate today's TO-DO list" });
-    let reservation;
+    const operation = aiOperationIdentity(req, "daily_todo", {
+      currentDate: body.currentDate || null,
+      currentTime: body.currentTime || null,
+      timezone: body.timezone || null,
+    });
+    let execution;
     try {
-      reservation = await repository.reserveAiWeeklyAllowance(session, {
-        planTier: activePlanKey,
-        periodKey: period.periodKey,
-        allowance,
-        actionType: task.actionType,
-        creditCost: task.creditCost,
-        requestId: req.requestId,
-        metadata: { workflow: "daily_todo" },
+      execution = await executeAuthorizedAiOperation({
+        repository,
+        session,
+        config: aiProviderConfig,
+        requestFingerprint: operation.requestFingerprint,
+        workflow: "daily_todo",
+        responseMode: "json",
+        logger,
+        allowanceRequest: {
+          planTier: activePlanKey,
+          periodKey: period.periodKey,
+          allowance,
+          actionType: task.actionType,
+          creditCost: task.creditCost,
+          requestId: operation.operationId,
+          metadata: { workflow: "daily_todo" },
+        },
+        run: ({ providerExecutor, routed }) => generateDailyTodoPlan({
+          state,
+          currentDate: body.currentDate,
+          currentTime: body.currentTime,
+          timezone: body.timezone,
+          planTier: activePlanKey,
+          providerExecutor,
+          providerConfig: routed ? { ...aiProviderConfig, requestedMode: "auto" } : aiProviderConfig,
+        }),
+        isLogicalSuccess: (result) => result?.generationSucceeded === true && Boolean(result?.plan),
+        outcomeForReplay: (result) => ({ generationSucceeded: true, plan: result.plan }),
       });
     } catch (error) {
-      logger.warn("daily_todo.allowance_reservation_failed", { requestId: req.requestId, status: error.status || 500 });
+      if (error.code === "idempotency_conflict") throw error;
+      logger.warn("daily_todo.execution_failed", { requestId: req.requestId, status: error.status || 500 });
       sendJson(res, 200, {
         generated: false,
         retryable: true,
@@ -1962,45 +2083,24 @@ async function handleApi(req, res, url) {
       });
       return;
     }
-    if (!reservation.allowed) {
+    if (execution.busy) {
+      sendJson(res, 200, routedOperationBusyPayload(state, persistence));
+      return;
+    }
+    if (execution.blocked) {
       sendJson(res, 200, {
         generated: false,
         allowanceLimited: true,
         message: `${AI_ALLOWANCE_COPY.exhausted} ${AI_ALLOWANCE_COPY.exhaustedNextStep}`,
-        weeklyAiHelp: buildPublicAiAllowance({ ...reservation, refreshesAt: period.refreshesAt, blocked: true }),
+        weeklyAiHelp: weeklyAiHelpForExecution({ execution, allowance, creditCost: task.creditCost, refreshesAt: period.refreshesAt, blocked: true }),
         state: publicState(state, persistence),
         secretsPrinted: false,
       });
       return;
     }
-    let result;
-    try {
-      result = await generateDailyTodoPlan({
-        state,
-        currentDate: body.currentDate,
-        currentTime: body.currentTime,
-        timezone: body.timezone,
-        planTier: activePlanKey,
-      });
-    } catch (error) {
-      await repository.settleAiWeeklyAllowance(session, { requestId: req.requestId, status: "refunded" }).catch(() => null);
-      throw error;
-    }
-    const generated = result.generationSucceeded === true && Boolean(result.plan);
-    const settlement = await repository.settleAiWeeklyAllowance(session, {
-      requestId: req.requestId,
-      status: generated ? "charged" : "refunded",
-    }).catch((error) => {
-      logger.warn("daily_todo.allowance_settlement_failed", { requestId: req.requestId, status: error.status || 500 });
-      return null;
-    });
-    const usedAfterSettlement = settlement?.used ?? (generated ? reservation.used : Math.max(0, reservation.used - task.creditCost));
-    const weeklyAiHelp = buildPublicAiAllowance({
-      allowance,
-      used: usedAfterSettlement,
-      remaining: Math.max(0, allowance - usedAfterSettlement),
-      refreshesAt: period.refreshesAt,
-    });
+    const result = execution.result || {};
+    const generated = execution.success === true;
+    const weeklyAiHelp = weeklyAiHelpForExecution({ execution, allowance, creditCost: task.creditCost, refreshesAt: period.refreshesAt });
     if (!generated) {
       sendJson(res, 200, {
         generated: false,
@@ -2085,19 +2185,46 @@ async function handleApi(req, res, url) {
     const allowance = getAiWeeklyAllowance(activePlanKey);
     const period = getAiWeeklyPeriod();
     const task = classifyAiTask({ verb: "Make", message: `Create study material for ${item.title}` });
-    let reservation;
+    const operation = aiOperationIdentity(req, "study_material", {
+      todoItemId: item.id,
+      targetId: pendingTarget?.id || null,
+      targetTitle: pendingTarget?.title || null,
+    });
+    let execution;
     try {
-      reservation = await repository.reserveAiWeeklyAllowance(session, {
-        planTier: activePlanKey,
-        periodKey: period.periodKey,
-        allowance,
-        actionType: task.actionType,
-        creditCost: task.creditCost,
-        requestId: req.requestId,
-        metadata: { workflow: "study_material", todoItemId: item.id },
+      execution = await executeAuthorizedAiOperation({
+        repository,
+        session,
+        config: aiProviderConfig,
+        requestFingerprint: operation.requestFingerprint,
+        workflow: "study_material",
+        responseMode: "text",
+        logger,
+        allowanceRequest: {
+          planTier: activePlanKey,
+          periodKey: period.periodKey,
+          allowance,
+          actionType: task.actionType,
+          creditCost: task.creditCost,
+          requestId: operation.operationId,
+          metadata: { workflow: "study_material", todoItemId: item.id },
+        },
+        run: ({ providerExecutor, routed }) => generateStudyMaterial({
+          state,
+          item,
+          providerExecutor,
+          providerConfig: routed ? { ...aiProviderConfig, requestedMode: "auto" } : aiProviderConfig,
+        }),
+        isLogicalSuccess: (result) => result?.generationSucceeded === true && Boolean(result?.material),
+        outcomeForReplay: (result) => ({
+          generationSucceeded: true,
+          material: result.material,
+          reused: result.reused === true,
+        }),
       });
     } catch (error) {
-      logger.warn("study_material.allowance_reservation_failed", { requestId: req.requestId, status: error.status || 500 });
+      if (error.code === "idempotency_conflict") throw error;
+      logger.warn("study_material.execution_failed", { requestId: req.requestId, status: error.status || 500 });
       sendJson(res, 200, {
         generated: false,
         retryable: true,
@@ -2107,39 +2234,24 @@ async function handleApi(req, res, url) {
       });
       return;
     }
-    if (!reservation.allowed) {
+    if (execution.busy) {
+      sendJson(res, 200, routedOperationBusyPayload(state, persistence));
+      return;
+    }
+    if (execution.blocked) {
       sendJson(res, 200, {
         generated: false,
         allowanceLimited: true,
         message: `${AI_ALLOWANCE_COPY.exhausted} ${AI_ALLOWANCE_COPY.exhaustedNextStep}`,
-        weeklyAiHelp: buildPublicAiAllowance({ ...reservation, refreshesAt: period.refreshesAt, blocked: true }),
+        weeklyAiHelp: weeklyAiHelpForExecution({ execution, allowance, creditCost: task.creditCost, refreshesAt: period.refreshesAt, blocked: true }),
         state: publicState(state, persistence),
         secretsPrinted: false,
       });
       return;
     }
-    let result;
-    try {
-      result = await generateStudyMaterial({ state, item });
-    } catch (error) {
-      await repository.settleAiWeeklyAllowance(session, { requestId: req.requestId, status: "refunded" }).catch(() => null);
-      throw error;
-    }
-    const generated = result.generationSucceeded === true && Boolean(result.material);
-    const settlement = await repository.settleAiWeeklyAllowance(session, {
-      requestId: req.requestId,
-      status: generated ? "charged" : "refunded",
-    }).catch((error) => {
-      logger.warn("study_material.allowance_settlement_failed", { requestId: req.requestId, status: error.status || 500 });
-      return null;
-    });
-    const usedAfterSettlement = settlement?.used ?? (generated ? reservation.used : Math.max(0, reservation.used - task.creditCost));
-    const weeklyAiHelp = buildPublicAiAllowance({
-      allowance,
-      used: usedAfterSettlement,
-      remaining: Math.max(0, allowance - usedAfterSettlement),
-      refreshesAt: period.refreshesAt,
-    });
+    const result = execution.result || {};
+    const generated = execution.success === true;
+    const weeklyAiHelp = weeklyAiHelpForExecution({ execution, allowance, creditCost: task.creditCost, refreshesAt: period.refreshesAt });
     if (!generated) {
       sendJson(res, 200, {
         generated: false,
@@ -2152,6 +2264,13 @@ async function handleApi(req, res, url) {
       return;
     }
     if (!result.reused && !(state.sourceMaterials || []).some((material) => material.id === result.material.id)) state.sourceMaterials.push(result.material);
+    if (pendingTarget?.subpart) {
+      pendingTarget.subpart.generatedMaterialId = result.material.id;
+      pendingTarget.subpart.status = "studying";
+    } else if (pendingTarget?.topic) {
+      pendingTarget.topic.generatedMaterialId = result.material.id;
+      pendingTarget.topic.status = "studying";
+    }
     item.generated_material_id = result.material.id;
     if (item.study_status === "not_started") item.study_status = "studying";
     await repository.saveState(session, state);
@@ -2203,19 +2322,41 @@ async function handleApi(req, res, url) {
     const allowance = getAiWeeklyAllowance(activePlanKey);
     const period = getAiWeeklyPeriod();
     const task = classifyAiTask({ verb: "Make", message: `Create a test for ${item.title}` });
-    let reservation;
+    const operation = aiOperationIdentity(req, "study_test", {
+      todoItemId: item.id,
+      parentTopicId: activeMasteryTopic(item)?.id || null,
+    });
+    let execution;
     try {
-      reservation = await repository.reserveAiWeeklyAllowance(session, {
-        planTier: activePlanKey,
-        periodKey: period.periodKey,
-        allowance,
-        actionType: task.actionType,
-        creditCost: task.creditCost,
-        requestId: req.requestId,
-        metadata: { workflow: "study_test", todoItemId: item.id },
+      execution = await executeAuthorizedAiOperation({
+        repository,
+        session,
+        config: aiProviderConfig,
+        requestFingerprint: operation.requestFingerprint,
+        workflow: "study_test",
+        responseMode: "json",
+        logger,
+        allowanceRequest: {
+          planTier: activePlanKey,
+          periodKey: period.periodKey,
+          allowance,
+          actionType: task.actionType,
+          creditCost: task.creditCost,
+          requestId: operation.operationId,
+          metadata: { workflow: "study_test", todoItemId: item.id },
+        },
+        run: ({ providerExecutor, routed }) => generateStudyTest({
+          state,
+          item,
+          providerExecutor,
+          providerConfig: routed ? { ...aiProviderConfig, requestedMode: "auto" } : aiProviderConfig,
+        }),
+        isLogicalSuccess: (result) => result?.generationSucceeded === true && Boolean(result?.session),
+        outcomeForReplay: (result) => ({ generationSucceeded: true, session: result.session }),
       });
     } catch (error) {
-      logger.warn("study_test.allowance_reservation_failed", { requestId: req.requestId, status: error.status || 500 });
+      if (error.code === "idempotency_conflict") throw error;
+      logger.warn("study_test.execution_failed", { requestId: req.requestId, status: error.status || 500 });
       sendJson(res, 200, {
         generated: false,
         retryable: true,
@@ -2225,39 +2366,24 @@ async function handleApi(req, res, url) {
       });
       return;
     }
-    if (!reservation.allowed) {
+    if (execution.busy) {
+      sendJson(res, 200, routedOperationBusyPayload(state, persistence));
+      return;
+    }
+    if (execution.blocked) {
       sendJson(res, 200, {
         generated: false,
         allowanceLimited: true,
         message: `${AI_ALLOWANCE_COPY.exhausted} ${AI_ALLOWANCE_COPY.exhaustedNextStep}`,
-        weeklyAiHelp: buildPublicAiAllowance({ ...reservation, refreshesAt: period.refreshesAt, blocked: true }),
+        weeklyAiHelp: weeklyAiHelpForExecution({ execution, allowance, creditCost: task.creditCost, refreshesAt: period.refreshesAt, blocked: true }),
         state: publicState(state, persistence),
         secretsPrinted: false,
       });
       return;
     }
-    let result;
-    try {
-      result = await generateStudyTest({ state, item });
-    } catch (error) {
-      await repository.settleAiWeeklyAllowance(session, { requestId: req.requestId, status: "refunded" }).catch(() => null);
-      throw error;
-    }
-    const generated = result.generationSucceeded === true && Boolean(result.session);
-    const settlement = await repository.settleAiWeeklyAllowance(session, {
-      requestId: req.requestId,
-      status: generated ? "charged" : "refunded",
-    }).catch((error) => {
-      logger.warn("study_test.allowance_settlement_failed", { requestId: req.requestId, status: error.status || 500 });
-      return null;
-    });
-    const usedAfterSettlement = settlement?.used ?? (generated ? reservation.used : Math.max(0, reservation.used - task.creditCost));
-    const weeklyAiHelp = buildPublicAiAllowance({
-      allowance,
-      used: usedAfterSettlement,
-      remaining: Math.max(0, allowance - usedAfterSettlement),
-      refreshesAt: period.refreshesAt,
-    });
+    const result = execution.result || {};
+    const generated = execution.success === true;
+    const weeklyAiHelp = weeklyAiHelpForExecution({ execution, allowance, creditCost: task.creditCost, refreshesAt: period.refreshesAt });
     if (!generated) {
       sendJson(res, 200, {
         generated: false,
@@ -2269,7 +2395,9 @@ async function handleApi(req, res, url) {
       });
       return;
     }
-    state.testSessions.push(result.session);
+    const existingSessionIndex = state.testSessions.findIndex((sessionItem) => sessionItem.id === result.session.id);
+    if (existingSessionIndex >= 0) state.testSessions[existingSessionIndex] = result.session;
+    else state.testSessions.push(result.session);
     await repository.saveState(session, state);
     sendJson(res, 200, {
       generated: true,
@@ -2358,12 +2486,13 @@ async function handleApi(req, res, url) {
       throw error;
     }
     const inFlightKey = `${session.user.id}:${testSession.id}`;
-    if (studyTestEvaluationsInFlight.has(inFlightKey)) {
+    const routedEvaluation = isProviderCycleEnabledForUser(aiProviderConfig, session.user.id);
+    if (!routedEvaluation && studyTestEvaluationsInFlight.has(inFlightKey)) {
       const error = new Error("This test is already being evaluated. Please wait for the result.");
       error.status = 409;
       throw error;
     }
-    studyTestEvaluationsInFlight.add(inFlightKey);
+    if (!routedEvaluation) studyTestEvaluationsInFlight.add(inFlightKey);
     try {
       let answerSheet = testSession.answerSheetDraft || null;
       if (testSession.answerMode === "handwritten") {
@@ -2399,19 +2528,49 @@ async function handleApi(req, res, url) {
       const allowance = getAiWeeklyAllowance(activePlanKey);
       const period = getAiWeeklyPeriod();
       const task = classifyAiTask({ verb: "Review", message: `Evaluate completed test for ${testSession.testPaper.topic}` });
-      let reservation;
+      const operation = aiOperationIdentity(req, "study_test_evaluation", {
+        todoItemId: item.id,
+        testSessionId: testSession.id,
+        answers: testSession.answers || {},
+        answerSheetText: answerSheet?.extractedText || "",
+      });
+      let execution;
       try {
-        reservation = await repository.reserveAiWeeklyAllowance(session, {
-          planTier: activePlanKey,
-          periodKey: period.periodKey,
-          allowance,
-          actionType: task.actionType,
-          creditCost: task.creditCost,
-          requestId: req.requestId,
-          metadata: { workflow: "study_test_evaluation", todoItemId: item.id, testSessionId: testSession.id },
+        execution = await executeAuthorizedAiOperation({
+          repository,
+          session,
+          config: aiProviderConfig,
+          requestFingerprint: operation.requestFingerprint,
+          workflow: "study_test_evaluation",
+          responseMode: "json",
+          logger,
+          allowanceRequest: {
+            planTier: activePlanKey,
+            periodKey: period.periodKey,
+            allowance,
+            actionType: task.actionType,
+            creditCost: task.creditCost,
+            requestId: operation.operationId,
+            metadata: { workflow: "study_test_evaluation", todoItemId: item.id, testSessionId: testSession.id },
+          },
+          run: ({ providerExecutor, routed }) => evaluateStudyTest({
+            state,
+            item,
+            session: testSession,
+            answerSheetText: answerSheet?.extractedText || "",
+            providerExecutor,
+            providerConfig: routed ? { ...aiProviderConfig, requestedMode: "auto" } : aiProviderConfig,
+          }),
+          isLogicalSuccess: (result) => result?.evaluationSucceeded === true && Boolean(result?.evaluation),
+          outcomeForReplay: (result) => ({
+            evaluationSucceeded: true,
+            evaluation: result.evaluation,
+            reused: result.reused === true,
+          }),
         });
       } catch (error) {
-        logger.warn("study_test_evaluation.allowance_reservation_failed", { requestId: req.requestId, status: error.status || 500 });
+        if (error.code === "idempotency_conflict") throw error;
+        logger.warn("study_test_evaluation.execution_failed", { requestId: req.requestId, status: error.status || 500 });
         sendJson(res, 200, {
           evaluated: false,
           retryable: true,
@@ -2421,44 +2580,24 @@ async function handleApi(req, res, url) {
         });
         return;
       }
-      if (!reservation.allowed) {
+      if (execution.busy) {
+        sendJson(res, 200, routedOperationBusyPayload(state, persistence, "evaluated"));
+        return;
+      }
+      if (execution.blocked) {
         sendJson(res, 200, {
           evaluated: false,
           allowanceLimited: true,
           message: `${AI_ALLOWANCE_COPY.exhausted} ${AI_ALLOWANCE_COPY.exhaustedNextStep}`,
-          weeklyAiHelp: buildPublicAiAllowance({ ...reservation, refreshesAt: period.refreshesAt, blocked: true }),
+          weeklyAiHelp: weeklyAiHelpForExecution({ execution, allowance, creditCost: task.creditCost, refreshesAt: period.refreshesAt, blocked: true }),
           state: publicState(state, persistence),
           secretsPrinted: false,
         });
         return;
       }
-      let result;
-      try {
-        result = await evaluateStudyTest({
-          state,
-          item,
-          session: testSession,
-          answerSheetText: answerSheet?.extractedText || "",
-        });
-      } catch (error) {
-        await repository.settleAiWeeklyAllowance(session, { requestId: req.requestId, status: "refunded" }).catch(() => null);
-        throw error;
-      }
-      const evaluated = result.evaluationSucceeded === true && Boolean(result.evaluation);
-      const settlement = await repository.settleAiWeeklyAllowance(session, {
-        requestId: req.requestId,
-        status: evaluated ? "charged" : "refunded",
-      }).catch((error) => {
-        logger.warn("study_test_evaluation.allowance_settlement_failed", { requestId: req.requestId, status: error.status || 500 });
-        return null;
-      });
-      const usedAfterSettlement = settlement?.used ?? (evaluated ? reservation.used : Math.max(0, reservation.used - task.creditCost));
-      const weeklyAiHelp = buildPublicAiAllowance({
-        allowance,
-        used: usedAfterSettlement,
-        remaining: Math.max(0, allowance - usedAfterSettlement),
-        refreshesAt: period.refreshesAt,
-      });
+      const result = execution.result || {};
+      const evaluated = execution.success === true;
+      const weeklyAiHelp = weeklyAiHelpForExecution({ execution, allowance, creditCost: task.creditCost, refreshesAt: period.refreshesAt });
       if (!evaluated) {
         sendJson(res, 200, {
           evaluated: false,
@@ -2483,7 +2622,7 @@ async function handleApi(req, res, url) {
       });
       return;
     } finally {
-      studyTestEvaluationsInFlight.delete(inFlightKey);
+      if (!routedEvaluation) studyTestEvaluationsInFlight.delete(inFlightKey);
     }
   }
 
@@ -3072,19 +3211,58 @@ async function handleApi(req, res, url) {
     const allowance = getAiWeeklyAllowance(activePlanKey);
     const period = getAiWeeklyPeriod();
     const task = classifyAiTask({ verb: requestedVerb, message: body.message || "", retrieval: retrievalOverride });
-    let reservation;
+    const operation = aiOperationIdentity(req, "assistant", {
+      verb: requestedVerb,
+      message: body.message || "",
+    });
+    let execution;
     try {
-      reservation = await repository.reserveAiWeeklyAllowance(session, {
-        planTier: activePlanKey,
-        periodKey: period.periodKey,
-        allowance,
-        actionType: task.actionType,
-        creditCost: task.creditCost,
-        requestId: req.requestId,
-        metadata: { verb: requestedVerb },
+      execution = await executeAuthorizedAiOperation({
+        repository,
+        session,
+        config: aiProviderConfig,
+        requestFingerprint: operation.requestFingerprint,
+        workflow: "assistant",
+        responseMode: "text",
+        logger,
+        allowanceRequest: {
+          planTier: activePlanKey,
+          periodKey: period.periodKey,
+          allowance,
+          actionType: task.actionType,
+          creditCost: task.creditCost,
+          requestId: operation.operationId,
+          metadata: { workflow: "assistant", verb: requestedVerb },
+        },
+        run: async ({ providerExecutor, routed }) => {
+          try {
+            return await runStudentOsVerb({
+              verb: requestedVerb,
+              message: body.message || "",
+              state: assistantState,
+              retrievalOverride,
+              assistantPolicy,
+              providerExecutor,
+              providerConfig: routed ? { ...aiProviderConfig, requestedMode: "auto" } : aiProviderConfig,
+            });
+          } catch (error) {
+            logger.warn("ai_generation.failed", { requestId: req.requestId, status: error.status || 500 });
+            return {
+              verb: requestedVerb,
+              answer: AI_ALLOWANCE_COPY.unavailable,
+              sourceLabels: [],
+              nextActions: [],
+              generationSucceeded: false,
+              retryable: true,
+              grounding: { uploadedMaterialUsed: false, insufficientContext: false, insufficiencyReason: null, snippets: [] },
+            };
+          }
+        },
+        isLogicalSuccess: (result) => result?.generationSucceeded !== false && Boolean(String(result?.answer || "").trim()),
       });
     } catch (error) {
-      logger.warn("ai_allowance.reservation_failed", { requestId: req.requestId, status: error.status || 500 });
+      if (error.code === "idempotency_conflict") throw error;
+      logger.warn("ai_operation.failed", { requestId: req.requestId, status: error.status || 500 });
       sendJson(res, 200, publicAiResult({
         verb: requestedVerb,
         answer: AI_ALLOWANCE_COPY.unavailable,
@@ -3096,7 +3274,19 @@ async function handleApi(req, res, url) {
       }));
       return;
     }
-    if (!reservation.allowed) {
+    if (execution.busy) {
+      sendJson(res, 200, publicAiResult({
+        verb: requestedVerb,
+        answer: "StudentOS is finishing another study request. Please try again in a moment.",
+        sourceLabels: [],
+        nextActions: [],
+        generationSucceeded: false,
+        retryable: true,
+        grounding: { uploadedMaterialUsed: false, insufficientContext: false, insufficiencyReason: null, snippets: [] },
+      }));
+      return;
+    }
+    if (execution.blocked) {
       sendJson(res, 200, publicAiResult({
         verb: requestedVerb,
         answer: `${AI_ALLOWANCE_COPY.exhausted} ${AI_ALLOWANCE_COPY.exhaustedNextStep}`,
@@ -3104,54 +3294,29 @@ async function handleApi(req, res, url) {
         nextActions: ["Update your courses or academic context"],
         generationSucceeded: false,
         allowanceLimited: true,
-        weeklyAiHelp: buildPublicAiAllowance({ ...reservation, refreshesAt: period.refreshesAt, blocked: true }),
+        weeklyAiHelp: weeklyAiHelpForExecution({ execution, allowance, creditCost: task.creditCost, refreshesAt: period.refreshesAt, blocked: true }),
         grounding: { uploadedMaterialUsed: false, insufficientContext: false, insufficiencyReason: null, snippets: [] },
       }));
       return;
     }
-    let result;
-    try {
-      result = await runStudentOsVerb({
-        verb: requestedVerb,
-        message: body.message || "",
-        state: assistantState,
-        retrievalOverride,
-        assistantPolicy,
-      });
-    } catch (error) {
-      logger.warn("ai_generation.failed", { requestId: req.requestId, status: error.status || 500 });
-      result = {
-        verb: requestedVerb,
-        answer: AI_ALLOWANCE_COPY.unavailable,
-        sourceLabels: [],
-        nextActions: [],
-        generationSucceeded: false,
-        retryable: true,
-        grounding: { uploadedMaterialUsed: false, insufficientContext: false, insufficiencyReason: null, snippets: [] },
-      };
-    }
-    const generated = result.generationSucceeded !== false;
+    const result = execution.result || {
+      verb: requestedVerb,
+      answer: AI_ALLOWANCE_COPY.unavailable,
+      sourceLabels: [],
+      nextActions: [],
+      generationSucceeded: false,
+      retryable: true,
+      grounding: { uploadedMaterialUsed: false, insufficientContext: false, insufficiencyReason: null, snippets: [] },
+    };
+    const generated = execution.success === true;
     if (!generated) {
       logger.warn("ai_generation.provider_unavailable", {
         requestId: req.requestId,
         failureCode: result.internalFailureCode || "provider_unavailable",
       });
     }
-    const settlement = await repository.settleAiWeeklyAllowance(session, {
-      requestId: req.requestId,
-      status: generated ? "charged" : "refunded",
-    }).catch((error) => {
-      logger.warn("ai_allowance.settlement_failed", { requestId: req.requestId, status: error.status || 500 });
-      return null;
-    });
-    const usedAfterSettlement = settlement?.used ?? (generated ? reservation.used : Math.max(0, reservation.used - task.creditCost));
-    result.weeklyAiHelp = buildPublicAiAllowance({
-      allowance,
-      used: usedAfterSettlement,
-      remaining: Math.max(0, allowance - usedAfterSettlement),
-      refreshesAt: period.refreshesAt,
-    });
-    const { conversation, messages } = createAiPersistencePayload({ session, body, result });
+    result.weeklyAiHelp = weeklyAiHelpForExecution({ execution, allowance, creditCost: task.creditCost, refreshesAt: period.refreshesAt });
+    const { conversation, messages } = createAiPersistencePayload({ session, body, result, operationId: operation.operationId });
     await repository.saveAiConversation(session, conversation, messages).catch((error) => {
       logger.warn("ai_conversation.persistence_failed", { requestId: req.requestId, status: error.status || 500 });
     });

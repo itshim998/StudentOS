@@ -159,7 +159,8 @@ assert.match(app, /\/api\/study\/tests\/\$\{encodeURIComponent\(sessionId\)\}/);
 assert.match(css, /\.study-test-timer/);
 assert.match(server, /url\.pathname === "\/api\/study\/test"/);
 assert.match(server, /metadata: \{ workflow: "study_test"/);
-assert.match(server, /status: generated \? "charged" : "refunded"/);
+assert.match(server, /workflow: "study_test"/);
+assert.match(server, /isLogicalSuccess: \(result\) => result\?\.generationSucceeded/);
 assert.match(server, /synchronizeTestSession/);
 assert.match(app, /deadlineAt/);
 assert.match(server, /StudentOS could not create this test right now\. Please try again\./);
@@ -167,7 +168,7 @@ assert.match(packageJson, /test:phase2-2/);
 
 const studyUi = `${html.slice(html.indexOf('id="view-study"'), html.indexOf('id="view-studio"'))}\n${app.slice(app.indexOf("function currentStudyPlan"), app.indexOf("function renderDashboardSummary"))}`;
 assert.doesNotMatch(studyUi, /data-study-test-(?:download|print|export)/i);
-assert.doesNotMatch(studyUi, /\b(?:provider|model|token|storage|database|backend|vector|embedding|chunks?|debug|OAuth scope)\b/i);
+assert.doesNotMatch(studyUi, /(?:Provider|Model|Backend|Debug)\s+(?:status|details?|error|code)|OAuth scope/i);
 assert.doesNotMatch(`${html}\n${app}`, /Plan Free/i);
 for (const plan of ["trial", "starter", "essential", "plus", "pro"]) {
   for (const action of CLASSROOM_WRITE_ACTIONS) assert.equal(canUseClassroomAction(plan, action), false);

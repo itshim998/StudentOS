@@ -99,6 +99,10 @@ Configure these without values in documentation or commits:
 
 For the minimum configuration, add `GROQ_API_KEY` to the `azure-dev` GitHub environment. For the recommended pool, set `GROQ_API_KEY` to the same value as `GROQ_API_KEY_1`, then add `GROQ_API_KEY_1` through `GROQ_API_KEY_5`. The workflow accepts any one of these Groq secrets, maps only non-empty values, and does not require all five numbered keys. `POLLINATIONS_API_KEY` remains optional.
 
+Keep `STUDENTOS_AI_PROVIDER_CYCLE_ENABLED=false` and rollout percent `0` for the first deployment. Before a cyclic-routing canary, add five distinct `GEMINI_API_KEY_1` through `GEMINI_API_KEY_5` secrets plus `POLLINATIONS_API_KEY`; the workflow will fail closed if any cyclic provider is incomplete.
+
+Leave the three provider enable variables at their default `true` values unless isolating a provider during rollback; the global cycle flag disables the entire routed path.
+
 Do not comma-separate values in `GROQ_API_KEY`; `GROQ_API_KEYS` is not supported. Groq secrets are backend-only Azure secrets and must never be added to Cloudflare Pages or public frontend configuration.
 
 The workflow keeps runtime env names uppercase but maps them to lowercase ACA secret refs such as `GROQ_API_KEY_1=secretref:groq-api-key-1`. An unset optional provider secret must be skipped; it must not stop the mapping step. Mapping failures report only `containerapp_secret_set` or `containerapp_env_update` plus the Azure CLI exit code.

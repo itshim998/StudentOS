@@ -309,6 +309,7 @@ export async function generateDailyTodoPlan({
   now = new Date(),
   providerConfig = getAiProviderConfig(),
   fetchImpl = globalThis.fetch,
+  providerExecutor = runProviderFallback,
 } = {}) {
   const input = buildDailyTodoInput(state, { currentDate, currentTime, timezone, planTier, now });
   if (!hasUsefulDailyTodoContext(input)) {
@@ -324,10 +325,11 @@ export async function generateDailyTodoPlan({
       input,
     };
   }
-  const result = await runProviderFallback({
+  const result = await providerExecutor({
     messages: buildDailyTodoMessages(input),
     config: providerConfig,
     fetchImpl,
+    responseMode: "json",
   });
   if (result.providerFailure || !result.text) {
     return { generationSucceeded: false, retryable: true, plan: null, input };

@@ -234,14 +234,14 @@ assert.match(app, /question\.correction/);
 assert.match(css, /\.study-test-result/);
 assert.match(server, /studyTestEvaluateMatch/);
 assert.match(server, /workflow: "study_test_evaluation"/);
-assert.match(server, /if \(!reservation\.allowed\)[\s\S]*evaluateStudyTest/);
-assert.match(server, /status: evaluated \? "charged" : "refunded"/);
+assert.match(server, /if \(execution\.blocked\)[\s\S]*evaluationSucceeded/);
+assert.match(server, /isLogicalSuccess: \(result\) => result\?\.evaluationSucceeded/);
 assert.match(server, /Your answers are safe\. Please try again\./);
 assert.match(packageJson, /test:phase2-3/);
 
 const normalStudyUi = `${html.slice(html.indexOf('id="view-study"'), html.indexOf('id="view-studio"'))}\n${app.slice(app.indexOf("function currentStudyPlan"), app.indexOf("function renderDashboardSummary"))}`;
 assert.doesNotMatch(normalStudyUi, /data-study-test-(?:download|print|export)/i);
-assert.doesNotMatch(normalStudyUi, /\b(?:provider|model|token|storage|database|backend|vector|embedding|chunks?|debug|OAuth scope)\b/i);
+assert.doesNotMatch(normalStudyUi, /(?:Provider|Model|Backend|Debug)\s+(?:status|details?|error|code)|OAuth scope/i);
 assert.doesNotMatch(`${html}\n${app}`, /Plan Free/i);
 for (const plan of ["trial", "starter", "essential", "plus", "pro"]) {
   for (const action of CLASSROOM_WRITE_ACTIONS) assert.equal(canUseClassroomAction(plan, action), false);

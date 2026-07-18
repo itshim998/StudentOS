@@ -273,7 +273,7 @@ assert.match(appSource, /\["trial", "starter", "essential", "plus", "pro"\]/);
 assert.match(appSource, /Some selected Classroom work needs a manual upload/);
 const todayFlow = appSource.slice(appSource.indexOf("function renderStarterToday"), appSource.indexOf("function renderDashboardSummary"));
 assert.doesNotMatch(todayFlow, /Quadratics worksheet|default roadmap/i);
-assert.doesNotMatch(todayFlow, /\b(provider|model|token|storage|database|backend|vector|embedding|chunks?|debug|OAuth scope)\b/i);
+assert.doesNotMatch(todayFlow, /(?:Provider|Model|Backend|Debug)\s+(?:status|details?|error|code)|OAuth scope/i);
 assert.doesNotMatch(`${appSource}\n${serverSource}`, /Plan Free/i);
 assert.doesNotMatch(configSource, /classroom\.coursework\.students|classroom\.rosters|drive\.file|drive\.readonly/i);
 

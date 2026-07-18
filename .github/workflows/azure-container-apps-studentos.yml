@@ -109,6 +109,18 @@ jobs:
           GROQ_API_KEY_3: ${{ secrets.GROQ_API_KEY_3 }}
           GROQ_API_KEY_4: ${{ secrets.GROQ_API_KEY_4 }}
           GROQ_API_KEY_5: ${{ secrets.GROQ_API_KEY_5 }}
+          GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+          STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ENABLED || 'false' }}
+          STUDENTOS_AI_PROVIDER_CYCLE_SHADOW: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_SHADOW || 'false' }}
+          STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT || '0' }}
+          STUDENTOS_AI_GROQ_ENABLED: ${{ vars.STUDENTOS_AI_GROQ_ENABLED || 'true' }}
+          STUDENTOS_AI_GEMINI_ENABLED: ${{ vars.STUDENTOS_AI_GEMINI_ENABLED || 'true' }}
+          STUDENTOS_AI_POLLINATIONS_ENABLED: ${{ vars.STUDENTOS_AI_POLLINATIONS_ENABLED || 'true' }}
         run: |
           missing=()
           for name in \
@@ -131,7 +143,7 @@ jobs:
             exit 1
           fi
           echo "Required backend runtime secret names are configured."
-          node scripts/validateAzureGroqSecrets.js
+          node scripts/validateAzureAiProviderSecrets.js
 
       - name: Deploy Container App infrastructure
         uses: azure/cli@v2
@@ -177,7 +189,18 @@ jobs:
           GROQ_API_KEY_3: ${{ secrets.GROQ_API_KEY_3 }}
           GROQ_API_KEY_4: ${{ secrets.GROQ_API_KEY_4 }}
           GROQ_API_KEY_5: ${{ secrets.GROQ_API_KEY_5 }}
+          GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+          STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ENABLED || 'false' }}
+          STUDENTOS_AI_PROVIDER_CYCLE_SHADOW: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_SHADOW || 'false' }}
+          STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT || '0' }}
+          STUDENTOS_AI_GROQ_ENABLED: ${{ vars.STUDENTOS_AI_GROQ_ENABLED || 'true' }}
+          STUDENTOS_AI_GEMINI_ENABLED: ${{ vars.STUDENTOS_AI_GEMINI_ENABLED || 'true' }}
+          STUDENTOS_AI_POLLINATIONS_ENABLED: ${{ vars.STUDENTOS_AI_POLLINATIONS_ENABLED || 'true' }}
         with:
           inlineScript: |
             optional_secret_args=""
@@ -215,6 +238,11 @@ jobs:
             add_optional_provider_secret GROQ_API_KEY_3 groq-api-key-3
             add_optional_provider_secret GROQ_API_KEY_4 groq-api-key-4
             add_optional_provider_secret GROQ_API_KEY_5 groq-api-key-5
+            add_optional_provider_secret GEMINI_API_KEY_1 gemini-api-key-1
+            add_optional_provider_secret GEMINI_API_KEY_2 gemini-api-key-2
+            add_optional_provider_secret GEMINI_API_KEY_3 gemini-api-key-3
+            add_optional_provider_secret GEMINI_API_KEY_4 gemini-api-key-4
+            add_optional_provider_secret GEMINI_API_KEY_5 gemini-api-key-5
             add_optional_provider_secret POLLINATIONS_API_KEY pollinations-api-key
 
             run_redacted_az_step containerapp_secret_set az containerapp secret set \
@@ -249,6 +277,15 @@ jobs:
                 STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4=secretref:studentos-supabase-service-role-key-4 \
                 STUDENTOS_SUPABASE_JWT_SECRET=secretref:studentos-supabase-jwt-secret \
                 STUDENTOS_AI_MODE=auto \
+                STUDENTOS_AI_PROVIDER_CYCLE_ENABLED="$STUDENTOS_AI_PROVIDER_CYCLE_ENABLED" \
+                STUDENTOS_AI_PROVIDER_CYCLE_SHADOW="$STUDENTOS_AI_PROVIDER_CYCLE_SHADOW" \
+                STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT="$STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT" \
+                STUDENTOS_AI_GROQ_ENABLED="$STUDENTOS_AI_GROQ_ENABLED" \
+                STUDENTOS_AI_GEMINI_ENABLED="$STUDENTOS_AI_GEMINI_ENABLED" \
+                STUDENTOS_AI_POLLINATIONS_ENABLED="$STUDENTOS_AI_POLLINATIONS_ENABLED" \
+                STUDENTOS_AI_LOGICAL_OPERATION_TIMEOUT_MS=120000 \
+                GEMINI_CHAT_MODEL=gemini-3.1-flash-lite \
+                POLLINATIONS_ALLOW_FREE=false \
                 STUDENTOS_STORAGE_BUCKET=studentos-source-materials \
                 STUDENTOS_EXPORT_STORAGE_BUCKET=studentos-data-exports \
                 STUDENTOS_AUTH_REDIRECT_URL=https://studentos.sentiqlabs.com/auth/complete \

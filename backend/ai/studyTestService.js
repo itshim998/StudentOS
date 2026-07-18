@@ -173,7 +173,7 @@ export function normalizeTestPaper(input, fallback = {}) {
   };
 }
 
-export async function generateStudyTest({ state, item, now = new Date(), providerConfig = getAiProviderConfig(), fetchImpl = globalThis.fetch } = {}) {
+export async function generateStudyTest({ state, item, now = new Date(), providerConfig = getAiProviderConfig(), fetchImpl = globalThis.fetch, providerExecutor = runProviderFallback } = {}) {
   const queueReady = Boolean(item?.topic_mastery_queue?.topics?.length);
   if (!item || (queueReady ? !isActiveTopicTestUnlocked(item) : item.study_status !== "done")) {
     const error = new Error(queueReady ? "Complete every note in this syllabus topic before generating its test." : "Mark this study item done before generating its test.");
@@ -185,7 +185,7 @@ export async function generateStudyTest({ state, item, now = new Date(), provide
   if (["mock", "bridge"].includes(providerConfig.requestedMode)) {
     paper = buildDeterministicTestPaper({ state, item });
   } else {
-    const result = await runProviderFallback({ messages: testGenerationMessages(context), config: providerConfig, fetchImpl });
+    const result = await providerExecutor({ messages: testGenerationMessages(context), config: providerConfig, fetchImpl, responseMode: "json" });
     if (result.providerFailure || !result.text) return { generationSucceeded: false, session: null };
     paper = normalizeTestPaper(parseJsonObject(result.text), {
       test_title: `${context.item.topic || context.item.title} check`,
