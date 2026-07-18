@@ -1,4 +1,6 @@
 import { isAcademicContextRecord } from "../connectors/googleClassroom/mapper.js";
+import { normalizeWeeklyAvailability } from "./studyAvailabilityService.js";
+import { isEvidenceDerivedWeakTopic } from "./topicPerformanceService.js";
 
 function slug(value, fallback = "item") {
   const clean = String(value || "")
@@ -87,10 +89,21 @@ function parseTimetableLines(value, courses = [], now = new Date()) {
   return lines.map((line, index) => {
     const [dayRaw, timeRaw, titleRaw, courseRaw] = line.split("|").map((part) => part?.trim());
     if (!line.includes("|") || !timeRaw || (!titleRaw && !courseRaw)) return null;
-    const startDate = addDays(now, index % 5);
-    const [startHour = "18", startMinute = "00"] = String(timeRaw).split("-")[0].split(":");
+    const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const requestedDay = dayNames.indexOf(String(dayRaw || "").toLowerCase());
+    const daysAhead = requestedDay >= 0 ? (requestedDay - now.getDay() + 7) % 7 : index % 5;
+    const startDate = addDays(now, daysAhead);
+    const [startValue, endValue] = String(timeRaw).split(/-|–|—/).map((part) => part.trim());
+    const [startHour = "18", startMinute = "00"] = startValue.split(":");
     startDate.setHours(Number(startHour) || 18, Number(startMinute) || 0, 0, 0);
-    const endDate = addHours(startDate, 1);
+    const endDate = new Date(startDate);
+    if (endValue) {
+      const [endHour, endMinute = "00"] = endValue.split(":");
+      endDate.setHours(Number(endHour), Number(endMinute), 0, 0);
+      if (endDate <= startDate) endDate.setDate(endDate.getDate() + 1);
+    } else {
+      endDate.setTime(addHours(startDate, 1).getTime());
+    }
     const courseTitle = courseRaw || titleRaw || courses[index % Math.max(1, courses.length)]?.title;
     const course = courses.find((item) => item.title.toLowerCase() === String(courseTitle || "").toLowerCase()) || courses[index % Math.max(1, courses.length)];
     return {
@@ -100,6 +113,13 @@ function parseTimetableLines(value, courses = [], now = new Date()) {
       startsAt: startDate.toISOString(),
       endsAt: endDate.toISOString(),
       location: dayRaw || "Planned",
+      dayOfWeek: requestedDay >= 0 ? requestedDay : startDate.getDay(),
+      day: requestedDay >= 0 ? dayNames[requestedDay] : null,
+      startTime: `${String(startDate.getHours()).padStart(2, "0")}:${String(startDate.getMinutes()).padStart(2, "0")}`,
+      endTime: `${String(endDate.getHours()).padStart(2, "0")}:${String(endDate.getMinutes()).padStart(2, "0")}`,
+      kind: /\b(study|revision|practice|focus|reading)\b/i.test(titleRaw || "") ? "study" : "blocked",
+      source: "onboarding",
+      academicContextIncluded: true,
     };
   }).filter(Boolean);
 }
@@ -126,16 +146,19 @@ function findCourseForWeakTopic(courses, weakTopic) {
     courses[0];
 }
 
-function buildTopic({ course, title, weak = false, completed = false, index = 0 }) {
+function buildTopic({ course, title, completed = false, index = 0, now = new Date() }) {
   return {
     id: `topic_${slug(course.title)}_${slug(title || `topic_${index + 1}`)}`,
     courseId: course.id,
     title: title || `${course.title} foundations`,
-    coverageState: completed ? "covered" : weak ? "teaching" : "uncovered",
-    mastery: completed ? "developing" : weak ? "revision_required" : "not_started",
-    weakSignals: weak ? ["onboarding weak topic"] : [],
+    coverageState: completed ? "covered" : "uncovered",
+    mastery: completed ? "developing" : "not_started",
+    weakSignals: [],
     sourceMaterialIds: [],
-    createdAt: nowIso(),
+    completionSource: completed ? "setup_manual" : null,
+    academicContextIncluded: true,
+    source: "onboarding",
+    createdAt: nowIso(now),
   };
 }
 
@@ -151,7 +174,6 @@ export function normalizeOnboardingPayload(payload = {}, now = new Date()) {
     color: course.color || ["mint", "amber", "violet", "sky"][index % 4],
     topics: splitList(course.topics || course.topicsText),
   }));
-  const weakTopics = parseWeakTopicLines(payload.weakTopics || payload.weakTopicsText);
   const completedTopics = parseTopicSignalLines(payload.completedTopics || payload.completedTopicsText);
   return {
     displayName: String(payload.displayName || payload.name || "").trim(),
@@ -167,7 +189,8 @@ export function normalizeOnboardingPayload(payload = {}, now = new Date()) {
     syllabusNotes: String(payload.syllabusNotes || "").trim(),
     breakPattern,
     courses: normalizedCourses,
-    weakTopics,
+    weakTopics: [],
+    legacyWeakTopicsText: String(payload.weakTopicsText || payload.weakTopics || "").trim(),
     completedTopics,
     timetable: parseTimetableLines(payload.timetable || payload.classSchedule || payload.timetableText, normalizedCourses, now),
   };
@@ -185,7 +208,7 @@ function examPriority(course, now = new Date()) {
 export function generateAcademicRoadmap(state, { now = new Date() } = {}) {
   const items = [];
   const weakTopicIds = new Set((state.topics || []).filter(isAcademicContextRecord)
-    .filter((topic) => (topic.weakSignals || []).length || topic.mastery === "revision_required")
+    .filter(isEvidenceDerivedWeakTopic)
     .map((topic) => topic.id));
   const coursesByExam = [...(state.courses || [])].filter(isAcademicContextRecord)
     .sort((left, right) => toDate(left.examDate, addDays(now, 90)) - toDate(right.examDate, addDays(now, 90)));
@@ -218,6 +241,9 @@ export function generateAcademicRoadmap(state, { now = new Date() } = {}) {
         dueAt: addDays(now, 1).toISOString(),
         status: "open",
         examPressure: priority,
+        assessmentDerived: true,
+        recoveryState: topic.performance?.status || "needs_recovery",
+        supportingTestResultIds: topic.performance?.supportingTestResultIds || [],
       });
     }
     for (const topic of courseTopics.filter((item) => ["strong", "secure", "developing"].includes(item.mastery)).slice(0, 1)) {
@@ -260,9 +286,31 @@ export function generateAcademicRoadmap(state, { now = new Date() } = {}) {
   });
 }
 
+export function refreshAcademicRoadmap(state, { now = new Date() } = {}) {
+  const managedKinds = new Set(["exam_roadmap", "weak_topic_recovery", "due_work_control", "revision_24h"]);
+  const previous = state.roadmap || [];
+  const generated = generateAcademicRoadmap(state, { now });
+  const generatedIds = new Set(generated.map((item) => item.id));
+  const previousById = new Map(previous.map((item) => [item.id, item]));
+  const current = generated.map((item) => {
+    const existing = previousById.get(item.id);
+    return existing ? { ...existing, ...item, createdAt: existing.createdAt || item.createdAt } : item;
+  });
+  const historical = previous.filter((item) => managedKinds.has(item.kind) && !generatedIds.has(item.id)).map((item) => ({
+    ...item,
+    status: item.status === "open" ? "completed" : item.status,
+    resolvedAt: item.resolvedAt || now.toISOString(),
+  }));
+  const unmanaged = previous.filter((item) => !managedKinds.has(item.kind));
+  state.roadmap = [...current, ...historical, ...unmanaged].filter((item, index, all) => all.findIndex((candidate) => candidate.id === item.id) === index);
+  return state.roadmap;
+}
+
 export function applyStudentOnboarding(state, payload = {}, { now = new Date() } = {}) {
   const normalized = normalizeOnboardingPayload(payload, now);
   const timestamp = nowIso(now);
+  const previousTopics = state.topics || [];
+  const previousPreferences = state.studentProfile?.preferences || {};
   const onboardingCourses = normalized.courses.map((course) => ({
     id: course.id,
     title: course.title,
@@ -284,27 +332,35 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date() }
     !onboardingTitles.has(String(course.title || "").toLowerCase()));
   const courses = [...onboardingCourses, ...preservedCourses];
   const topics = [];
-  const weakTopicRecords = [];
   for (const course of normalized.courses) {
-    const courseWeakTopics = normalized.weakTopics.filter((weak) => findCourseForWeakTopic(normalized.courses, weak)?.id === course.id);
     const courseCompletedTopics = normalized.completedTopics.filter((completed) => findCourseForWeakTopic(normalized.courses, completed)?.id === course.id);
     const topicNames = unique([
       ...(course.topics || []),
-      ...courseWeakTopics.map((weak) => weak.title),
       ...courseCompletedTopics.map((completed) => completed.title),
     ]);
-    const builtTopics = topicNames.map((title, index) => buildTopic({
-          course,
-          title,
-          weak: courseWeakTopics.some((weak) => String(weak.title).toLowerCase() === String(title).toLowerCase()),
-          completed: courseCompletedTopics.some((completed) => String(completed.title).toLowerCase() === String(title).toLowerCase()),
-          index,
-        }));
+    const builtTopics = topicNames.map((title, index) => {
+      const existing = previousTopics.find((topic) => topic.id === `topic_${slug(course.title)}_${slug(title)}`) || previousTopics.find((topic) => topic.courseId === course.id && String(topic.title || "").toLowerCase() === String(title).toLowerCase());
+      const completed = courseCompletedTopics.some((item) => String(item.title).toLowerCase() === String(title).toLowerCase());
+      const topic = existing ? { ...existing, courseId: course.id, title, academicContextIncluded: true } : buildTopic({ course, title, completed, index, now });
+      if (completed && !isEvidenceDerivedWeakTopic(topic)) {
+        topic.coverageState = "covered";
+        topic.mastery = ["secure", "strong"].includes(topic.mastery) ? topic.mastery : "developing";
+        topic.completionSource = "setup_manual";
+      }
+      topic.weakSignals = [];
+      topic.updatedAt = timestamp;
+      return topic;
+    });
     topics.push(...builtTopics);
-    weakTopicRecords.push(...builtTopics.filter((topic) => topic.weakSignals.length));
     const targetCourse = courses.find((item) => item.id === course.id);
     targetCourse.subjectIds = builtTopics.map((topic) => topic.id);
   }
+  const activeCourseIds = new Set(courses.map((course) => course.id));
+  for (const topic of previousTopics) {
+    if (!activeCourseIds.has(topic.courseId) || topics.some((candidate) => candidate.id === topic.id)) continue;
+    if (isEvidenceDerivedWeakTopic(topic) || courses.find((course) => course.id === topic.courseId)?.source !== "onboarding") topics.push(topic);
+  }
+  const weakTopicRecords = topics.filter(isEvidenceDerivedWeakTopic);
 
   state.studentProfile = {
     ...state.studentProfile,
@@ -312,7 +368,7 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date() }
     gradeBand: normalized.classLevel || null,
     schoolSystem: normalized.schoolSystem || null,
     preferences: {
-      ...(state.studentProfile.preferences || {}),
+      ...previousPreferences,
       academicGoal: normalized.academicGoal,
       stream: normalized.stream,
       degree: normalized.degree,
@@ -323,10 +379,12 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date() }
       breakCycleMinutes: normalized.breakPattern.focusMinutes,
       breakMinutes: normalized.breakPattern.breakMinutes,
       scheduleText: normalized.scheduleText,
+      studyAvailability: normalizeWeeklyAvailability(normalized.scheduleText || String(payload.timetableText || "").trim()),
       examPattern: normalized.examPattern,
       syllabusNotes: normalized.syllabusNotes,
       subjectsText: String(payload.subjectsText || payload.subjects || "").trim(),
-      weakTopicsText: String(payload.weakTopicsText || "").trim(),
+      weakTopicsText: "",
+      legacyWeakTopicsText: previousPreferences.legacyWeakTopicsText || previousPreferences.weakTopicsText || normalized.legacyWeakTopicsText || "",
       completedTopicsText: String(payload.completedTopicsText || "").trim(),
       timetableText: String(payload.timetableText || "").trim(),
       weakTopicIds: weakTopicRecords.map((topic) => topic.id),
@@ -336,7 +394,7 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date() }
 
   state.courses = courses;
   state.topics = topics;
-  state.syllabi = courses.map((course) => ({
+  const generatedSyllabi = onboardingCourses.map((course) => ({
     id: course.syllabusId,
     courseId: course.id,
     title: `${course.title} academic plan`,
@@ -344,7 +402,9 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date() }
     sourceMaterialId: null,
     createdAt: timestamp,
   })).filter((syllabus) => syllabus.units.length > 0);
-  state.exams = courses.filter((course) => course.examDate).map((course) => ({
+  const generatedSyllabusIds = new Set(generatedSyllabi.map((item) => item.id));
+  state.syllabi = [...generatedSyllabi, ...(state.syllabi || []).filter((item) => activeCourseIds.has(item.courseId) && !generatedSyllabusIds.has(item.id) && (item.sourceMaterialId || !onboardingIds.has(item.courseId)))];
+  const generatedExams = onboardingCourses.filter((course) => course.examDate).map((course) => ({
     id: `exam_${course.id}`,
     courseId: course.id,
     title: `${course.title} exam`,
@@ -352,12 +412,15 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date() }
     weight: 1,
     createdAt: timestamp,
   }));
-  state.timetable = normalized.timetable;
-  state.roadmap = generateAcademicRoadmap(state, { now });
+  const generatedExamIds = new Set(generatedExams.map((item) => item.id));
+  state.exams = [...generatedExams, ...(state.exams || []).filter((item) => activeCourseIds.has(item.courseId) && !generatedExamIds.has(item.id) && (!onboardingIds.has(item.courseId) || item.source !== "onboarding"))];
+  state.timetable = [...normalized.timetable, ...(state.timetable || []).filter((item) => item.source && item.source !== "onboarding")];
+  refreshAcademicRoadmap(state, { now });
   state.revisionEvents = [
     ...(state.revisionEvents || []),
     ...topics
-      .filter((topic) => ["strong", "secure", "developing"].includes(topic.mastery))
+      .filter((topic) => topic.completionSource === "setup_manual" && ["strong", "secure", "developing"].includes(topic.mastery))
+      .filter((topic) => !(state.revisionEvents || []).some((event) => event.id === `rev_onboarding_${topic.id}`))
       .map((topic) => ({
         id: `rev_onboarding_${topic.id}`,
         courseId: topic.courseId,
@@ -370,7 +433,7 @@ export function applyStudentOnboarding(state, payload = {}, { now = new Date() }
   state.auditLog.push({
     id: `audit_onboarding_${Date.now()}`,
     actorId: state.studentProfile.id,
-    action: "student_onboarding.completed",
+    action: "student_setup.saved",
     targetType: "student_profile",
     targetId: state.studentProfile.id,
     riskLevel: "low",

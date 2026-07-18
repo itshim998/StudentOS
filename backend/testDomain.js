@@ -61,9 +61,10 @@ const failed = applyTestScore(state, {
   ],
 });
 assert.equal(failed.result.creditsAwarded, 0);
-assert.equal(failed.roadmapItem.priority, "urgent");
+assert.equal(failed.roadmapItem.priority, "medium");
 assert.equal(failed.correctionSheet.corrections.length, 1);
-assert(failed.weakTopics.includes("word problem setup"));
+assert.equal(failed.weakTopics.length, 0);
+assert.equal(failed.roadmapItem.kind, "corrections");
 assert.equal(getCreditBalance(state), beforeCredits);
 
 const strong = applyTestScore(state, {

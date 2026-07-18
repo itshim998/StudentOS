@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isAcademicContextRecord, isClassroomRecord } from "../connectors/googleClassroom/mapper.js";
 import { normalizeAcademicContextKind } from "./academicContextKinds.js";
+import { markPlanningStateStale } from "./planningStateService.js";
 
 export const ACADEMIC_CONTEXT_ARTIFACT_KINDS = Object.freeze([
   "assignment",
@@ -273,7 +274,7 @@ export function markAcademicContextNeedsPreparation(state, reason = "academic_co
     fingerprint: null,
     capsule: null,
   };
-  state.studentProfile.dailyTodoPlan = null;
+  markPlanningStateStale(state, reason, { now });
   return getAcademicContextReadiness(state);
 }
 

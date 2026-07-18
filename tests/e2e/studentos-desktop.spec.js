@@ -968,6 +968,36 @@ test("Classroom status UI normalizes controls and copy", async ({ page }) => {
   await expectNoClassroomDeveloperCopy(page, "reconnect-required Classroom state");
 });
 
+test("Setup saves availability without manual roadmap or weak-topic controls", async ({ page }) => {
+  await prepareLocalWorkspace();
+  const pageErrors = [];
+  const failedRequests = [];
+  const postedPaths = [];
+  page.on("pageerror", (error) => pageErrors.push(redact(error.message)));
+  page.on("requestfailed", (request) => failedRequests.push(new URL(request.url()).pathname));
+  page.on("request", (request) => {
+    if (request.method() === "POST") postedPaths.push(new URL(request.url()).pathname);
+  });
+
+  await page.goto(baseUrl);
+  await clickNav(page, "Setup");
+  await expect(page.getByRole("button", { name: "Generate roadmap" })).toHaveCount(0);
+  await expect(page.locator("#onboarding-form textarea[name='weakTopicsText']")).toHaveCount(0);
+  await expect(page.locator("#derived-weak-topics")).toBeVisible();
+  await expect(page.locator("#derived-weak-topics")).toContainText("Weak topics are identified from your test performance");
+  await page.locator("#onboarding-form textarea[name='timetableText']").fill("Weekdays after 6 PM, and weekends all day.");
+  await page.getByRole("button", { name: "Save setup" }).click();
+  await expect(page.locator("#onboarding-result")).toContainText("Setup saved");
+  await expect(page.locator("#view-title")).toHaveText("Setup");
+  await page.reload();
+  await clickNav(page, "Setup");
+  await expect(page.locator("#onboarding-form textarea[name='timetableText']")).toHaveValue("Weekdays after 6 PM, and weekends all day.");
+  expect(postedPaths.filter((path) => path === "/api/onboarding")).toHaveLength(1);
+  expect(postedPaths).not.toContain("/api/today/todo");
+  expect(pageErrors).toEqual([]);
+  expect(failedRequests).toEqual([]);
+});
+
 test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   const pageErrors = [];
   let expectingAssignmentFlowFailure = false;
@@ -1013,11 +1043,17 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await page.locator("#onboarding-form input[name='displayName']").fill("E2E Student");
   await page.locator("#onboarding-form input[name='stream']").fill("Science");
   await page.locator("#onboarding-form textarea[name='subjectsText']").fill("Mathematics|2026-07-01|Quadratics, Trigonometry\nPhysics|2026-07-04|Motion graphs");
-  await page.locator("#onboarding-form textarea[name='weakTopicsText']").fill("Mathematics: Trigonometry");
+  await expect(page.getByRole("button", { name: "Generate roadmap" })).toHaveCount(0);
+  await expect(page.locator("#onboarding-form textarea[name='weakTopicsText']")).toHaveCount(0);
+  await expect(page.locator("#derived-weak-topics")).toContainText("Weak topics are identified from your test performance");
   await page.locator("#onboarding-form textarea[name='completedTopicsText']").fill("Mathematics: Quadratics");
-  await page.getByRole("button", { name: "Generate roadmap" }).click();
-  await expect(page.locator("#onboarding-result")).toContainText("course roadmap generated");
-  await expect(page.locator("#view-title")).toHaveText("Today");
+  await page.locator("#onboarding-form textarea[name='timetableText']").fill("Weekdays after 6 PM, and weekends all day.");
+  await page.getByRole("button", { name: "Save setup" }).click();
+  await expect(page.locator("#onboarding-result")).toContainText("Setup saved");
+  await expect(page.locator("#view-title")).toHaveText("Setup");
+  await page.reload();
+  await clickNav(page, "Setup");
+  await expect(page.locator("#onboarding-form textarea[name='timetableText']")).toHaveValue("Weekdays after 6 PM, and weekends all day.");
 
   await clickNav(page, "Courses");
   await expect(page.locator("#courses-grid")).toContainText("Workspace preview");

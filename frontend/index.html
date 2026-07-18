@@ -381,11 +381,8 @@
 
               <fieldset class="setup-section">
                 <legend>Weak topics</legend>
-                <p>Topics that should create risk signals and recovery work.</p>
-                <label>
-                  Weak topics
-                  <textarea name="weakTopicsText" rows="3" placeholder="Add weak topics after a test or revision session"></textarea>
-                </label>
+                <p>StudentOS identifies these from your results in completed tests.</p>
+                <div id="derived-weak-topics" class="derived-weak-topics" aria-live="polite"></div>
               </fieldset>
 
               <fieldset class="setup-section">
@@ -408,10 +405,10 @@
 
               <div class="setup-submit-row">
                 <div>
-                  <strong>Ready to generate</strong>
-                  <p>StudentOS will rebuild courses, topics, timetable blocks, and the first roadmap from this profile.</p>
+                  <strong>Keep your academic setup current</strong>
+                  <p>StudentOS will use saved changes the next time Today prepares your work.</p>
                 </div>
-                <button class="primary-button" type="submit">Generate roadmap</button>
+                <button class="primary-button" type="submit">Save setup</button>
               </div>
             </form>
             <div id="onboarding-result" class="result-box rich-result" aria-live="polite"></div>
@@ -602,7 +599,7 @@
               </div>
               <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Review" data-ai-prompt="Help me review a practice score and decide what to repair next.">Help review</button>
             </div>
-            <p class="studio-helper-copy">Save a test score so StudentOS can update weak topics, corrections, and earned study credit.</p>
+            <p class="studio-helper-copy">Save an overall practice result, review corrections, and keep earned study credit current.</p>
             <form id="score-form" class="form-grid">
               <label>
                 Topic

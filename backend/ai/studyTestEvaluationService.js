@@ -5,6 +5,9 @@ import { getAiProviderConfig } from "./providerConfig.js";
 import { runProviderFallback } from "./providers.js";
 import { relatedMaterialsForTodo } from "./studyMaterialService.js";
 import { extractSourceText, inferMimeType, MAX_SOURCE_UPLOAD_BYTES } from "../storage/sourceMaterialService.js";
+import { applyTopicPerformanceEvidence, buildTopicEvidenceFromEvaluation } from "../domain/topicPerformanceService.js";
+import { markPlanningStateStale } from "../domain/planningStateService.js";
+import { refreshAcademicRoadmap } from "../domain/onboardingService.js";
 
 export const MAX_ANSWER_SHEET_BYTES = MAX_SOURCE_UPLOAD_BYTES;
 export const ANSWER_SHEET_COPY = "Upload your handwritten answer sheet as PDF or DOCX.";
@@ -140,6 +143,10 @@ export function normalizeTestEvaluation(input, paper) {
       max_marks: maxMarks,
       feedback: clean(source.feedback, 1_200) || (marksAwarded ? "This answer showed some relevant understanding." : "This answer did not yet show enough relevant understanding."),
       correction: clean(source.correction, 2_000) || "Review the question and rebuild the answer from the relevant study material.",
+      course_id: question.course_id || question.courseId || null,
+      topic_id: question.topic_id || question.topicId || null,
+      topic_title: clean(question.topic_title || question.topicTitle, 240) || null,
+      mapping_source: question.mapping_source || question.mappingSource || null,
     };
   });
   const totalMarks = paper.questions.reduce((sum, question) => sum + Number(question.marks || 0), 0);
@@ -250,15 +257,6 @@ export async function evaluateStudyTest({ state, item, session, answerSheetText 
   return { evaluationSucceeded: Boolean(evaluation), evaluation: evaluation || null, reused: false };
 }
 
-function topicId(title) {
-  const slug = clean(title, 120).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64) || "review";
-  return `topic_evaluation_${slug}_${randomUUID().slice(0, 8)}`;
-}
-
-function masteryForScore(score) {
-  return score >= 90 ? "secure" : score >= 80 ? "strong" : score >= 70 ? "developing" : "revision_required";
-}
-
 export function applyStudyTestEvaluation({ state, item, session, evaluation, answerSheet = null, now = new Date() } = {}) {
   const timestamp = now.toISOString();
   session.status = "evaluated";
@@ -307,40 +305,16 @@ export function applyStudyTestEvaluation({ state, item, session, evaluation, ans
     createdAt: existingResult?.createdAt || timestamp,
     updatedAt: timestamp,
   };
+  resultRecord.topicEvidence = buildTopicEvidenceFromEvaluation({
+    session,
+    evaluation,
+    testResultId: resultRecord.id,
+    assessedAt: timestamp,
+  });
   if (existingResult) Object.assign(existingResult, resultRecord);
   else state.testResults.push(resultRecord);
-
-  state.topics = state.topics || [];
-  const signal = `test evaluation ${Math.round(evaluation.percentage)}%`;
-  for (const weakTitle of evaluation.weak_topics) {
-    let topic = state.topics.find((candidate) => candidate.courseId === session.courseId && clean(candidate.title, 240).toLowerCase() === weakTitle.toLowerCase());
-    if (!topic) {
-      topic = {
-        id: topicId(weakTitle),
-        userId: state.studentProfile.id,
-        courseId: session.courseId || null,
-        title: weakTitle,
-        coverageState: "teaching",
-        mastery: "revision_required",
-        weakSignals: [],
-        sourceMaterialIds: [],
-        academicContextIncluded: true,
-        source: "studentos_test_evaluation",
-        createdAt: timestamp,
-      };
-      state.topics.push(topic);
-    }
-    topic.weakSignals = Array.isArray(topic.weakSignals) ? topic.weakSignals : [];
-    if (!topic.weakSignals.includes(signal)) topic.weakSignals.push(signal);
-    topic.mastery = "revision_required";
-    topic.coverageState = topic.coverageState === "uncovered" ? "teaching" : topic.coverageState;
-    topic.updatedAt = timestamp;
-  }
-  const studiedTopic = state.topics.find((topic) => topic.courseId === session.courseId && clean(topic.title, 240).toLowerCase() === clean(session.testPaper.topic, 240).toLowerCase());
-  if (studiedTopic && evaluation.percentage >= 70 && !evaluation.weak_topics.some((title) => title.toLowerCase() === clean(studiedTopic.title, 240).toLowerCase())) {
-    studiedTopic.coverageState = "covered";
-    studiedTopic.mastery = masteryForScore(evaluation.percentage);
-    studiedTopic.updatedAt = timestamp;
-  }
-  return { session, item, resultRecord };
+  const topicChanges = applyTopicPerformanceEvidence(state, resultRecord.topicEvidence, { now });
+  refreshAcademicRoadmap(state, { now });
+  markPlanningStateStale(state, "assessment_result_updated", { now, clearPlan: false });
+  return { session, item, resultRecord, topicChanges };
 }

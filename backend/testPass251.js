@@ -201,9 +201,11 @@ assert.equal(scoreState.creditLedger.length, 0);
 assert.equal(scoreState.roadmap.length, 1);
 assert.equal(scoreState.revisionEvents.length, 1);
 assert.equal(scoreState.tutorLessons.length, 1);
-assert(scoreState.topics[0].weakSignals.includes("immediate revision required"));
+assert.deepEqual(scoreState.topics[0].weakSignals, []);
+assert.equal(scoreState.roadmap[0].kind, "corrections");
 assert(Array.isArray(scoreResult.correctionSheet.corrections));
 assert(Array.isArray(scoreResult.weakTopics));
+assert.equal(scoreResult.weakTopics.length, 0);
 
 const serverSource = await readFile(new URL("./server.js", import.meta.url), "utf8");
 assert(serverSource.includes('const STUDENTOS_APP_PASS = "30";'));

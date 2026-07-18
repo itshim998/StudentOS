@@ -20,7 +20,10 @@ import {
   applyStudentOnboarding,
   bindProductOnboardingStep,
   hydrateSavedProductOnboarding,
+  refreshAcademicRoadmap,
 } from "./domain/onboardingService.js";
+import { markPlanningStateCurrent, markPlanningStateStale } from "./domain/planningStateService.js";
+import { publicTopicPerformance } from "./domain/topicPerformanceService.js";
 import {
   addManualCourse,
   archiveManualCourse,
@@ -526,9 +529,15 @@ function publicState(state, persistence) {
   const activePlanKey = resolvedPlan.activePlanKey;
   const classroomPolicy = getProductClassroomPolicy(state);
   const courses = (state.courses || []).filter(isAcademicContextRecord);
-  const topics = (state.topics || []).filter(isAcademicContextRecord);
+  const topics = (state.topics || []).filter(isAcademicContextRecord).map((topic) => {
+    const { legacyWeakSignals, legacyWeakTopicSource, ...safeTopic } = topic;
+    return { ...safeTopic, performance: publicTopicPerformance(topic) };
+  });
   const assignments = (state.assignments || []).filter(isAcademicContextRecord);
-  const roadmap = (state.roadmap || []).filter((item) => !item.archived && item.status !== "archived");
+  const roadmap = (state.roadmap || []).filter((item) => !item.archived && item.status !== "archived").map((item) => {
+    const { supportingTestResultIds, ...safeItem } = item;
+    return safeItem;
+  });
   const dueWork = getClassroomDueWork(state, {
     includeDiscoveredReview: classroomPolicy.courseworkReviewEnabled === true && classroomPolicy.autoCheckEnabled === true,
   });
@@ -538,6 +547,10 @@ function publicState(state, persistence) {
     topics,
     assignments,
     roadmap,
+    testResults: (state.testResults || []).map((result) => {
+      const { topicEvidence, ...safeResult } = result;
+      return safeResult;
+    }),
     testSessions: (state.testSessions || []).filter(isAcademicContextRecord).map((session) => publicTestSession(session)),
     revisionEvents: (state.revisionEvents || []).filter(isAcademicContextRecord),
     tutorLessons: (state.tutorLessons || []).filter(isAcademicContextRecord),
@@ -2032,6 +2045,7 @@ async function handleApi(req, res, url) {
       throw error;
     }
     const activePlanKey = resolveEntitlements(state).activePlanKey;
+    refreshAcademicRoadmap(state);
     const allowance = getAiWeeklyAllowance(activePlanKey);
     const period = getAiWeeklyPeriod();
     const task = classifyAiTask({ verb: "Plan", message: "Generate today's TO-DO list" });
@@ -2113,6 +2127,7 @@ async function handleApi(req, res, url) {
       return;
     }
     state.studentProfile.dailyTodoPlan = result.plan;
+    markPlanningStateCurrent(state, result.plan);
     await repository.saveState(session, state);
     sendJson(res, 200, {
       generated: true,
@@ -3409,7 +3424,9 @@ async function handleApi(req, res, url) {
     const { session, state } = await getStateContext(req);
     requireDashboardActive(state);
     const result = applyTestScore(state, body);
-    await repository.saveTestResultBundle(session, state);
+    markPlanningStateStale(state, "test_result_updated", { clearPlan: false });
+    refreshAcademicRoadmap(state);
+    await repository.saveState(session, state);
     sendJson(res, 200, result);
     return;
   }

@@ -1,5 +1,6 @@
 import { confidenceLabel, cosineSimilarity, createDeterministicEmbedding } from "../embeddings/embeddingService.js";
 import { isAcademicContextRecord } from "../connectors/googleClassroom/mapper.js";
+import { isEvidenceDerivedWeakTopic } from "./topicPerformanceService.js";
 
 export const AI_VERBS = Object.freeze(["Ask", "Plan", "Make", "Review"]);
 export const MIN_GROUNDING_CONFIDENCE = 0.42;
@@ -406,6 +407,12 @@ export function getSafeStudentProfile(profile, creditBalance = 0) {
   const hasStudyRhythm = profile?.disciplineIndex !== null &&
     profile?.disciplineIndex !== undefined &&
     Number.isFinite(disciplineIndex);
+  const {
+    legacyWeakTopicsText,
+    weakTopicsText,
+    weakTopicIds,
+    ...safePreferences
+  } = profile?.preferences || {};
   return {
     id: profile?.id || "student_unknown",
     displayName: profile?.displayName || "",
@@ -415,7 +422,7 @@ export function getSafeStudentProfile(profile, creditBalance = 0) {
     studyRhythm: hasStudyRhythm ? (disciplineIndex >= 80 ? "steady" : disciplineIndex >= 60 ? "building" : "needs support") : null,
     convenienceEligibility: creditBalance > 0 ? "credits available" : "earn credits through tests",
     learningCalibrationVisible: false,
-    preferences: profile?.preferences || {},
+    preferences: safePreferences,
     visibility: profile?.visibility || {},
   };
 }
@@ -458,7 +465,7 @@ export function determineTopicCoverage(state, topicOrId) {
   if (topic.coverageState === "teaching") reasons.push("in_class_teaching");
   if (instructionalSources.length > 0) reasons.push("instructional_material_available");
   if (latestScore !== null) reasons.push(`latest_test_${latestScore}`);
-  if ((topic.weakSignals || []).length > 0) reasons.push("weak_signals_present");
+  if (isEvidenceDerivedWeakTopic(topic)) reasons.push("assessment_recovery_required");
 
   let status = "uncovered";
   if (
@@ -471,7 +478,7 @@ export function determineTopicCoverage(state, topicOrId) {
     topic.coverageState === "teaching" ||
     instructionalSources.length > 0 ||
     (latestScore !== null && latestScore > 0) ||
-    (topic.weakSignals || []).length > 0
+    isEvidenceDerivedWeakTopic(topic)
   ) {
     status = "partially_covered";
   }
@@ -870,9 +877,9 @@ export function createCorrectionSheet({ topic, answers = [], scorePercent }) {
   };
 }
 
-export function createRevisionRoadmapItem({ testResult, topicTitle }) {
+export function createRevisionRoadmapItem({ testResult, topicTitle, assessmentEvidenceAvailable = false }) {
   const due = addDays(new Date(), 1).toISOString();
-  if (testResult.scorePercent >= 70) {
+  if (testResult.scorePercent >= 70 || !assessmentEvidenceAvailable) {
     return {
       id: `road_followup_${testResult.id}`,
       courseId: testResult.courseId,
@@ -940,7 +947,7 @@ export function applyTestScore(state, payload) {
     answers: payload.answers || [],
     scorePercent: result.scorePercent,
   });
-  const roadmapItem = createRevisionRoadmapItem({ testResult: result, topicTitle: topic.title });
+  const roadmapItem = createRevisionRoadmapItem({ testResult: result, topicTitle: topic.title, assessmentEvidenceAvailable: false });
   const revisionEvent = createRevisionEventForTopic({
     courseId: result.courseId,
     topicId: result.topicId,
@@ -963,23 +970,16 @@ export function applyTestScore(state, payload) {
   state.revisionEvents.push(revisionEvent);
   state.tutorLessons.push(lesson);
 
-  topic.mastery = masteryBand(result.scorePercent);
-  if (result.scorePercent < 70 && !topic.weakSignals.includes("immediate revision required")) {
-    topic.weakSignals.push("immediate revision required");
-  }
-  for (const weakTopic of correctionSheet.weakTopics) {
-    if (weakTopic && !topic.weakSignals.includes(weakTopic)) {
-      topic.weakSignals.push(weakTopic);
-    }
-  }
+  // A manually entered overall percentage remains a valid historical result, but it
+  // is not marks-weighted mapped question evidence and therefore cannot classify a topic as weak.
 
   const scoreSummary = result.scorePercent >= 90
     ? "Mastery is secure. Credits unlocked for convenience workflows."
     : result.scorePercent >= 70
       ? "Good enough to earn credits, but corrections should be reviewed today."
-      : "No credits yet. StudentOS queued mastery repair before convenience workflows.";
+      : "No credits yet. Review the corrections, then complete a StudentOS test to update topic readiness.";
   const nextRecommendedAction = result.scorePercent < 70
-    ? "Open the tutor lesson, repair weak points, then retest."
+    ? "Open the tutor lesson, review the corrections, then complete a StudentOS test."
     : "Review the correction sheet, then do one 24-hour revision check.";
 
   return {
@@ -987,7 +987,7 @@ export function applyTestScore(state, payload) {
     scoreSummary,
     creditEntry,
     correctionSheet,
-    weakTopics: correctionSheet.weakTopics,
+    weakTopics: [],
     roadmapItem,
     revisionEvent,
     tutorLesson: lesson,
@@ -1107,7 +1107,7 @@ export function buildStudyPlan(state, topic) {
   const pressure = examPressureForCourse(course);
   const preferences = state.studentProfile?.preferences || {};
   const weakTopics = state.topics.filter(isAcademicContextRecord)
-    .filter((item) => item.courseId === course.id && (item.weakSignals?.length || ["revision_required", "not_started"].includes(item.mastery)))
+    .filter((item) => item.courseId === course.id && isEvidenceDerivedWeakTopic(item))
     .slice(0, 4);
   const dueWork = state.assignments.filter(isAcademicContextRecord)
     .filter((assignment) => assignment.courseId === course.id)
@@ -1161,7 +1161,9 @@ export function buildMakeArtifacts(state, topic, { flashcardsEnabled = true } = 
 export function buildReviewCheck(state, topic) {
   const latest = latestTestForTopic(state, topic.id);
   const coverage = determineTopicCoverage(state, topic);
-  const weakPoints = uniqueStrings([...(topic.weakSignals || []), ...(latest && latest.scorePercent < 70 ? ["recent score below mastery"] : [])]);
+  const weakPoints = isEvidenceDerivedWeakTopic(topic)
+    ? [`Mapped test performance: ${topic.performance.latestPercentage}%`]
+    : [];
   return {
     coverage,
     latestScore: latest?.scorePercent ?? null,

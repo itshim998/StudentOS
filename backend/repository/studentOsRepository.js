@@ -4,6 +4,7 @@ import { publicShardRoute, routeUserToShard } from "../supabase/shardRouter.js";
 import { createInitialProductLifecycle, normalizeProductLifecycle } from "../domain/productLifecycleService.js";
 import { removeLegacyDemoArtifacts } from "../migrations/legacyDemoDataCleanup.js";
 import { migrateLegacyClassroomAcademicData } from "../connectors/googleClassroom/mapper.js";
+import { normalizeLegacyWeakTopicState } from "../domain/topicPerformanceService.js";
 
 const COLLECTIONS = [
   ["courses", "courses"],
@@ -86,6 +87,7 @@ function ensureStateShape(state) {
   removeDemoSeedRowsForRealUser(shaped);
   normalizeProductLifecycle(shaped);
   migrateLegacyClassroomAcademicData(shaped);
+  normalizeLegacyWeakTopicState(shaped);
   return shaped;
 }
 

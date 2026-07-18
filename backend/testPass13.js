@@ -31,7 +31,8 @@ const normalized = normalizeOnboardingPayload(payload, now);
 assert.equal(normalized.breakPattern.focusMinutes, 50);
 assert.equal(normalized.breakPattern.breakMinutes, 10);
 assert.equal(normalized.courses.length, 2);
-assert.equal(normalized.weakTopics.length, 1);
+assert.equal(normalized.weakTopics.length, 0);
+assert.equal(normalized.legacyWeakTopicsText, "Mathematics: Trigonometry basics");
 
 const state = createSeedState(now);
 const onboarding = applyStudentOnboarding(state, payload, { now });
@@ -41,21 +42,22 @@ assert.equal(state.studentProfile.preferences.studyBreakPattern, "50/10");
 assert.equal(state.courses.length, 2);
 assert.equal(state.exams.length, 2);
 assert.equal(state.timetable.length, 1);
-assert(state.auditLog.some((event) => event.action === "student_onboarding.completed"));
-assert(onboarding.weakTopics.some((topic) => topic.title === "Trigonometry basics"));
+assert(state.auditLog.some((event) => event.action === "student_setup.saved"));
+assert.equal(onboarding.weakTopics.length, 0);
+assert.equal(state.studentProfile.preferences.legacyWeakTopicsText, "Mathematics: Trigonometry basics");
 assert(state.revisionEvents.some((event) => event.reason.includes("Revision within 24 hours")));
 assert(state.roadmap.some((item) => item.kind === "revision_24h"));
 
 const roadmap = generateAcademicRoadmap(state, { now });
 assert.equal(roadmap[0].priority, "high");
-assert(roadmap.some((item) => item.kind === "weak_topic_recovery"));
+assert.equal(roadmap.some((item) => item.kind === "weak_topic_recovery"), false);
 const todayActions = getTodayNextActions(state);
 assert(todayActions.length > 0);
 assert(["urgent", "high"].includes(todayActions[0].priority));
 
 const planAnswer = answerFromStudentMaterials({
   verb: "Plan",
-  message: "Plan my math exam prep",
+  message: "Plan Quadratic equations for Mathematics exam prep",
   state,
 });
 assert.equal(planAnswer.academicProfile.goal, "concept_mastery");

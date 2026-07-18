@@ -2,6 +2,8 @@ import { getPreparedAcademicContextCapsule } from "../domain/academicContextServ
 import { getAiProviderConfig } from "./providerConfig.js";
 import { runProviderFallback } from "./providers.js";
 import { ensureDailyTodoStudyState } from "./studyMaterialService.js";
+import { allocateStudySlots, buildStudyAvailabilityContext } from "../domain/studyAvailabilityService.js";
+import { isEvidenceDerivedWeakTopic } from "../domain/topicPerformanceService.js";
 
 const PRIORITIES = new Set(["high", "medium", "low"]);
 const MAX_ITEMS = 6;
@@ -73,6 +75,8 @@ export function buildDailyTodoInput(state, { currentDate, currentTime, timezone,
   const clock = normalizeDailyTodoClock({ currentDate, currentTime, timezone, now });
   const preferences = state.studentProfile?.preferences || {};
   const topics = activeItems(state.topics || []);
+  const courseById = new Map((state.courses || []).map((course) => [course.id, course]));
+  const studyAvailability = buildStudyAvailabilityContext(state, clock);
   return {
     ...clock,
     planTier,
@@ -84,6 +88,7 @@ export function buildDailyTodoInput(state, { currentDate, currentTime, timezone,
       classLevel: preferences.classLevel || null,
       dailyStudyAvailabilityMinutes: preferences.dailyStudyAvailabilityMinutes || preferences.dailyStudyWindowMinutes || null,
       studyBreakPattern: preferences.studyBreakPattern || null,
+      scheduleText: preferences.scheduleText || preferences.timetableText || null,
     },
     onboardingProfile: {
       gradeBand: state.studentProfile?.gradeBand || null,
@@ -95,17 +100,37 @@ export function buildDailyTodoInput(state, { currentDate, currentTime, timezone,
       studyBreakPattern: preferences.studyBreakPattern || null,
       studyDays: preferences.studyDays || null,
       preferredStudyTime: preferences.preferredStudyTime || null,
+      scheduleText: preferences.scheduleText || preferences.timetableText || null,
     },
+    studyAvailability,
+    planningState: state.studentProfile?.planningState || null,
     preparedAcademicContext: preparedContext,
     timetable: activeItems(state.timetable || []).map((item) => ({
       title: item.title,
       courseId: item.courseId || null,
       startsAt: item.startsAt || null,
       endsAt: item.endsAt || null,
+      dayOfWeek: item.dayOfWeek ?? null,
+      startTime: item.startTime || null,
+      endTime: item.endTime || null,
+      kind: item.kind || "blocked",
     })),
-    weakTopics: topics.filter((topic) => (topic.weakSignals || []).length || topic.mastery === "revision_required").map((topic) => ({
+    weakTopics: topics.filter(isEvidenceDerivedWeakTopic).map((topic) => ({
       title: topic.title,
       courseId: topic.courseId,
+      courseTitle: courseById.get(topic.courseId)?.title || null,
+      status: topic.performance.status,
+      latestPercentage: topic.performance.latestPercentage,
+      weightedPercentage: topic.performance.weightedPercentage,
+      latestAssessedAt: topic.performance.latestAssessedAt,
+      recoveryState: topic.performance.recoveryState,
+    })),
+    recoveryPriorities: activeItems(state.roadmap || []).filter((item) => item.kind === "weak_topic_recovery" && item.status === "open").map((item) => ({
+      title: item.title,
+      courseId: item.courseId || null,
+      topicId: item.topicId || null,
+      priority: item.priority || "medium",
+      recoveryState: item.recoveryState || null,
     })),
     completedTopics: topics.filter((topic) => topic.coverageState === "covered" || ["secure", "strong"].includes(topic.mastery)).map((topic) => ({
       title: topic.title,
@@ -134,6 +159,7 @@ function daysUntil(date, currentDate) {
 }
 
 function remainingStudyMinutes(input) {
+  if (Number.isFinite(Number(input.studyAvailability?.capacityMinutes))) return Math.max(0, Number(input.studyAvailability.capacityMinutes));
   const [hour, minute] = input.currentTime.split(":").map(Number);
   const dayRemaining = Math.max(20, (23 * 60) - (hour * 60 + minute));
   const preferred = Number(input.studentProfile?.dailyStudyAvailabilityMinutes || 0);
@@ -185,7 +211,37 @@ function deterministicCandidates(input) {
   }
 
   deadlineCandidates.sort((left, right) => left.dueInDays - right.dueInDays || (left.deadlineType === "assignment" ? -1 : 1));
-  const candidates = deadlineCandidates;
+  const candidates = [...deadlineCandidates];
+  for (const topic of input.weakTopics || []) {
+    candidates.push({
+      title: topic.status === "recovering" ? `Reassess ${topic.title}` : `Review corrections for ${topic.title}`,
+      reason: topic.status === "recovering"
+        ? "A later test improved this topic, so a short reassessment can confirm recovery."
+        : `Mapped test performance is ${Math.round(topic.latestPercentage)}%, so this topic needs focused recovery.`,
+      related_course: topic.courseTitle || "",
+      related_context: topic.title,
+      priority: topic.status === "needs_recovery" ? "high" : "medium",
+      duration: topic.status === "needs_recovery" ? 35 : 25,
+      deadlineType: "recovery",
+    });
+  }
+  const representedTitles = new Set(candidates.map((item) => clean(item.title, 180).toLowerCase()));
+  for (const item of input.existingPlanForToday?.items || []) {
+    if (["completed", "done"].includes(String(item.workflow_status || item.study_status || item.status || "").toLowerCase())) continue;
+    const title = clean(item.title, 180);
+    if (!title || representedTitles.has(title.toLowerCase())) continue;
+    representedTitles.add(title.toLowerCase());
+    const previousDuration = Number(String(item.time_hint || "").match(/\d+/)?.[0] || item.duration_minutes || 25);
+    candidates.push({
+      title,
+      reason: "This unfinished work is being carried forward without overbooking today.",
+      related_course: clean(item.related_course, 140),
+      related_context: clean(item.related_context || item.title, 220),
+      priority: PRIORITIES.has(item.priority) ? item.priority : "low",
+      duration: Math.max(20, Math.min(previousDuration, 60)),
+      deadlineType: "carry_forward",
+    });
+  }
   const parallelContext = [
     ...(context.syllabi || []).filter((item) => item.units?.length || item.summary),
     ...(context.materials || []).filter((item) => item.readyForStudy && item.summary),
@@ -208,20 +264,35 @@ function deterministicCandidates(input) {
 
 export function buildDeterministicDailyTodoPlan(input, { now = new Date() } = {}) {
   let remaining = remainingStudyMinutes(input);
-  const items = [];
+  if (remaining < 20) {
+    const error = new Error("No study availability is recorded for the rest of today. Update Setup or prepare the next available day.");
+    error.status = 400;
+    error.code = "no_study_availability_today";
+    throw error;
+  }
+  const selected = [];
   for (const candidate of deterministicCandidates(input)) {
-    if (items.length >= MAX_ITEMS || remaining < 20) break;
+    if (selected.length >= MAX_ITEMS || remaining < 20) break;
     const duration = Math.max(20, Math.min(candidate.duration, remaining));
-    items.push({
+    selected.push({ candidate, duration });
+    remaining -= duration;
+  }
+  const slots = allocateStudySlots(input.studyAvailability, selected.map((entry) => entry.duration));
+  const items = selected.map(({ candidate, duration }, index) => {
+    const slot = slots[index];
+    return {
       title: candidate.title,
-      time_hint: `${duration} minutes`,
+      time_hint: `${duration} minutes · ${slot.suggestedWindow}`,
       reason: candidate.reason,
       related_course: candidate.related_course,
       related_context: candidate.related_context,
       priority: candidate.priority,
-    });
-    remaining -= duration;
-  }
+      duration_minutes: duration,
+      suggested_window: slot.suggestedWindow,
+      scheduled_start: slot.scheduledStart,
+      scheduled_end: slot.scheduledEnd,
+    };
+  });
   if (!items.length) {
     const error = new Error("Add your syllabus, assignments, or exam dates first so StudentOS can generate a useful plan.");
     error.status = 400;
@@ -234,6 +305,11 @@ export function buildDeterministicDailyTodoPlan(input, { now = new Date() } = {}
     timezone: input.timezone,
     summary: "A focused plan for the rest of today.",
     items,
+    availability: {
+      originalText: input.studyAvailability?.originalText || "",
+      capacityMinutes: input.studyAvailability?.capacityMinutes ?? null,
+      suggestedWindow: input.studyAvailability?.suggestedWindow || null,
+    },
   };
 }
 
@@ -244,6 +320,8 @@ export function buildDailyTodoMessages(input) {
       content: [
         "You are StudentOS. Build a practical study TO-DO list only for the rest of today.",
         "Prioritize current local date and time, remaining day, nearest exams, exam syllabus coverage, assignment due dates and handed-in status, prepared material, timetable, weak/completed topics, and the student's study rhythm.",
+        "Treat studyAvailability as a hard planning constraint: stay within its capacity, avoid fixed commitments, do not overlap tasks, and do not invent exact times when its suggested window is intentionally broad.",
+        "Use only evidence-backed weakTopics and recoveryPriorities. Put imminent exams and deadlines before recovery work when they are more urgent.",
         "Put the most urgent exam or assignment first, then the next urgent subject, while keeping lower-priority subjects moving in parallel when time allows.",
         "Do not invent courses, assignments, exams, or materials. Keep every reason concrete and calm.",
         "Return only valid JSON with keys date, generated_at, summary, and items.",
@@ -267,14 +345,38 @@ function parseProviderJson(text) {
 }
 
 export function normalizeDailyTodoPlan(value, input, { now = new Date() } = {}) {
-  const items = Array.isArray(value?.items) ? value.items.slice(0, MAX_ITEMS).map((item) => ({
-    title: clean(item?.title, 180),
-    time_hint: clean(item?.time_hint || item?.timeHint, 80),
-    reason: clean(item?.reason, 320),
-    related_course: clean(item?.related_course || item?.relatedCourse, 140),
-    related_context: clean(item?.related_context || item?.relatedContext, 220),
-    priority: PRIORITIES.has(String(item?.priority || "").toLowerCase()) ? String(item.priority).toLowerCase() : "medium",
-  })).filter((item) => item.title && item.reason && item.time_hint) : [];
+  let remaining = remainingStudyMinutes(input);
+  const selected = [];
+  for (const item of Array.isArray(value?.items) ? value.items.slice(0, MAX_ITEMS) : []) {
+    if (remaining < 20) break;
+    const hinted = Number(item?.duration_minutes || item?.durationMinutes || String(item?.time_hint || item?.timeHint || "").match(/\d+/)?.[0] || 30);
+    const duration = Math.max(20, Math.min(Number.isFinite(hinted) ? hinted : 30, remaining, 180));
+    const normalized = {
+      title: clean(item?.title, 180),
+      reason: clean(item?.reason, 320),
+      related_course: clean(item?.related_course || item?.relatedCourse, 140),
+      related_context: clean(item?.related_context || item?.relatedContext, 220),
+      priority: PRIORITIES.has(String(item?.priority || "").toLowerCase()) ? String(item.priority).toLowerCase() : "medium",
+      duration,
+    };
+    if (normalized.title && normalized.reason && (normalized.related_course || normalized.related_context)) {
+      selected.push(normalized);
+      remaining -= duration;
+    }
+  }
+  const slots = allocateStudySlots(input.studyAvailability, selected.map((item) => item.duration));
+  const items = selected.map((item, index) => ({
+    title: item.title,
+    time_hint: `${item.duration} minutes · ${slots[index].suggestedWindow}`,
+    reason: item.reason,
+    related_course: item.related_course,
+    related_context: item.related_context,
+    priority: item.priority,
+    duration_minutes: item.duration,
+    suggested_window: slots[index].suggestedWindow,
+    scheduled_start: slots[index].scheduledStart,
+    scheduled_end: slots[index].scheduledEnd,
+  }));
   if (!items.length) throw new Error("daily_todo_invalid_shape");
   return {
     date: input.currentDate,
@@ -282,6 +384,11 @@ export function normalizeDailyTodoPlan(value, input, { now = new Date() } = {}) 
     timezone: input.timezone,
     summary: clean(value?.summary, 280) || "A focused plan for the rest of today.",
     items,
+    availability: {
+      originalText: input.studyAvailability?.originalText || "",
+      capacityMinutes: input.studyAvailability?.capacityMinutes ?? null,
+      suggestedWindow: input.studyAvailability?.suggestedWindow || null,
+    },
   };
 }
 
@@ -293,6 +400,7 @@ function isGroundedDailyTodoPlan(plan, input) {
     ...(context.exams || []).flatMap((item) => [item.title, item.notes]),
     ...(context.syllabi || []).flatMap((item) => [item.title, item.summary]),
     ...(context.materials || []).flatMap((item) => [item.title, item.summary]),
+    ...(input.weakTopics || []).flatMap((item) => [item.title, item.courseTitle]),
   ].map((value) => clean(value, 500).toLowerCase()).filter(Boolean);
   return plan.items.every((item) => {
     const references = [item.related_course, item.related_context].map((value) => clean(value, 500).toLowerCase()).filter(Boolean);

@@ -69,6 +69,7 @@ const els = {
   todayDashboardPanels: document.getElementById("today-dashboard-panels"),
   onboardingForm: document.getElementById("onboarding-form"),
   onboardingResult: document.getElementById("onboarding-result"),
+  derivedWeakTopics: document.getElementById("derived-weak-topics"),
   setupCourses: document.getElementById("setup-courses"),
   courseForm: document.getElementById("course-form"),
   courseId: document.getElementById("course-id"),
@@ -844,6 +845,10 @@ function courseById(courseId) {
 
 function topicById(topicId) {
   return state?.topics?.find((topic) => topic.id === topicId);
+}
+
+function isDerivedWeakTopic(topic) {
+  return topic?.performance?.status === "needs_recovery" || topic?.performance?.status === "recovering";
 }
 
 function assignmentById(assignmentId) {
@@ -2099,9 +2104,40 @@ function populateSetupFormFromState() {
   setupFieldValue("dailyStudyAvailabilityMinutes", preferences.dailyStudyAvailabilityMinutes || "");
   setupFieldValue("studyBreakPattern", preferences.studyBreakPattern || "");
   setupFieldValue("subjectsText", preferences.subjectsText || derivedSubjectLines());
-  setupFieldValue("weakTopicsText", preferences.weakTopicsText || derivedTopicLines((topic) => (topic.weakSignals || []).length > 0));
   setupFieldValue("completedTopicsText", preferences.completedTopicsText || derivedTopicLines((topic) => topic.coverageState === "covered"));
   setupFieldValue("timetableText", preferences.timetableText || preferences.scheduleText || derivedTimetableLines());
+}
+
+function renderDerivedWeakTopics() {
+  if (!els.derivedWeakTopics) return;
+  const topics = (state.topics || []).filter(isDerivedWeakTopic)
+    .sort((left, right) => Number(left.performance?.weightedPercentage || 100) - Number(right.performance?.weightedPercentage || 100));
+  if (!topics.length) {
+    els.derivedWeakTopics.innerHTML = `
+      <div class="derived-weak-empty">
+        <strong>No assessed weak topics yet</strong>
+        <p>Weak topics are identified from your test performance. Complete a test in StudentOS to begin building your weak-topic profile.</p>
+      </div>
+    `;
+    return;
+  }
+  els.derivedWeakTopics.innerHTML = topics.map((topic) => {
+    const course = courseById(topic.courseId);
+    const recovering = topic.performance.status === "recovering";
+    return `
+      <article class="derived-weak-topic">
+        <div>
+          <strong>${escapeHtml(topic.title)}</strong>
+          <p>${escapeHtml(course?.title || "Course")}</p>
+        </div>
+        <div class="derived-weak-topic-state">
+          <span>${escapeHtml(recovering ? "Recovering" : "Needs revision")}</span>
+          <strong>${escapeHtml(`${Math.round(Number(topic.performance.latestPercentage || 0))}%`)}</strong>
+          <small>${escapeHtml(topic.performance.latestAssessedAt ? `Assessed ${formatDate(topic.performance.latestAssessedAt)}` : "Assessment recorded")}</small>
+        </div>
+      </article>
+    `;
+  }).join("");
 }
 
 function render() {
@@ -2122,6 +2158,7 @@ function render() {
   const backendPersistence = runtimeConfig.persistence || {};
   els.connectorStatus.textContent = backendModeLabel(backendPersistence.mode || state.persistence?.mode || "unknown mode");
   populateSetupFormFromState();
+  renderDerivedWeakTopics();
   renderCourseManagement();
   renderClassroomPanel();
   renderDashboardSummary();
@@ -3684,7 +3721,7 @@ function renderDashboardSummary() {
     .sort((left, right) => timestampFor(left.examDate) - timestampFor(right.examDate))
     .slice(0, 3);
   const weakTopics = (state.topics || [])
-    .filter((topic) => (topic.weakSignals || []).length || topic.mastery === "revision_required")
+    .filter(isDerivedWeakTopic)
     .slice(0, 5);
   const openRoadmap = (state.roadmap || []).filter((item) => item.status === "open");
   const completedRoadmap = (state.roadmap || []).filter((item) => item.status === "done" || item.status === "completed");
@@ -4008,7 +4045,7 @@ function renderCourses() {
     const assignments = getCourseAssignments(course.id);
     const sources = getCourseSources(course.id);
     const roadmap = getCourseRoadmap(course.id);
-    const weakTopics = topics.filter((topic) => (topic.weakSignals || []).length || topic.mastery === "revision_required" || topic.mastery === "not_started");
+    const weakTopics = topics.filter(isDerivedWeakTopic);
     const classroomAssignments = assignments.filter((assignment) => assignment.source === "google_classroom");
     const steadyTopics = topics.filter((topic) => ["secure", "strong"].includes(topic.mastery));
     const revisionCount = topics.filter((topic) => ["revision_required", "not_started"].includes(topic.mastery)).length;
@@ -5079,12 +5116,11 @@ async function recordScore(event) {
       <p>${escapeHtml(result.scoreSummary)}</p>
       <div class="studio-result-strip">
         <span><strong>${escapeHtml(String(result.result.creditsAwarded))}</strong> study credit${result.result.creditsAwarded === 1 ? "" : "s"} updated</span>
-        <span><strong>${escapeHtml((result.weakTopics || []).length ? "Review needed" : "On track")}</strong> weak-topic signal</span>
+        <span><strong>Saved</strong> overall practice result</span>
       </div>
       <strong>What to repair next</strong>
       ${list(result.correctionSheet.corrections.map((item) => `${item.concept}: ${item.repair}`))}
       <div class="tag-row">
-        ${(result.weakTopics || []).map((weak) => tag(weak, "medium")).join("")}
         ${tag(result.nextRecommendedAction, result.result.scorePercent < 70 ? "urgent" : "source")}
       </div>
     `);
@@ -5715,32 +5751,32 @@ function formJson(form) {
   return Object.fromEntries([...new FormData(form).entries()]);
 }
 
-function renderOnboardingResult(result) {
+function renderSetupSaveResult(result) {
   const onboarding = result.onboarding;
   setResult(els.onboardingResult, `
-    <strong>${escapeHtml(onboarding.courses.length)} course roadmap generated</strong>
-    <p>${escapeHtml(`Goal: ${humanize(onboarding.academicGoal)} / ${onboarding.studyBreakPattern.label} study cycle`)}</p>
+    <strong>Setup saved</strong>
+    <p>Today will use your latest subjects, dates, and study availability when it prepares upcoming work.</p>
     <div class="tag-row">
+      ${tag(`${onboarding.courses.length} courses`, "source")}
       ${tag(`${onboarding.exams.length} exams`, "source")}
-      ${tag(`${onboarding.weakTopics.length} weak topics`, onboarding.weakTopics.length ? "medium" : "source")}
-      ${tag(`${onboarding.roadmap.filter((item) => item.status === "open").length} roadmap items`, "source")}
+      ${tag(`${onboarding.weakTopics.length} assessed weak topics`, onboarding.weakTopics.length ? "medium" : "source")}
     </div>
   `);
 }
 
-async function submitOnboarding(event) {
+async function submitSetup(event) {
   event.preventDefault();
-  await withButtonLoading(event.submitter, "Preparing...", async () => {
-    setLoading(els.onboardingResult, "Building your academic roadmap...");
+  await withButtonLoading(event.submitter, "Saving...", async () => {
+    setLoading(els.onboardingResult, "Saving your academic setup...");
     const result = await api("/api/onboarding", {
       method: "POST",
       body: JSON.stringify(formJson(event.currentTarget)),
     });
     state = result.state;
-    renderOnboardingResult(result);
+    renderSetupSaveResult(result);
     render();
-    setView("today");
-  }, { timeoutTarget: els.onboardingResult, timeoutCopy: "Roadmap generation is taking longer than expected. You can try again.", timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS });
+    setView("setup");
+  }, { timeoutTarget: els.onboardingResult, timeoutCopy: "Saving setup is taking longer than expected. You can try again.", timeoutMs: LONG_ACTION_LOADING_TIMEOUT_MS });
 }
 
 function consentPayloadFromForm(form) {
@@ -6854,7 +6890,7 @@ function wireEvents() {
     sourceSearchQuery = event.currentTarget.value;
     renderSources();
   });
-  els.onboardingForm.addEventListener("submit", submitOnboarding);
+  els.onboardingForm.addEventListener("submit", submitSetup);
   els.sourceList.addEventListener("click", (event) => {
     const contextDeleteButton = event.target.closest("[data-delete-context-id]");
     if (contextDeleteButton) {

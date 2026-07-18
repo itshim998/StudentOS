@@ -2139,6 +2139,44 @@ input[type="file"] {
   min-width: 0;
 }
 
+.derived-weak-topics {
+  display: grid;
+  gap: 10px;
+}
+
+.derived-weak-empty,
+.derived-weak-topic {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 14px;
+}
+
+.derived-weak-empty strong,
+.derived-weak-topic strong {
+  color: var(--ink);
+}
+
+.derived-weak-topic {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.derived-weak-topic-state {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  text-align: right;
+}
+
+.derived-weak-topic-state span,
+.derived-weak-topic-state small {
+  color: var(--muted);
+  font-size: var(--font-size-small);
+}
+
 .form-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

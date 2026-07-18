@@ -157,7 +157,11 @@ assert.equal(typedSession.status, "evaluated");
 assert.equal(item.workflow_status, "completed");
 assert.equal(item.evaluation_completed_at, now.toISOString());
 assert.equal(state.testResults[0].testSessionId, typedSession.id);
-assert.ok(state.topics.some((topic) => topic.title === "Free-body diagrams" && topic.weakSignals.length));
+const assessedTopic = state.topics.find((topic) => topic.id === typedSession.topicId || (topic.courseId === typedSession.courseId && topic.title === typedSession.testPaper.topic));
+assert.equal(assessedTopic.performance.source, "studentos_assessment_evidence");
+assert.equal(assessedTopic.performance.latestPercentage, normalized.percentage);
+assert.equal(assessedTopic.performance.totalMarksAvailable, normalized.total_marks);
+assert.equal(state.topics.some((topic) => topic.title === "Free-body diagrams" && topic.performance), false);
 assert.throws(() => saveStudyTestAnswers(typedSession, { 1: "changed after grading" }, { now }), /cannot be changed/);
 
 const retrySession = (await generateStudyTest({ state, item, now, providerConfig: { requestedMode: "mock" } })).session;

@@ -1,4 +1,5 @@
 import { isAcademicContextRecord } from "../connectors/googleClassroom/mapper.js";
+import { isEvidenceDerivedWeakTopic } from "../domain/topicPerformanceService.js";
 
 function compact(value, limit = 1400) {
   return String(value || "")
@@ -28,9 +29,9 @@ function formatStudyState(state, baseAnswer) {
     .map((item) => `${item.title} due ${item.dueDate || item.dueAt || "soon"} (${item.status || "open"})`)
     .join("; ");
   const weakTopics = (state.topics || [])
-    .filter((item) => isAcademicContextRecord(item) && item.courseId === course?.id && (item.weakSignals?.length || ["revision_required", "not_started"].includes(item.mastery)))
+    .filter((item) => isAcademicContextRecord(item) && item.courseId === course?.id && isEvidenceDerivedWeakTopic(item))
     .slice(0, 5)
-    .map((item) => `${item.title}: ${item.weakSignals?.join(", ") || item.mastery}`)
+    .map((item) => `${item.title}: ${item.performance.status} (${item.performance.latestPercentage}%)`)
     .join("; ");
   const timetable = (state.timetable || [])
     .filter((item) => !course?.id || item.courseId === course.id)

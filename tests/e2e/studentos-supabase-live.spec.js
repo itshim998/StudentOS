@@ -564,11 +564,17 @@ test.describe("StudentOS live Supabase E2E", () => {
     await page.locator("#onboarding-form input[name='displayName']").fill("Live Supabase E2E Student");
     await page.locator("#onboarding-form input[name='stream']").fill("Science");
     await page.locator("#onboarding-form textarea[name='subjectsText']").fill("Mathematics|2026-07-01|Quadratics, Trigonometry\nPhysics|2026-07-04|Motion graphs");
-    await page.locator("#onboarding-form textarea[name='weakTopicsText']").fill("Mathematics: Trigonometry");
+    await expect(page.getByRole("button", { name: "Generate roadmap" })).toHaveCount(0);
+    await expect(page.locator("#onboarding-form textarea[name='weakTopicsText']")).toHaveCount(0);
+    await expect(page.locator("#derived-weak-topics")).toContainText("Weak topics are identified from your test performance");
     await page.locator("#onboarding-form textarea[name='completedTopicsText']").fill("Mathematics: Quadratics");
-    await page.getByRole("button", { name: "Generate roadmap" }).click();
-    await expect(page.locator("#onboarding-result")).toContainText("course roadmap generated", { timeout: 15_000 });
-    await expect(page.locator("#view-title")).toHaveText("Today");
+    await page.locator("#onboarding-form textarea[name='timetableText']").fill("Weekdays after 6 PM, and weekends all day.");
+    await page.getByRole("button", { name: "Save setup" }).click();
+    await expect(page.locator("#onboarding-result")).toContainText("Setup saved", { timeout: 15_000 });
+    await expect(page.locator("#view-title")).toHaveText("Setup");
+    await page.reload();
+    await clickNav(page, "Setup");
+    await expect(page.locator("#onboarding-form textarea[name='timetableText']")).toHaveValue("Weekdays after 6 PM, and weekends all day.");
 
     await clickNav(page, "Academic Context");
     await page.locator("#source-kind-select").selectOption("material");

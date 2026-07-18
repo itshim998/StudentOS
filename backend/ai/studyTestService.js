@@ -201,6 +201,14 @@ export async function generateStudyTest({ state, item, now = new Date(), provide
   paper.test_title = `${lockedTopic} check`;
   const course = courseForItem(state, item);
   const masteryTopic = activeMasteryTopic(item);
+  const mappedTopic = (state.topics || []).find((topic) => topic.courseId === course?.id && clean(topic.title, 240).toLowerCase() === lockedTopic.toLowerCase()) || null;
+  paper.questions = paper.questions.map((question) => ({
+    ...question,
+    course_id: course?.id || null,
+    topic_id: mappedTopic?.id || null,
+    topic_title: lockedTopic,
+    mapping_source: "studentos_strict_test_scope",
+  }));
   const timestamp = now.toISOString();
   const session = {
     id: randomUUID(),
@@ -209,7 +217,8 @@ export async function generateStudyTest({ state, item, now = new Date(), provide
     parentTopicId: masteryTopic?.id || null,
     parentSyllabusTopic: masteryTopic?.title || paper.topic,
     courseId: course?.id || null,
-    topicId: null,
+    topicId: mappedTopic?.id || null,
+    topicMappingSource: "studentos_strict_test_scope",
     questionFormat: paper.questions.every((question) => question.type === "objective") ? "mcq" : "mixed",
     status: "ready_to_start",
     testPaper: paper,
