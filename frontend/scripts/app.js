@@ -2517,7 +2517,7 @@ function relatedStudyMaterial(item) {
     .sort((left, right) => right.score - left.score)[0]?.source || null;
 }
 
-const ACADEMIC_TEXT_ALLOWED_TAGS = new Set(["A", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H5", "H6", "LI", "OL", "P", "PRE", "SPAN", "STRONG", "SUB", "SUP", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "UL",
+const ACADEMIC_TEXT_ALLOWED_TAGS = new Set(["A", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H5", "H6", "HR", "LI", "OL", "P", "PRE", "SPAN", "STRONG", "SUB", "SUP", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "UL",
   /* KaTeX HTML output */
   "MATH", "SEMANTICS", "ANNOTATION", "MROW", "MI", "MO", "MN", "MSUP", "MSUB",
   "MFRAC", "MSQRT", "MROOT", "MOVER", "MUNDER", "MUNDEROVER", "MTABLE", "MTR", "MTD",
@@ -2558,6 +2558,7 @@ function isAcademicMarkdownBlockStart(lines, index) {
   return /^```/.test(line)
     || line.startsWith("$$")
     || line.startsWith("\\[")
+    || /^(?:-{3,}|\*{3,}|_{3,})$/.test(line)
     || /^(#{1,6})\s+/.test(line)
     || /^>\s?/.test(line)
     || /^(\s*)([-*+]|\d+[.)])\s+/.test(line)
@@ -2571,6 +2572,12 @@ function parseAcademicMarkdown(content) {
   while (index < lines.length) {
     const line = String(lines[index] || "").trim();
     if (!line) {
+      index += 1;
+      continue;
+    }
+
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(line)) {
+      blocks.push({ type: "rule" });
       index += 1;
       continue;
     }
@@ -2917,6 +2924,7 @@ function sanitizeAcademicHtml(html) {
 }
 
 function academicBlockMarkup(block) {
+  if (block.type === "rule") return `<hr>`;
   if (block.type === "heading") {
     const tagName = block.level <= 2 ? "h5" : "h6";
     return `<${tagName}>${renderMarkdownInline(block.text)}</${tagName}>`;
@@ -2941,10 +2949,6 @@ function academicBlockMarkup(block) {
   return `<p>${renderMarkdownInline(block.text)}</p>`;
 }
 
-function generatedStudyTextMarkup(content) {
-  return renderAcademicTextMarkup(content);
-}
-
 function renderAcademicTextMarkup(content) {
   const markup = parseAcademicMarkdown(content).map(academicBlockMarkup).join("");
   return sanitizeAcademicHtml(markup);
@@ -2966,16 +2970,69 @@ function isInternalGeneratedId(value) {
   return false;
 }
 
+function removeInternalGeneratedIds(value) {
+  return String(value || "")
+    .replace(/\(?\b(?:source_generated|source_uploaded|topic_evaluation|test_result)_[a-z0-9_-]+\b\)?/gi, "")
+    .replace(/\(?\b(?:storage|supabase|private)_[a-z0-9_-]+\b\)?/gi, "")
+    .replace(/\(?\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b\)?/gi, "");
+}
+
+function containsInternalGeneratedId(value) {
+  const text = String(value || "");
+  return removeInternalGeneratedIds(text) !== text || isInternalGeneratedId(text);
+}
+
 function cleanAcademicDisplayText(value, fallback = "") {
-  const text = String(value || "").replace(/\s+/g, " ").trim();
+  const text = removeInternalGeneratedIds(value)
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/\(\s*\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!text || isInternalGeneratedId(text)) return fallback;
   return text;
 }
 
 function friendlyContextLabel(item) {
-  const course = cleanAcademicDisplayText(item?.related_course, "");
   const context = cleanAcademicDisplayText(item?.related_context, "");
-  return course || context || "Study material";
+  if (context) return context;
+  const course = cleanAcademicDisplayText(item?.related_course, "");
+  if (course) return `${course} study material`;
+  return "Generated study material";
+}
+
+function isGenericGeneratedMaterialTitle(value) {
+  return /^(?:generated(?: by studentos)?|course|revision)?\s*(?:study\s*)?(?:material|materials|note|notes|guide|revision guide)$/i.test(String(value || "").trim());
+}
+
+function comparableGeneratedHeading(value) {
+  return cleanAcademicDisplayText(value, "")
+    .replace(/^[#\s]+/, "")
+    .replace(/[*_`]/g, "")
+    .replace(/[^a-z0-9]+/gi, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function generatedStudyTextMarkup(content, metadata = {}) {
+  const displayContent = removeInternalGeneratedIds(content);
+  const blocks = parseAcademicMarkdown(displayContent);
+  const first = blocks[0];
+  if (first?.type === "heading") {
+    const firstHeading = comparableGeneratedHeading(first.text);
+    const displayTitle = comparableGeneratedHeading(metadata.title);
+    const savedTitle = comparableGeneratedHeading(metadata.savedTitle);
+    if (
+      containsInternalGeneratedId(String(content || "").split(/\r?\n/, 1)[0])
+      || firstHeading === displayTitle
+      || (savedTitle && firstHeading === savedTitle)
+      || isGenericGeneratedMaterialTitle(firstHeading)
+    ) {
+      blocks.shift();
+      while (blocks[0]?.type === "rule") blocks.shift();
+    }
+  }
+  const markup = blocks.map(academicBlockMarkup).join("");
+  return sanitizeAcademicHtml(markup);
 }
 
 function findGeneratedMaterialQueueTarget(material) {
@@ -3010,7 +3067,14 @@ function generatedStudyDisplayMetadata(material) {
   const parentTopic = cleanAcademicDisplayText(topic?.title || material?.parentSyllabusTopic || item?.related_context, "");
   const subpartTitle = cleanAcademicDisplayText(subpart?.title || material?.subpartTitle, "");
   const savedTitle = cleanAcademicDisplayText(material?.title, "");
-  const title = subpartTitle || parentTopic || savedTitle || "Generated study note";
+  const taskTitle = cleanAcademicDisplayText(item?.title, "");
+  const usefulSavedTitle = isGenericGeneratedMaterialTitle(savedTitle) ? "" : savedTitle;
+  const usefulParentTopic = isGenericGeneratedMaterialTitle(parentTopic) ? "" : parentTopic;
+  const title = subpartTitle
+    || usefulParentTopic
+    || usefulSavedTitle
+    || taskTitle
+    || (courseName === "Course not specified" ? "Generated study material" : `${courseName} study guide`);
   const topicName = parentTopic || (subpartTitle ? title : savedTitle) || "Generated study note";
   const subpartName = subpartTitle && subpartTitle !== topicName ? subpartTitle : null;
   return {
@@ -3018,6 +3082,7 @@ function generatedStudyDisplayMetadata(material) {
     courseName,
     topicName,
     subpartName,
+    savedTitle,
     generatedDate: formatDate(material?.generatedAt || material?.createdAt || new Date().toISOString()),
   };
 }
@@ -3031,7 +3096,7 @@ function studyMaterialMarkup(material) {
           <div><p class="eyebrow">Generated by StudentOS</p><h4>${escapeHtml(metadata.title)}</h4></div>
           ${tag("Saved to Academic Context", "source")}
         </div>
-        <div class="study-generated-copy study-academic-copy">${generatedStudyTextMarkup(material.generatedContent)}</div>
+        <div class="study-generated-copy study-academic-copy">${generatedStudyTextMarkup(material.generatedContent, metadata)}</div>
         <div class="study-note-actions" aria-label="Generated note actions">
           <button class="secondary-button" type="button" data-export-generated-note-pdf="${escapeHtml(material.id)}">Export as PDF</button>
         </div>
@@ -3039,15 +3104,16 @@ function studyMaterialMarkup(material) {
     `;
   }
   const url = material?.linkUrl || material?.alternateLink;
+  const materialTitle = cleanAcademicDisplayText(material?.title, "Course study material");
   return `
     <article class="study-existing-material">
       <div>
         <p class="eyebrow">Related material</p>
-        <h4>${escapeHtml(material.title || "Study material")}</h4>
+        <h4>${escapeHtml(materialTitle)}</h4>
         ${material.extractedSnippet ? `<p>${escapeHtml(material.extractedSnippet)}</p>` : `<p>This material is ready in Academic Context.</p>`}
       </div>
       ${material.isPrivate
-        ? `<button class="primary-button" type="button" data-open-academic-pdf="${escapeHtml(material.id)}" data-pdf-title="${escapeHtml(material.title || "Study material")}">Open material</button>`
+        ? `<button class="primary-button" type="button" data-open-academic-pdf="${escapeHtml(material.id)}" data-pdf-title="${escapeHtml(materialTitle)}">Open material</button>`
         : url
           ? `<a class="primary-button" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Open material</a>`
           : ""}
@@ -3591,20 +3657,41 @@ function startStudyTestCountdown(session) {
 
 function studyQueueItemMarkup(item) {
   const selected = item.id === selectedStudyItemId;
+  const priority = ["high", "medium", "low"].includes(item.priority) ? item.priority : "medium";
+  const priorityLabel = humanize(priority);
+  const status = studyStatusLabel(item.study_status);
+  const time = studyTimePresentation(item.time_hint);
   return `
-    <button class="study-queue-item${selected ? " active" : ""}" type="button" data-study-item-id="${escapeHtml(item.id)}" aria-pressed="${selected ? "true" : "false"}">
-      <span class="study-queue-main">
-        <strong>${escapeHtml(item.title)}</strong>
-        <small>${escapeHtml(item.related_course || "Course not specified")}</small>
-        <span>${escapeHtml(item.reason)}</span>
+    <button class="study-queue-item${selected ? " active" : ""}" type="button" data-study-item-id="${escapeHtml(item.id)}" aria-pressed="${selected ? "true" : "false"}" aria-label="${escapeHtml(`${item.title}. ${priorityLabel} priority. ${status}.`)}">
+      <span class="study-queue-card-header">
+        <strong class="study-queue-title">${escapeHtml(item.title)}</strong>
+        <span class="study-priority-badge tag ${escapeHtml(priority === "high" ? "urgent" : priority)}" aria-label="${escapeHtml(`${priorityLabel} priority`)}">${escapeHtml(priorityLabel)}</span>
       </span>
+      <small class="study-queue-course">${escapeHtml(item.related_course || "Course not specified")}</small>
+      <span class="study-queue-description">${escapeHtml(item.reason)}</span>
       <span class="study-queue-meta">
-        ${tag(humanize(item.priority || "medium"), item.priority === "high" ? "urgent" : item.priority || "medium")}
-        <small>${escapeHtml(item.time_hint || "Time not set")}</small>
-        <em data-study-status>${escapeHtml(studyStatusLabel(item.study_status))}</em>
+        ${time.duration ? `<span class="study-queue-duration">${escapeHtml(time.duration)}</span>` : ""}
+        ${time.window ? `<span class="study-queue-window" title="${escapeHtml(time.full)}">${escapeHtml(time.window)}</span>` : ""}
+        <span class="study-queue-status" data-study-status aria-label="${escapeHtml(`Study status: ${status}`)}">${escapeHtml(status)}</span>
+        ${selected ? `<span class="study-selected-marker" aria-hidden="true">Selected</span>` : ""}
       </span>
     </button>
   `;
+}
+
+function studyTimePresentation(value) {
+  const full = cleanAcademicDisplayText(value, "Time not set");
+  const match = full.match(/^(\d+)\s*minutes?\s*(?:[·•\-–—]\s*)?(.*)$/i);
+  if (!match) return { full, duration: "", window: full };
+  const windowText = String(match[2] || "")
+    .replace(/^during\s+(?:your\s+)?available\s+/i, "")
+    .replace(/^suggested\s+(?:for\s+)?/i, "")
+    .trim();
+  return {
+    full,
+    duration: `${match[1]} min`,
+    window: windowText ? windowText.charAt(0).toUpperCase() + windowText.slice(1) : "",
+  };
 }
 
 function renderStudyAndEvaluate() {
@@ -3669,7 +3756,7 @@ function renderStudyAndEvaluate() {
         ${testSession ? studyTestMarkup(testSession) : `
           <dl class="study-task-details">
             <div><dt>Course</dt><dd>${escapeHtml(selected.related_course || "Not specified")}</dd></div>
-            <div><dt>Related context</dt><dd>${escapeHtml(selected.related_context || "No additional context")}</dd></div>
+            <div><dt>Related context</dt><dd>${escapeHtml(friendlyContextLabel(selected))}</dd></div>
             <div><dt>Suggested time</dt><dd>${escapeHtml(selected.time_hint || "Not specified")}</dd></div>
             <div><dt>Study status</dt><dd>${escapeHtml(status)}</dd></div>
           </dl>
@@ -4316,6 +4403,9 @@ function renderSources() {
     const course = courseById(source.courseId);
     const origin = academicContextOrigin(source);
     const generated = origin === "Generated by StudentOS";
+    const displayTitle = generated
+      ? generatedStudyDisplayMetadata(source).title
+      : cleanAcademicDisplayText(source.title, "Course study material");
     const prompt = buildSourceAiPrompt(source, course);
     const readiness = academicContextMaterialStatus(source);
     return `
@@ -4323,7 +4413,7 @@ function renderSources() {
         ${generated ? academicContextTextPreview() : academicContextPreview(origin === "Manual upload")}
         <div class="academic-context-card-body">
           <div class="academic-context-card-copy">
-            <h4>${escapeHtml(source.title)}</h4>
+            <h4>${escapeHtml(displayTitle)}</h4>
             <p>${escapeHtml(course?.title || "Course")}</p>
           </div>
           <div class="academic-context-card-meta academic-context-material-meta">
@@ -4334,9 +4424,9 @@ function renderSources() {
           <div class="source-action-row">
             ${generated
               ? `<button class="mini-action" type="button" data-open-generated-study="${escapeHtml(source.todoItemId || "")}">View material</button>`
-              : academicContextOpenAction(source, source.title, source.linkUrl || source.alternateLink)}
-            <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}" aria-label="Ask StudentOS about ${escapeHtml(source.title)}">Ask StudentOS</button>
-            <button class="mini-action danger-action" type="button" data-delete-context-kind="material" data-delete-context-id="${escapeHtml(source.id)}" aria-label="Delete ${escapeHtml(source.title)}">Delete</button>
+              : academicContextOpenAction(source, displayTitle, source.linkUrl || source.alternateLink)}
+            <button class="mini-action ai-context-button" type="button" data-ai-open data-ai-verb="Ask" data-ai-prompt="${escapeHtml(prompt)}" aria-label="Ask StudentOS about ${escapeHtml(displayTitle)}">Ask StudentOS</button>
+            <button class="mini-action danger-action" type="button" data-delete-context-kind="material" data-delete-context-id="${escapeHtml(source.id)}" aria-label="Delete ${escapeHtml(displayTitle)}">Delete</button>
           </div>
         </div>
       </article>

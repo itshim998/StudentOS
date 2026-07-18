@@ -1185,10 +1185,10 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await closeAiDrawer(page);
 
   await clickNav(page, "Studio");
-  await expect(page.locator("#view-studio")).toContainText("Focused academic workflows");
-  await page.getByRole("button", { name: "Review workflow" }).click();
+  await expect(page.locator("#view-studio")).toContainText("Turn assignment into a study plan");
+  await page.getByRole("button", { name: "Help review" }).click();
   await expect(page.locator("#ai-panel")).toBeVisible();
-  await expect(page.locator("#ai-message")).toHaveValue(/current Studio workflow/i);
+  await expect(page.locator("#ai-message")).toHaveValue(/review a practice score/i);
   await closeAiDrawer(page);
 
   await clickNav(page, "Today");
@@ -1316,7 +1316,7 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await page.getByRole("button", { name: "Preview sharing safeguards" }).click();
   await expect(page.locator("#invitation-result")).toContainText(/Access inactive|Safeguards previewed|Consent required/i);
   await page.getByRole("button", { name: "Upgrade" }).click();
-  await expect(page.locator("#account-action-result")).toContainText(/Preview|redirect|payment|checkout/i);
+  await expect(page.locator("#account-action-result")).toContainText("Pro is now your active plan");
 
   expectingAssignmentFlowFailure = true;
   await page.route("**/api/assignment-flow", (route) => route.fulfill({
@@ -1593,9 +1593,9 @@ test("Starter Today follows academic context preparation before generating a str
     });
   });
   await page.getByRole("button", { name: "Generate today’s TO-DO list" }).click();
-  await expect(page.getByRole("heading", { name: "Today’s focused plan" })).toBeVisible();
-  await expect(page.locator(".today-todo-item")).toContainText("Review motion and forces");
-  await expect(page.locator(".today-todo-item")).toContainText("45 minutes");
+  await expect(page.getByRole("heading", { name: "TO-DO", exact: true })).toBeVisible();
+  await expect(page.locator(".journey-card")).toContainText("Review motion and forces");
+  await expect(page.locator(".journey-card")).toContainText("45 minutes");
   expect(generationClock.currentDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   expect(generationClock.currentTime).toMatch(/^\d{2}:\d{2}$/);
   expect(generationClock.timezone).toBeTruthy();
@@ -1718,9 +1718,9 @@ test("Essential prepares selected Classroom context and generates Today in one c
   await expect(page.locator("#today-dashboard-panels")).toBeHidden();
   await expect(page.locator("#dashboard-summary")).toContainText("Selected Classroom work is ready to check.");
   await page.getByRole("button", { name: "Prepare Academic Context" }).click();
-  await expect(page.getByRole("heading", { name: "Today’s focused plan" })).toBeVisible();
-  await expect(page.locator(".today-todo-item").nth(0)).toContainText("AI CIA 1");
-  await expect(page.locator(".today-todo-item").nth(1)).toContainText("Electronics CIA 1");
+  await expect(page.getByRole("heading", { name: "TO-DO", exact: true })).toBeVisible();
+  await expect(page.locator(".journey-card").nth(0)).toContainText("AI CIA 1");
+  await expect(page.locator(".journey-card").nth(1)).toContainText("Electronics CIA 1");
   await clickNav(page, "Academic Context");
   await expect(page.locator("#academic-context-preparation-status")).toContainText("Some selected Classroom work needs a manual upload");
   expect(prepareCalls).toBe(1);
@@ -1772,7 +1772,7 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
   }));
   await page.goto(baseUrl);
   await clickNav(page, "Study and Evaluate");
-  await expect(page.locator("#view-study")).toContainText("Generate today’s TO-DO list first.");
+  await expect(page.locator("#view-study")).toContainText("Generate today's TO-DO list first.");
   await expect(page.getByRole("button", { name: "Go to Today" })).toBeVisible();
 
   const today = await page.evaluate(() => {
@@ -1788,9 +1788,9 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
         id: "todo_study_physics",
         title: "Review motion and forces",
         related_course: "Physics",
-        related_context: "Newton's laws",
+        related_context: "source_generated_1783243939043_dd617b00",
         reason: "The Physics exam is approaching.",
-        time_hint: "45 minutes",
+        time_hint: "45 minutes · During your available weekend study time",
         priority: "high",
         study_status: "not_started",
       },
@@ -1837,15 +1837,19 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
     const generatedMaterial = {
       id: "source_generated_physics",
       courseId: "course_study_physics",
-      title: "Review motion and forces",
+      title: "Generated study material (source_generated_1783243939043_dd617b00)",
       artifactKind: "material",
       source: "studentos_generated",
       origin: "studentos_generated",
       status: "ready",
       readyForStudy: true,
-      generatedContent: `# Core lesson
+      generatedContent: `# Generated study material (source_generated_1783243939043_dd617b00)
+
+## Core lesson
 
 **Net force** connects force diagrams to acceleration with $F = ma$.
+
+---
 
 1. Draw a force diagram.
 2. Link acceleration to the net force.
@@ -1958,7 +1962,56 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
   await clickNav(page, "Study and Evaluate");
   await expect(page.locator(".study-queue-item")).toHaveCount(2);
   await expect(page.locator(".study-queue-item").first()).toContainText("Review motion and forces");
-  await expect(page.locator(".study-queue-item").first()).toContainText("45 minutes");
+  await expect(page.locator(".study-queue-item").first()).toContainText("45 min");
+  await expect(page.locator(".study-queue-item").first()).toContainText("Weekend study time");
+  await page.locator(".study-queue-item").first().click();
+  await expect(page.locator(".study-queue-item").nth(1)).toBeVisible();
+
+  for (const viewport of [
+    { width: 1680, height: 945, layout: "two-pane" },
+    { width: 1536, height: 864, layout: "two-pane" },
+    { width: 1440, height: 900, layout: "two-pane" },
+    { width: 1366, height: 768, layout: "two-pane" },
+    { width: 1024, height: 768, layout: "stacked" },
+    { width: 900, height: 900, layout: "stacked" },
+    { width: 430, height: 932, layout: "stacked" },
+    { width: 390, height: 844, layout: "stacked" },
+    { width: 360, height: 800, layout: "stacked" },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.waitForTimeout(80);
+    const geometry = await page.evaluate(() => {
+      const rect = (selector) => {
+        const bounds = document.querySelector(selector).getBoundingClientRect();
+        return { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom, width: bounds.width, height: bounds.height };
+      };
+      return {
+        queue: rect(".study-queue"),
+        workspace: rect(".study-workspace"),
+        card: rect(".study-queue-item"),
+        title: rect(".study-queue-title"),
+        badge: rect(".study-priority-badge"),
+        description: rect(".study-queue-description"),
+        metadata: rect(".study-queue-meta"),
+        status: rect(".study-queue-status"),
+      };
+    });
+    expect(geometry.title.width, `${viewport.width}px title width`).toBeGreaterThan(viewport.width <= 430 ? 120 : 170);
+    expect(geometry.badge.height, `${viewport.width}px priority badge height`).toBeLessThanOrEqual(36);
+    expect(geometry.badge.height, `${viewport.width}px priority badge/card ratio`).toBeLessThan(geometry.card.height * 0.45);
+    expect(geometry.metadata.top, `${viewport.width}px metadata follows description`).toBeGreaterThanOrEqual(geometry.description.bottom - 1);
+    expect(geometry.status.right, `${viewport.width}px status stays inside card`).toBeLessThanOrEqual(geometry.card.right + 1);
+    expect(geometry.status.bottom, `${viewport.width}px status stays inside card`).toBeLessThanOrEqual(geometry.card.bottom + 1);
+    if (viewport.layout === "two-pane") {
+      expect(geometry.queue.width, `${viewport.width}px queue width`).toBeGreaterThanOrEqual(350);
+      expect(Math.abs(geometry.queue.top - geometry.workspace.top), `${viewport.width}px pane alignment`).toBeLessThan(4);
+    } else {
+      expect(geometry.workspace.top, `${viewport.width}px stacked workspace`).toBeGreaterThanOrEqual(geometry.queue.bottom - 2);
+    }
+    await expectNoHorizontalOverflow(page, `Study and Evaluate ${viewport.width}x${viewport.height}`);
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.waitForTimeout(80);
   await page.locator(".study-queue-item").nth(1).click();
   await expect(page.locator(".study-workspace")).toContainText("Integration notes");
   await expect(page.getByRole("link", { name: "Open material" })).toBeVisible();
@@ -1966,11 +2019,17 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
 
   await page.locator(".study-queue-item").first().click();
   await expect(page.locator(".study-workspace")).toContainText("No study note is available yet.");
+  await expect(page.locator(".study-task-details")).toContainText("Physics study material");
+  await expect(page.locator("#view-study")).not.toContainText("source_generated_");
   await page.getByRole("button", { name: /Generate (?:study material|note)/ }).click();
   await expect(page.locator(".study-generated-material")).toContainText("Core lesson");
+  await expect(page.locator(".study-material-heading h4")).toHaveText("Review motion and forces");
+  await expect(page.locator(".study-generated-material")).not.toContainText("source_generated_");
+  await expect(page.locator(".study-generated-copy")).not.toContainText("Generated study material");
   await expect(page.locator(".study-workspace")).toContainText("saved to Academic Context", { ignoreCase: true });
   const generatedCopy = page.locator(".study-generated-copy");
   await expect(generatedCopy.locator("h5")).toContainText("Core lesson");
+  await expect(generatedCopy.locator("hr")).toHaveCount(1);
   await expect(generatedCopy.locator("strong")).toContainText("Net force");
   await expect(generatedCopy.locator("ol > li").first()).toContainText("Draw a force diagram");
   await expect(generatedCopy.locator(".study-math-inline")).toContainText("F = ma");
@@ -1988,7 +2047,7 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
   await expect(page.getByRole("link", { name: "Download PDF" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Download PDF" })).toHaveAttribute("download", "studentos-review-motion-and-forces.pdf");
   expect(studyMaterialGenerationCalls).toBe(1);
-  expect(studyState.sourceMaterials.map((source) => source.title)).toEqual(["Integration notes", "Review motion and forces"]);
+  expect(studyState.sourceMaterials.map((source) => source.title)).toEqual(["Integration notes", "Generated study material (source_generated_1783243939043_dd617b00)"]);
   expect(studyState.sourceMaterials.some((source) => /academic context pdf|pdf export/i.test(String(source.title || source.kind || source.sourceType || "")))).toBe(false);
   await page.getByRole("button", { name: "Close document viewer" }).click();
   await expect(page.getByRole("link", { name: "Download PDF" })).toBeHidden();
@@ -1996,6 +2055,7 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
   await clickNav(page, "Academic Context");
   await expect(page.locator("#source-list")).toContainText("Generated by StudentOS");
   await expect(page.locator("#source-list")).toContainText("Review motion and forces");
+  await expect(page.locator("#source-list")).not.toContainText("source_generated_");
   await expect(page.locator("#source-list")).not.toContainText("StudentOS PDF Export");
   await clickNav(page, "Study and Evaluate");
   await page.getByRole("button", { name: /Mark (?:study|note) done/ }).click();
@@ -2131,22 +2191,22 @@ test("public auth shell gates the app when auth is enabled", async ({ page }) =>
   });
   await page.locator("#auth-email").fill("qa@studentos.local");
   await page.locator("#auth-password").fill("studentos-test-password");
-  await page.getByRole("button", { name: "Create account" }).click();
+  await page.getByRole("button", { name: "Create an account" }).click();
   await expect(page.locator("#auth-session")).toContainText("Check your email");
   expect(signupRedirect).toBe(`${baseUrl}/auth/callback`);
   expect(signupRedirect).not.toContain("localhost:3000");
   await page.unroute("https://example.supabase.co/auth/v1/signup**");
 
-  await page.getByRole("button", { name: "Existing account" }).click();
+  await page.evaluate(() => { window.location.hash = "login"; });
   await expect(page.locator("#auth-shell-title")).toHaveText("Sign in to StudentOS");
   await page.locator("#auth-email").fill("qa@studentos.local");
-  await page.getByRole("button", { name: "Reset password" }).click();
+  await page.getByRole("button", { name: "Forgot password?" }).click();
   await expect(page.locator("#auth-message")).toContainText("If an account exists for this email, a reset link has been sent. Please check your inbox.");
   await expect(page.locator("#auth-message")).not.toContainText("Supabase Auth Project");
   await expect(page.locator("#auth-message")).not.toContainText("reset email requested");
   await expect(page.locator("#auth-message")).not.toContainText("protected request");
   await expectNoVisibleExternalBranding(page, "public auth reset");
-  await page.getByRole("button", { name: "New account" }).click();
+  await page.evaluate(() => { window.location.hash = "signup"; });
   await expect(page.locator("#auth-shell-title")).toHaveText("Create your StudentOS account");
 
   await page.evaluate(() => {
@@ -2157,7 +2217,11 @@ test("public auth shell gates the app when auth is enabled", async ({ page }) =>
   });
   await page.goto(baseUrl);
   await expect(page.locator("#public-auth-shell")).toBeHidden();
-  await expect(page.locator("#app-shell")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => {
+    const setup = document.getElementById("product-flow-shell");
+    const app = document.getElementById("app-shell");
+    return Boolean((setup && !setup.hidden) || (app && !app.hidden));
+  })).toBe(true);
 });
 
 test("verification callbacks capture the session and start new-user setup", async ({ page }) => {
@@ -2278,7 +2342,6 @@ test("production host does not fall back to demo when auth config is unavailable
   await expect(page.locator("#auth-session")).toContainText("Configuration required");
   await expect(page.locator("#auth-help")).toContainText("StudentOS deployment");
   await expect(page.locator("#auth-form")).toBeHidden();
-  await expect(page.locator("[data-auth-mode='signin']")).toBeDisabled();
   await expect(page.locator("#public-auth-shell")).not.toContainText("Local demo");
   await expect(page.locator("#public-auth-shell")).not.toContainText("demo@studentos.local");
   await expect(page.locator("#pricing")).not.toBeVisible();
@@ -2303,7 +2366,6 @@ test("production host stays on public auth shell when auth is enabled and signed
   await expect(page.locator("#app-shell")).toBeHidden();
   await expect(page.locator("#auth-shell-title")).toHaveText("Create your StudentOS account");
   await expect(page.locator("#auth-form")).toBeVisible();
-  await expect(page.locator("[data-auth-mode='signin']")).not.toBeDisabled();
   await expect(page.locator("#public-auth-shell")).not.toContainText("Local demo");
   await expectNoVisibleExternalBranding(page, "production auth shell");
 });
