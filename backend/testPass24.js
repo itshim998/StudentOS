@@ -90,13 +90,14 @@ const fetchImpl = async (url, options = {}) => {
       },
     };
   }
-  if (href.includes("/courses/course_1/courseWork/work_1/studentSubmissions")) {
+  if (href.includes("/courses/course_1/courseWork/-/studentSubmissions")) {
     return {
       ok: true,
       async json() {
         return {
           studentSubmissions: [{
             id: "submission_1",
+            courseWorkId: "work_1",
             state: "NEW",
             updateTime: "2026-06-05T08:05:00Z",
           }],

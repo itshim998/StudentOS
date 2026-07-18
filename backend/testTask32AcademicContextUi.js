@@ -65,10 +65,11 @@ assert.match(materialMarkup, /academicContextPreview/);
 assert.doesNotMatch(materialMarkup, /<small>Due<\/small>/);
 
 assert.match(renderSources, /reviewEnabled[\s\S]*classroomReviewItems/);
-assert.match(renderSources, /New Classroom work found\. Choose what to add to your academic context\./);
+assert.match(renderSources, /New unfinished Classroom work was found\. Choose what to add to your academic context\./);
+assert.match(renderSources, /Pending Classroom work/);
 assert.match(renderSources, />Add to Academic Context</);
 assert.match(renderSources, />Ignore</);
-assert.match(renderSources, /No new Classroom work to review\./);
+assert.match(renderSources, /You have no new unfinished Classroom work\./);
 assert.match(renderSources, /Starter uses Classroom only to help set up your course list\. Upload PDFs manually to add assignments or materials\./);
 assert.equal(getClassroomSyncPolicy("starter").courseworkReviewEnabled, false);
 for (const plan of ["essential", "plus", "pro"]) assert.equal(getClassroomSyncPolicy(plan).courseworkReviewEnabled, true);

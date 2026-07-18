@@ -88,6 +88,7 @@ function classroomFetchForSnapshot({
   }],
   submissions = [{
     id: "sub_quad_1",
+    courseWorkId: "work_quad_1",
     state: "NEW",
     updateTime: "2026-06-08T04:06:00Z",
   }],

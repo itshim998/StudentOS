@@ -1,3 +1,11 @@
+import {
+  classroomCourseWorkKey,
+  compareClassroomCourseworkNewestFirst,
+  isPendingClassroomSubmissionState,
+  normalizePendingSubmissionState,
+  pendingCourseworkSnapshot,
+} from "./pendingCourseworkPolicy.js";
+
 const HANDED_IN_STATES = new Set([
   "TURNED_IN",
   "RETURNED",
@@ -6,15 +14,6 @@ const HANDED_IN_STATES = new Set([
   "SUBMITTED",
   "COMPLETE",
   "COMPLETED",
-]);
-
-const ACTIVE_SUBMISSION_STATES = new Set([
-  "CREATED",
-  "NEW",
-  "ASSIGNED",
-  "OPEN",
-  "NOT_SUBMITTED",
-  "RECLAIMED_BY_STUDENT",
 ]);
 
 const CLASSROOM_ITEM_STATES = new Set(["discovered", "selected", "imported", "ignored", "archived"]);
@@ -100,10 +99,10 @@ export function isAcademicContextRecord(item = {}) {
 }
 
 export function normalizeClassroomSubmissionState(value, { hasSubmission = true, dueAt = null } = {}) {
-  const rawState = String(value || "").trim().toUpperCase();
-  const state = rawState || (!hasSubmission && dueAt ? "NOT_SUBMITTED" : "UNKNOWN");
+  const rawState = normalizePendingSubmissionState(value);
+  const state = rawState || "UNKNOWN";
   const handedIn = HANDED_IN_STATES.has(state);
-  const active = !handedIn && ACTIVE_SUBMISSION_STATES.has(state);
+  const active = hasSubmission && isPendingClassroomSubmissionState(state);
   return {
     state,
     handedIn,
@@ -239,6 +238,7 @@ function syncImportedAssignment(state, item, now) {
   assignment.submissionState = item.submissionState;
   assignment.submissionStatus = item.submissionState;
   assignment.handedIn = item.handedIn === true;
+  assignment.pendingClassroomWork = item.pendingClassroomWork === true;
   assignment.status = assignmentStatus(item, now);
   assignment.alternateLink = item.alternateLink || null;
   assignment.classroomUpdatedAt = item.providerUpdatedAt || null;
@@ -247,7 +247,10 @@ function syncImportedAssignment(state, item, now) {
 
 function discoverAssignmentItems(state, snapshot, summary, now) {
   const courses = courseMap(snapshot);
-  const submissions = snapshot.submissions || [];
+  const submissions = new Map((snapshot.submissions || []).map((submission) => [
+    classroomCourseWorkKey(submission.providerCourseId, submission.providerCourseWorkId),
+    submission,
+  ]));
   for (const work of snapshot.courseWork || []) {
     if (!work.providerCourseId || !work.providerCourseWorkId) {
       summary.skippedItems += 1;
@@ -255,15 +258,14 @@ function discoverAssignmentItems(state, snapshot, summary, now) {
     }
     const id = classroomItemId("assignment", work.providerCourseId, work.providerCourseWorkId);
     const existing = state.classroomItems.find((item) => item.id === id) || null;
-    const submission = submissions.find((candidate) =>
-      candidate.providerCourseId === work.providerCourseId &&
-      candidate.providerCourseWorkId === work.providerCourseWorkId) || null;
-    let submissionInfo = normalizeClassroomSubmissionState(submission?.state, {
+    const submission = submissions.get(classroomCourseWorkKey(work.providerCourseId, work.providerCourseWorkId)) || null;
+    const submissionInfo = normalizeClassroomSubmissionState(submission?.state, {
       hasSubmission: Boolean(submission),
       dueAt: work.dueAt,
     });
-    if (!submission && existing?.handedIn === true) {
-      submissionInfo = normalizeClassroomSubmissionState(existing.submissionState || "TURNED_IN");
+    if (!submissionInfo.active) {
+      summary.skippedItems += 1;
+      continue;
     }
     const item = {
       ...baseClassroomItem({
@@ -282,9 +284,10 @@ function discoverAssignmentItems(state, snapshot, summary, now) {
       postedAt: work.creationTime || null,
       providerUpdatedAt: work.updateTime || submission?.updateTime || null,
       submissionState: submissionInfo.state,
-      handedIn: submissionInfo.handedIn,
-      active: submissionInfo.active,
-      submissionUnknown: submissionInfo.unknown,
+      handedIn: false,
+      active: true,
+      pendingClassroomWork: true,
+      submissionUnknown: false,
       providerSubmissionId: submission?.providerSubmissionId || null,
       maxPoints: work.maxPoints ?? null,
       workType: work.workType || null,
@@ -327,6 +330,52 @@ function discoverAssignmentItems(state, snapshot, summary, now) {
       if (materialResult.item.academicContextIncluded) ensureMaterial(state, materialResult.item, now);
     });
   }
+}
+
+function markImportedAssignmentNotPending(state, item, now) {
+  item.pendingClassroomWork = false;
+  item.active = false;
+  item.handedIn = false;
+  item.submissionUnknown = false;
+  item.submissionState = null;
+  item.providerSubmissionId = null;
+  item.updatedAt = nowIso(now);
+  const assignment = (state.assignments || []).find((candidate) => candidate.classroomItemId === item.id);
+  if (!assignment) return;
+  assignment.pendingClassroomWork = false;
+  assignment.handedIn = false;
+  assignment.submissionState = null;
+  assignment.submissionStatus = null;
+  assignment.providerSubmissionId = null;
+  assignment.status = "not_pending";
+  assignment.updatedAt = nowIso(now);
+}
+
+function reconcilePendingAssignmentCandidates(state, snapshot, summary, now) {
+  if (snapshot.assignmentSnapshotComplete !== true) return;
+  const pendingKeys = new Set((snapshot.courseWork || []).map((work) =>
+    classroomCourseWorkKey(work.providerCourseId, work.providerCourseWorkId)));
+  const retained = [];
+  for (const item of state.classroomItems || []) {
+    if (item.itemType !== "assignment") {
+      retained.push(item);
+      continue;
+    }
+    const key = classroomCourseWorkKey(item.providerCourseId, item.providerCourseWorkId || item.externalId);
+    if (pendingKeys.has(key)) {
+      retained.push(item);
+      continue;
+    }
+    if (item.academicContextIncluded === true || item.selectionState === "imported") {
+      markImportedAssignmentNotPending(state, item, now);
+      retained.push(item);
+      summary.deactivatedImportedAssignments += 1;
+      continue;
+    }
+    summary.removedAssignmentCandidates += 1;
+  }
+  state.classroomItems = retained;
+  summary.reconciliationApplied = true;
 }
 
 function discoverMaterialPostItems(state, snapshot, summary, now) {
@@ -402,12 +451,23 @@ export function importClassroomSnapshotIntoState(state, snapshot = {}, { now = n
   state.assignments = state.assignments || [];
   state.sourceMaterials = state.sourceMaterials || [];
   state.auditLog = state.auditLog || [];
+  const pending = pendingCourseworkSnapshot(snapshot, {
+    limit: retention.maxImportedAssignments || 200,
+  });
+  const safeSnapshot = {
+    ...snapshot,
+    courseWork: pending.courseWork,
+    submissions: pending.submissions,
+  };
   const summary = {
     discoveredCourses: new Set((snapshot.courses || []).map((course) => course.providerCourseId).filter(Boolean)).size,
     discoveredAssignments: 0,
     updatedAssignments: 0,
     discoveredMaterials: 0,
     updatedMaterials: 0,
+    removedAssignmentCandidates: 0,
+    deactivatedImportedAssignments: 0,
+    reconciliationApplied: false,
     selectedItems: state.classroomItems.filter((item) => item.academicContextIncluded).length,
     importedCourses: 0,
     updatedCourses: 0,
@@ -421,12 +481,26 @@ export function importClassroomSnapshotIntoState(state, snapshot = {}, { now = n
     retentionApplied: false,
     googleClassroomDeleted: false,
     errors: [],
-    emptyClassroom: !(snapshot.courseWork || []).length && !(snapshot.courseWorkMaterials || []).length,
+    emptyClassroom: !safeSnapshot.courseWork.length,
   };
-  discoverAssignmentItems(state, snapshot, summary, now);
-  discoverMaterialPostItems(state, snapshot, summary, now);
+  discoverAssignmentItems(state, safeSnapshot, summary, now);
+  discoverMaterialPostItems(state, safeSnapshot, summary, now);
+  reconcilePendingAssignmentCandidates(state, safeSnapshot, summary, now);
   applyClassroomRetention(state, summary, retention);
   state.classroomItems.sort((left, right) => {
+    if (left.itemType === "assignment" && right.itemType === "assignment") {
+      return compareClassroomCourseworkNewestFirst({
+        providerCourseId: left.providerCourseId,
+        providerCourseWorkId: left.providerCourseWorkId || left.externalId,
+        creationTime: left.postedAt,
+        updateTime: left.providerUpdatedAt,
+      }, {
+        providerCourseId: right.providerCourseId,
+        providerCourseWorkId: right.providerCourseWorkId || right.externalId,
+        creationTime: right.postedAt,
+        updateTime: right.providerUpdatedAt,
+      });
+    }
     const updated = timestampFor(right.providerUpdatedAt || right.postedAt, 0) - timestampFor(left.providerUpdatedAt || left.postedAt, 0);
     return updated || String(left.id).localeCompare(String(right.id));
   });
@@ -445,6 +519,9 @@ export function importClassroomSnapshotIntoState(state, snapshot = {}, { now = n
       updatedAssignments: summary.updatedAssignments,
       updatedMaterials: summary.updatedMaterials,
       academicContextImports: 0,
+      removedAssignmentCandidates: summary.removedAssignmentCandidates,
+      deactivatedImportedAssignments: summary.deactivatedImportedAssignments,
+      reconciliationApplied: summary.reconciliationApplied,
       writebackEnabled: false,
     },
     createdAt: nowIso(now),
@@ -525,6 +602,7 @@ function ensureAssignment(state, item, now) {
     submissionStatus: item.submissionState,
     submissionState: item.submissionState,
     handedIn: item.handedIn === true,
+    pendingClassroomWork: item.pendingClassroomWork !== false,
     maxPoints: item.maxPoints ?? null,
     workType: item.workType || null,
     alternateLink: item.alternateLink || null,
@@ -652,6 +730,9 @@ export function selectClassroomItemsForAcademicContext(state, selectedIds = [], 
   const selected = new Set((selectedIds || []).map(String));
   const knownIds = new Set(state.classroomItems
     .filter((item) => item.selectionState !== "archived")
+    .filter((item) => item.itemType !== "assignment" || (
+      item.pendingClassroomWork === true && isPendingClassroomSubmissionState(item.submissionState)
+    ))
     .map((item) => String(item.id)));
   const unknownIds = [...selected].filter((id) => !knownIds.has(id));
   if (unknownIds.length) {
@@ -880,14 +961,14 @@ function dueSort(left, right) {
 }
 
 function assignmentNeedsAction(item = {}) {
-  if (item.archived || item.handedIn === true || ["completed", "done", "graded", "returned", "submitted", "archived"].includes(String(item.status || "").toLowerCase())) {
+  if (item.archived || item.pendingClassroomWork === false || item.handedIn === true || ["completed", "done", "graded", "returned", "submitted", "archived", "not_pending"].includes(String(item.status || "").toLowerCase())) {
     return false;
   }
   const submission = normalizeClassroomSubmissionState(item.submissionState || item.submissionStatus, {
     hasSubmission: Boolean(item.submissionState || item.submissionStatus || item.providerSubmissionId),
     dueAt: item.dueAt || item.dueDate,
   });
-  return !submission.handedIn && (submission.active || Boolean(item.dueAt || item.dueDate));
+  return submission.active;
 }
 
 export function getClassroomDueWork(state, { includeDiscoveredReview = false } = {}) {

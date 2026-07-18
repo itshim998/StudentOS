@@ -61,7 +61,7 @@ export class MockGoogleClassroomReadOnlyConnector {
       updateTime: new Date().toISOString(),
       alternateLink: item.alternateLink,
     }));
-    return { courses, courseWork, submissions };
+    return { courses, courseWork, submissions, courseWorkMaterials: [], errors: [], assignmentSnapshotComplete: true };
   }
 
   async fetchCourseSnapshot() {

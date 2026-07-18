@@ -131,7 +131,7 @@ importClassroomSnapshotIntoState(essentialState, {
   courses: [{ providerCourseId: "essential_course", title: "Essential course" }],
   courseWork: [{ providerCourseId: "essential_course", providerCourseWorkId: "work_1", title: "Review assignment", dueAt: "2026-07-05T12:00:00.000Z" }],
   courseWorkMaterials: [{ providerCourseId: "essential_course", providerCourseWorkMaterialId: "material_1", title: "Review material" }],
-  submissions: [],
+  submissions: [{ providerCourseId: "essential_course", providerCourseWorkId: "work_1", state: "NEW" }],
 }, { now });
 assert.equal(essentialState.assignments.length, 0);
 assert.equal(essentialState.sourceMaterials.length, 0);
@@ -155,7 +155,7 @@ assert.doesNotMatch(academicText, /\bMemory\b/);
 assert.match(app, /memory: "Academic Context"/);
 assert.match(renderSource, />Assignments</);
 assert.match(renderSource, />Study materials</);
-assert.match(renderSource, /New Classroom work found/);
+assert.match(renderSource, /New unfinished Classroom work was found/);
 assert.match(renderSource, /data-classroom-ignore-id/);
 assert.match(html, /accept="\.pdf,application\/pdf"/);
 assert.match(`${html}\n${app}`, /Set the assignment deadline before uploading\./);

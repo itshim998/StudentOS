@@ -1336,7 +1336,31 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
 
 test("Academic Context respects Classroom review eligibility and no-course guidance", async ({ page }) => {
   const baseState = await fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json());
-  let bootstrapPayload = structuredClone(baseState);
+  let bootstrapPayload = {
+    ...structuredClone(baseState),
+    productLifecycle: {
+      ...structuredClone(baseState.productLifecycle || {}),
+      state: "dashboard_active",
+      dashboardActive: true,
+      selectedPlanId: "essential",
+      paymentMethodVerified: true,
+      legalConsentComplete: true,
+      workspaceReady: true,
+      nextStep: "dashboard",
+    },
+    planAccess: {
+      ...(baseState.planAccess || {}),
+      activePlanKey: "essential",
+      selectedPlanKey: "essential",
+      dashboardAccess: true,
+      academicContext: {
+        ...(baseState.planAccess?.academicContext || {}),
+        status: "available",
+        canAdd: true,
+        message: "Academic context is ready.",
+      },
+    },
+  };
   let manualCourseAdds = 0;
   await page.route("**/api/bootstrap", (route) => route.fulfill({
     contentType: "application/json",
@@ -1376,14 +1400,16 @@ test("Academic Context respects Classroom review eligibility and no-course guida
     selectionState: "discovered",
     academicContextIncluded: false,
     handedIn: false,
+    pendingClassroomWork: true,
+    submissionState: "NEW",
   };
   bootstrapPayload = {
-    ...structuredClone(baseState),
+    ...bootstrapPayload,
     classroomItems: [reviewItem],
     planAccess: {
-      ...(baseState.planAccess || {}),
+      ...(bootstrapPayload.planAccess || {}),
       entitlements: {
-        ...(baseState.planAccess?.entitlements || {}),
+        ...(bootstrapPayload.planAccess?.entitlements || {}),
         classroom: { courseOnly: false, courseworkReviewEnabled: true },
       },
     },
@@ -1394,29 +1420,29 @@ test("Academic Context respects Classroom review eligibility and no-course guida
   await expect(page.locator("#source-kind-select")).toContainText("Exam schedule");
   await expect(page.locator("#exam-form")).toContainText("Exam name");
   await expect(page.locator("#exam-form")).toContainText("Exam date");
-  await expect(page.getByRole("heading", { name: "Classroom work to review" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pending Classroom work" })).toBeVisible();
   await expect(page.locator(".academic-context-review-item")).toContainText("Review-only lab report");
   await expect(page.locator(".academic-context-review-item").getByRole("button", { name: "Add to Academic Context" })).toBeVisible();
   await expect(page.locator(".academic-context-review-item").getByRole("button", { name: "Ignore" })).toBeVisible();
 
   bootstrapPayload = {
-    ...structuredClone(baseState),
+    ...bootstrapPayload,
     classroomItems: [reviewItem],
     planAccess: {
-      ...(baseState.planAccess || {}),
+      ...(bootstrapPayload.planAccess || {}),
       entitlements: {
-        ...(baseState.planAccess?.entitlements || {}),
+        ...(bootstrapPayload.planAccess?.entitlements || {}),
         classroom: { courseOnly: true, courseworkReviewEnabled: false },
       },
     },
   };
   await page.goto(baseUrl);
   await clickNav(page, "Academic Context");
-  await expect(page.getByRole("heading", { name: "Classroom work to review" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Pending Classroom work" })).toHaveCount(0);
   await expect(page.locator("#academic-context-classroom-guidance")).toContainText("Starter uses Classroom only to help set up your course list. Upload PDFs manually to add assignments or materials.");
 
   bootstrapPayload = {
-    ...structuredClone(baseState),
+    ...bootstrapPayload,
     courses: [],
   };
   await page.goto(baseUrl);

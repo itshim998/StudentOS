@@ -58,7 +58,10 @@ function classifyClassroomError(status, payload = {}) {
 async function classroomFetch(path, { token, fetchImpl = fetch, params = {} } = {}) {
   const url = new URL(`${CLASSROOM_API_BASE}${path}`);
   for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, value);
+    const values = Array.isArray(value) ? value : [value];
+    for (const entry of values) {
+      if (entry !== undefined && entry !== null && entry !== "") url.searchParams.append(key, entry);
+    }
   }
   const response = await fetchImpl(url, {
     headers: {
@@ -199,18 +202,23 @@ export class GoogleClassroomApiClient {
     return courseWorkMaterialRecord(item, courseId);
   }
 
-  async listOwnSubmissions(courseId, courseWorkId) {
-    const payload = await classroomFetch(
-      `/courses/${encodeURIComponent(courseId)}/courseWork/${encodeURIComponent(courseWorkId)}/studentSubmissions`,
+  async listOwnPendingSubmissions(courseId, pendingStates = []) {
+    const submissions = await listPaged(
+      `/courses/${encodeURIComponent(courseId)}/courseWork/-/studentSubmissions`,
+      "studentSubmissions",
       {
         token: this.accessToken,
         fetchImpl: this.fetchImpl,
-        params: { pageSize: 20 },
+        params: {
+          userId: "me",
+          states: pendingStates,
+          pageSize: 100,
+        },
       },
     );
-    return (payload.studentSubmissions || []).map((submission) => ({
+    return submissions.map((submission) => ({
       providerCourseId: courseId,
-      providerCourseWorkId: courseWorkId,
+      providerCourseWorkId: submission.courseWorkId || "",
       providerSubmissionId: submission.id,
       state: submission.state || "",
       updateTime: submission.updateTime || "",

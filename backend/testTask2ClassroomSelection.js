@@ -24,8 +24,8 @@ const day = (offset) => new Date(now.getTime() + offset * 24 * 60 * 60 * 1000).t
 const state = initialStateForUser({ id: "student_task2", email: "task2@student.example" });
 const courseWork = [
   { id: "A", title: "Assignment A", dueAt: day(3), creationTime: day(-4), updateTime: day(-2), submission: "NEW" },
-  { id: "B", title: "Assignment B", dueAt: day(1), creationTime: day(-2), updateTime: day(-1), submission: "ASSIGNED" },
-  { id: "C", title: "Assignment C", dueAt: null, creationTime: day(-1), updateTime: day(-1), submission: "OPEN" },
+  { id: "B", title: "Assignment B", dueAt: day(1), creationTime: day(-2), updateTime: day(-1), submission: "CREATED" },
+  { id: "C", title: "Assignment C", dueAt: null, creationTime: day(-1), updateTime: day(-1), submission: "RECLAIMED_BY_STUDENT" },
   { id: "D", title: "Assignment D", dueAt: day(2), creationTime: day(-20), updateTime: day(-20), submission: "NEW" },
   { id: "E", title: "Assignment E", dueAt: day(5), creationTime: day(0), updateTime: day(0), submission: "NEW" },
   { id: "F", title: "Overdue assignment F", dueAt: day(-1), creationTime: day(-3), updateTime: day(-2), submission: "NEW" },
@@ -52,7 +52,7 @@ const summary = importClassroomSnapshotIntoState(state, {
   })),
 }, { now });
 
-assert.equal(summary.discoveredAssignments, 7);
+assert.equal(summary.discoveredAssignments, 6);
 assert.equal(summary.discoveredMaterials, 1);
 assert.equal(summary.importedAssignments, 0);
 assert.equal(state.assignments.length, 0, "discovery must not create academic assignments");
@@ -85,27 +85,18 @@ assert.deepEqual(
   "newly selected D must move into selected due order by deadline",
 );
 
-selectClassroomItemsForAcademicContext(state, [assignmentItem("old_2024").id], { now });
-assert.equal(getClassroomDueWork(state, { includeDiscoveredReview: true }).some((item) => item.title.includes("Old handed-in")), false);
-importClassroomSnapshotIntoState(state, {
-  courses: [{ providerCourseId: "course_task2", title: "Applied Physics" }],
-  courseWork: [{
-    providerCourseId: "course_task2",
-    providerCourseWorkId: "old_2024",
-    title: "Old handed-in assignment",
-    dueAt: "2024-09-12T12:00:00.000Z",
-  }],
-  submissions: [],
-}, { now });
-assert.equal(assignmentItem("old_2024").handedIn, true, "a partial check must not reopen previously handed-in work");
+assert.equal(assignmentItem("old_2024"), undefined, "completed work must not enter discovery state");
 assert.equal(getClassroomDueWork(state, { includeDiscoveredReview: true }).some((item) => item.title.includes("Old handed-in")), false);
 for (const completed of ["TURNED_IN", "RETURNED", "DONE", "GRADED", "SUBMITTED"]) {
   assert.equal(normalizeClassroomSubmissionState(completed).handedIn, true, `${completed} must be complete`);
 }
-for (const active of ["CREATED", "NEW", "ASSIGNED", "OPEN", "NOT_SUBMITTED"]) {
+for (const active of ["CREATED", "NEW", "RECLAIMED_BY_STUDENT"]) {
   assert.equal(normalizeClassroomSubmissionState(active).active, true, `${active} must remain active`);
 }
-assert.equal(normalizeClassroomSubmissionState("", { hasSubmission: false, dueAt: day(2) }).state, "NOT_SUBMITTED");
+for (const rejected of ["ASSIGNED", "OPEN", "NOT_SUBMITTED", "SUBMISSION_STATE_UNSPECIFIED", ""]) {
+  assert.equal(normalizeClassroomSubmissionState(rejected, { hasSubmission: Boolean(rejected), dueAt: day(2) }).active, false, `${rejected || "missing"} must fail closed`);
+}
+assert.equal(normalizeClassroomSubmissionState("", { hasSubmission: false, dueAt: day(2) }).state, "UNKNOWN");
 
 const materialItem = state.classroomItems.find((item) => item.itemType === "material" && item.providerMaterialId === "A_note");
 selectClassroomItemsForAcademicContext(state, [materialItem.id], { now });
@@ -145,7 +136,10 @@ importClassroomSnapshotIntoState(persisted, {
     { providerCourseId: "reload_course", providerCourseWorkId: "selected", title: "Selected after reload", dueAt: day(1) },
     { providerCourseId: "reload_course", providerCourseWorkId: "unselected", title: "Still unselected", dueAt: day(2) },
   ],
-  submissions: [],
+  submissions: [
+    { providerCourseId: "reload_course", providerCourseWorkId: "selected", state: "NEW" },
+    { providerCourseId: "reload_course", providerCourseWorkId: "unselected", state: "CREATED" },
+  ],
 }, { now });
 selectClassroomItemsForAcademicContext(persisted, [persisted.classroomItems.find((item) => item.externalId === "selected").id], { now });
 await repository.saveState(session, persisted);
@@ -186,7 +180,7 @@ const connectorSource = [
 ].join("\n");
 assert.match(app, /Choose Classroom work to add to your academic context\./);
 assert.match(app, /Selected for academic context/);
-assert.match(app, /New Classroom work found/);
+assert.match(app, /New unfinished Classroom work was found/);
 assert.match(app, /Review and add/);
 assert.doesNotMatch(`${app}\n${html}`, /Plan Free/i);
 assert.doesNotMatch(connectorSource, /turnIn|modifyAttachments|reclaimSubmission|studentSubmissions\/[^"'`]*:(?:turnIn|reclaim)/i);

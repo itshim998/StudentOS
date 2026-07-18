@@ -569,6 +569,7 @@ function publicState(state, persistence) {
         providerUpdatedAt: item.providerUpdatedAt || null,
         submissionState: item.submissionState || null,
         handedIn: item.handedIn === true,
+        pendingClassroomWork: item.pendingClassroomWork === true,
         selectionState: item.selectionState,
         academicContextIncluded: item.academicContextIncluded === true,
         readOnly: true,
@@ -721,6 +722,9 @@ function publicClassroomSummary(summary = null) {
     updatedAssignments: summary.updatedAssignments || 0,
     discoveredMaterials: summary.discoveredMaterials || 0,
     updatedMaterials: summary.updatedMaterials || 0,
+    removedAssignmentCandidates: summary.removedAssignmentCandidates || 0,
+    deactivatedImportedAssignments: summary.deactivatedImportedAssignments || 0,
+    reconciliationApplied: summary.reconciliationApplied === true,
     selectedItems: summary.selectedItems || 0,
     skippedItems: summary.skippedItems || 0,
     evictedAssignments: summary.evictedAssignments || 0,
@@ -746,6 +750,9 @@ function publicClassroomSyncRun(run = {}) {
     errorCount: run.errorCount || 0,
     emptyClassroom: run.payload?.emptyClassroom === true,
     courseOnly: run.payload?.courseOnly === true,
+    removedAssignmentCandidates: run.payload?.removedAssignmentCandidates || 0,
+    deactivatedImportedAssignments: run.payload?.deactivatedImportedAssignments || 0,
+    reconciliationApplied: run.payload?.reconciliationApplied === true,
   };
 }
 

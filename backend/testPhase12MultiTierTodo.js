@@ -77,7 +77,10 @@ const classroomSnapshot = {
       linkUrl: "https://classroom.google.com/example",
     }],
   }],
-  submissions: [],
+  submissions: [
+    { providerCourseId: "course_ai", providerCourseWorkId: "selected_assignment", state: "NEW" },
+    { providerCourseId: "course_ai", providerCourseWorkId: "unselected_assignment", state: "CREATED" },
+  ],
   errors: [],
 };
 importClassroomSnapshotIntoState(selectedState, classroomSnapshot, { now });
@@ -146,6 +149,11 @@ automaticDiscovery.courseWork.push({
   dueAt: "2026-08-07T23:59:00.000Z",
   updateTime: "2026-08-01T11:00:00.000Z",
   materials: [],
+});
+automaticDiscovery.submissions.push({
+  providerCourseId: "course_ai",
+  providerCourseWorkId: "new_review_only",
+  state: "NEW",
 });
 importClassroomSnapshotIntoState(selectedState, automaticDiscovery, { now });
 const reviewOnly = selectedState.classroomItems.find((item) => item.externalId === "new_review_only");

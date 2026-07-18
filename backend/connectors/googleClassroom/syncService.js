@@ -9,6 +9,10 @@ import { importClassroomSnapshotIntoState, syncClassroomCoursesIntoState } from 
 import { MockGoogleClassroomReadOnlyConnector } from "./mockConnector.js";
 import { selectedClassroomContentFingerprint } from "../../domain/academicContextService.js";
 import {
+  PENDING_CLASSROOM_SUBMISSION_STATES,
+  pendingCourseworkSnapshot,
+} from "./pendingCourseworkPolicy.js";
+import {
   deletePersistentClassroomToken,
   getPersistentClassroomToken,
   markPersistentClassroomTokenStatus,
@@ -75,6 +79,9 @@ function syncRunFromSummary({ session, config, summary = {}, status = "completed
       discoveredCourses: summary.discoveredCourses || 0,
       discoveredAssignments: summary.discoveredAssignments || 0,
       discoveredMaterials: summary.discoveredMaterials || 0,
+      removedAssignmentCandidates: summary.removedAssignmentCandidates || 0,
+      deactivatedImportedAssignments: summary.deactivatedImportedAssignments || 0,
+      reconciliationApplied: summary.reconciliationApplied === true,
       errorCode: error ? safeErrorCode(error) : errors.length ? "google_classroom_partial_sync" : null,
       connectorState: error?.connectorState || null,
       courseOnly: summary.courseOnly === true,
@@ -289,27 +296,47 @@ async function fetchOAuthSnapshot({ session, repository, config, fetchImpl = fet
   const submissions = [];
   const errors = [];
   if (courseOnly) {
-    return { courses, courseWork, courseWorkMaterials, submissions, errors, providerAccountEmail: token.providerAccountEmail || null };
+    return { courses, courseWork, courseWorkMaterials, submissions, errors, assignmentSnapshotComplete: false, providerAccountEmail: token.providerAccountEmail || null };
   }
+  let assignmentSnapshotComplete = true;
   for (const course of courses) {
     const workForCourse = await client.listCourseWork(course.providerCourseId);
-    courseWork.push(...workForCourse);
     try {
       courseWorkMaterials.push(...await client.listCourseWorkMaterials(course.providerCourseId));
     } catch (error) {
       if (error.status === 401) throw error;
+      assignmentSnapshotComplete = false;
       errors.push(safeErrorSummary(error));
     }
-    for (const work of workForCourse) {
-      try {
-        submissions.push(...await client.listOwnSubmissions(work.providerCourseId, work.providerCourseWorkId));
-      } catch (error) {
-        if (error.status === 401) throw error;
-        errors.push(safeErrorSummary(error));
-      }
+    try {
+      const submissionsForCourse = await client.listOwnPendingSubmissions(
+        course.providerCourseId,
+        PENDING_CLASSROOM_SUBMISSION_STATES,
+      );
+      const pending = pendingCourseworkSnapshot({
+        courseWork: workForCourse,
+        submissions: submissionsForCourse,
+      }, { limit: Number.POSITIVE_INFINITY });
+      courseWork.push(...pending.courseWork);
+      submissions.push(...pending.submissions);
+    } catch (error) {
+      if (error.status === 401) throw error;
+      assignmentSnapshotComplete = false;
+      errors.push(safeErrorSummary(error));
     }
   }
-  return { courses, courseWork, courseWorkMaterials, submissions, errors, providerAccountEmail: token.providerAccountEmail || null };
+  const pending = pendingCourseworkSnapshot({ courseWork, submissions }, {
+    limit: config.retention?.maxImportedAssignments || 200,
+  });
+  return {
+    courses,
+    courseWork: pending.courseWork,
+    courseWorkMaterials,
+    submissions: pending.submissions,
+    errors,
+    assignmentSnapshotComplete,
+    providerAccountEmail: token.providerAccountEmail || null,
+  };
 }
 
 function cleanSelectedContent(value, limit = 12_000) {
@@ -475,6 +502,7 @@ export async function syncGoogleClassroomIntoState({
   if (config.mode === "mock") {
     const connector = new MockGoogleClassroomReadOnlyConnector(state);
     snapshot = courseOnly ? await connector.fetchCourseSnapshot() : await connector.fetchSnapshot();
+    snapshot.assignmentSnapshotComplete = courseOnly ? false : true;
   } else {
     try {
       snapshot = await fetchOAuthSnapshot({ session, repository, config, fetchImpl, now, courseOnly });
@@ -513,6 +541,7 @@ export async function syncGoogleClassroomIntoState({
       courseWorkMaterials: [],
       submissions: [],
       errors: snapshot.errors || [],
+      assignmentSnapshotComplete: false,
       providerAccountEmail: snapshot.providerAccountEmail || null,
     };
   }

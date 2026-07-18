@@ -888,6 +888,23 @@ function classroomFreshnessTimestamp(item = {}) {
   );
 }
 
+function isPendingClassroomReviewItem(item = {}) {
+  return item.itemType === "assignment" &&
+    item.selectionState === "discovered" &&
+    item.academicContextIncluded !== true &&
+    item.handedIn !== true &&
+    item.pendingClassroomWork !== false &&
+    ["NEW", "CREATED", "RECLAIMED_BY_STUDENT"].includes(String(item.submissionState || "").trim().toUpperCase());
+}
+
+function comparePendingClassroomReviewItems(left = {}, right = {}) {
+  const creationDifference = timestampForNewest(right.postedAt) - timestampForNewest(left.postedAt);
+  if (creationDifference) return creationDifference;
+  const updateDifference = timestampForNewest(right.providerUpdatedAt) - timestampForNewest(left.providerUpdatedAt);
+  if (updateDifference) return updateDifference;
+  return String(left.id || "").localeCompare(String(right.id || ""));
+}
+
 function sortStudentWork(left, right) {
   const due = timestampFor(left.dueAt || left.dueDate) - timestampFor(right.dueAt || right.dueDate);
   if (due) return due;
@@ -4007,7 +4024,7 @@ function renderClassroomPanel() {
     </div>
     ${courseOnly ? `<p>Refresh your course list when Setup changes.</p>` : ui.detail ? `<p>${escapeHtml(ui.detail)}</p>` : actions.sync ? `<p>Check Classroom when you want to review the latest work.</p>` : ""}
     <p class="muted-copy">${escapeHtml(checkPolicyCopy)}</p>
-    ${emptyClassroom && !courseOnly ? `<p class="muted-copy">No active Classroom coursework was found. StudentOS is ready to refresh when new work appears.</p>` : ""}
+    ${emptyClassroom && !courseOnly ? `<p class="muted-copy">You have no new unfinished Classroom work.</p>` : ""}
     ${showDetails ? `
       <details class="classroom-details">
         <summary>Recent checks</summary>
@@ -4032,7 +4049,7 @@ function classroomStatusCard() {
   const lastSync = connector.lastSyncAt || history[0]?.completedAt || "";
   const classroomItems = state.classroomItems || [];
   const selectedItems = classroomItems.filter((item) => item.academicContextIncluded).length;
-  const reviewItems = classroomItems.filter((item) => item.selectionState === "discovered").length;
+  const reviewItems = classroomItems.filter(isPendingClassroomReviewItem).length;
   const stateName = normalizedClassroomState(connector);
   const ui = classroomUi(connector, summary, history);
   const emptyClassroom = summary?.emptyClassroom || history.some((run) => run.payload?.emptyClassroom);
@@ -4061,7 +4078,7 @@ function classroomStatusCard() {
         ${courseOnly ? "" : `<span><strong>${reviewItems}</strong> ready to review</span>`}
         <span><strong>${lastSync ? formatDate(lastSync) : "When ready"}</strong> last checked</span>
       </div>
-      ${courseOnly ? `<p class="muted-copy">Classroom courses can help set up your course list. Upload PDFs manually on Starter.</p>` : emptyClassroom ? `<p class="muted-copy">No active Classroom coursework was found yet.</p>` : ""}
+      ${courseOnly ? `<p class="muted-copy">Classroom courses can help set up your course list. Upload PDFs manually on Starter.</p>` : emptyClassroom ? `<p class="muted-copy">You have no new unfinished Classroom work.</p>` : ""}
       ${stateName === "reconnect_required" ? `<p class="warning-copy">Reconnect Classroom to check for new work and refresh selected items.</p>` : ""}
       <div class="inline-actions">
         ${stateName === "connected" ? `<button class="mini-action" type="button" data-course-refresh>Refresh course list</button>` : ""}
@@ -4345,8 +4362,8 @@ function renderSources() {
   const reviewEnabled = currentClassroomPolicy().courseworkReviewEnabled === true;
   const classroomReviewItems = reviewEnabled
     ? (state.classroomItems || [])
-      .filter((item) => item.selectionState === "discovered" && !item.academicContextIncluded)
-      .sort((left, right) => classroomFreshnessTimestamp(right) - classroomFreshnessTimestamp(left))
+      .filter(isPendingClassroomReviewItem)
+      .sort(comparePendingClassroomReviewItems)
       .slice(0, 12)
     : [];
   if (els.academicContextSummary) {
@@ -4363,9 +4380,9 @@ function renderSources() {
     els.academicContextClassroomGuidance.innerHTML = courseOnly
       ? `<p><strong>Starter and Classroom</strong><span>Starter uses Classroom only to help set up your course list. Upload PDFs manually to add assignments or materials.</span></p>`
       : reviewEnabled && classroomReviewItems.length
-        ? `<p><strong>Classroom review</strong><span>${classroomReviewItems.length} new item${classroomReviewItems.length === 1 ? " is" : "s are"} waiting for you to choose what to add.</span></p>`
+        ? `<p><strong>Classroom review</strong><span>${classroomReviewItems.length} unfinished assignment${classroomReviewItems.length === 1 ? " is" : "s are"} waiting for you to choose what to add.</span></p>`
         : reviewEnabled
-          ? `<p><strong>Classroom review</strong><span>No new Classroom work to review.</span></p>`
+          ? `<p><strong>Classroom review</strong><span>You have no new unfinished Classroom work.</span></p>`
           : "";
   }
 
@@ -4437,13 +4454,12 @@ function renderSources() {
   const materialCards = materialCardMarkup(materials, "No study materials added yet.", "Upload a PDF handout or reading to help StudentOS understand your course.");
   const examScheduleCards = materialCardMarkup(examSchedules, "No exam schedule PDF added.", "Manual exam dates above are enough. Add a PDF only if it helps.");
 
-  const classroomReview = classroomReviewItems.length ? `
-    <section class="academic-context-group classroom-review-card" aria-label="Classroom work to review">
-      <div class="source-card-head"><div><span class="workspace-label">Choose what to add</span><h3>Classroom work to review</h3><p>New Classroom work found. Choose what to add to your academic context.</p></div></div>
-      <div class="academic-context-card-grid">
+  const classroomReview = reviewEnabled && !courseOnly ? `
+    <section class="academic-context-group classroom-review-card" aria-label="Pending Classroom work">
+      <div class="source-card-head"><div><span class="workspace-label">Choose what to add</span><h3>Pending Classroom work</h3><p>New unfinished Classroom work was found. Choose what to add to your academic context.</p></div></div>
+      ${classroomReviewItems.length ? `<div class="academic-context-card-grid">
         ${classroomReviewItems.map((item) => {
-          const itemType = item.itemType === "assignment" ? "Assignment" : "Material";
-          const handedIn = item.handedIn === true || ["turned_in", "returned", "submitted", "graded"].includes(String(item.submissionState || item.status || "").toLowerCase());
+          const overdue = Number.isFinite(timestampFor(item.dueAt)) && timestampFor(item.dueAt) < Date.now();
           return `
             <article class="source-card academic-context-card academic-context-review-item compact">
               ${academicContextPreview(false)}
@@ -4453,7 +4469,7 @@ function renderSources() {
                   <p>${escapeHtml(item.courseTitle || "Classroom course")}</p>
                 </div>
                 ${item.dueAt ? `<div class="academic-context-card-meta"><span><small>Due</small><strong>${escapeHtml(formatDate(item.dueAt))}</strong></span></div>` : ""}
-                <div class="tag-row">${tag(itemType, "source")}${handedIn ? tag("Already handed in", "source") : ""}</div>
+                <div class="tag-row">${tag("Assignment", "source")}${overdue ? tag("Overdue", "urgent") : ""}</div>
                 <div class="source-action-row">
                   <button class="mini-action primary-button" type="button" data-classroom-item-id="${escapeHtml(item.id)}">Add to Academic Context</button>
                   <button class="mini-action" type="button" data-classroom-ignore-id="${escapeHtml(item.id)}">Ignore</button>
@@ -4462,7 +4478,7 @@ function renderSources() {
             </article>
           `;
         }).join("")}
-      </div>
+      </div>` : `<p class="muted-copy">You have no new unfinished Classroom work.</p>`}
     </section>
   ` : "";
 
