@@ -201,6 +201,7 @@ export function createConsentWithdrawalRequest(state, payload = {}, config = get
     state.userConsents.push(consent);
   }
   Object.assign(consent, {
+    granted: false,
     status: "withdrawal_requested",
     withdrawnAt: nowIso(now),
     updatedAt: nowIso(now),

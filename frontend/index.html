@@ -120,12 +120,6 @@
           <span>Account</span>
         </button>
       </nav>
-      <section class="rail-session-card" aria-label="StudentOS session">
-        <p class="eyebrow">Session</p>
-        <strong id="rail-session-status">Local preview</strong>
-        <p id="rail-session-help">No sign in needed for local preview.</p>
-        <button id="logout-btn" class="secondary-button wide auth-logout" type="button" hidden>Sign out</button>
-      </section>
       <div class="rail-footer">
         <span class="status-dot" aria-hidden="true"></span>
         <span id="connector-status">Workspace status pending</span>
@@ -139,35 +133,27 @@
           <h2 id="view-title">Today</h2>
         </div>
         <div class="profile-strip">
-          <div class="status-dropdown">
-            <button type="button" class="status-dropdown-trigger" id="status-dropdown-trigger" aria-haspopup="true" aria-expanded="false" aria-label="Workspace status" title="Workspace status">
+          <div class="profile-menu-shell">
+            <button type="button" class="profile-menu-trigger" id="profile-menu-trigger" aria-haspopup="dialog" aria-controls="profile-menu" aria-expanded="false" aria-label="Open account menu" title="Account menu">
               <span class="workspace-status-icon" aria-hidden="true"></span>
             </button>
-            <div class="status-dropdown-panel" id="status-dropdown-panel">
-              <div class="status-dropdown-header">
-                <div class="student-chip">
-                  <span class="avatar" aria-hidden="true">A</span>
-                  <span id="student-name">Student</span>
+            <div class="profile-menu" id="profile-menu" role="dialog" aria-label="Account menu" hidden>
+              <div class="profile-menu-identity">
+                <span class="avatar" id="profile-avatar" aria-hidden="true">S</span>
+                <div>
+                  <strong id="student-name">Student</strong>
+                  <span id="profile-email">Account email unavailable</span>
                 </div>
               </div>
-              <div class="status-dropdown-divider"></div>
-              <div class="status-dropdown-body">
-                <div class="metric-pill plan-pill">
-                  <span>Plan</span>
-                  <strong id="plan-badge">Starter</strong>
-                </div>
-                <div class="metric-pill">
-                  <span>Credits</span>
-                  <strong id="credit-balance">0</strong>
-                </div>
-                <div class="metric-pill">
-                  <span>Rhythm</span>
-                  <strong id="study-rhythm">-</strong>
-                </div>
-                <div class="metric-pill wide-pill">
-                  <span>Eligibility</span>
-                  <strong id="credit-eligibility">-</strong>
-                </div>
+              <dl class="profile-menu-details">
+                <div><dt>Plan</dt><dd id="plan-badge">Starter</dd></div>
+                <div><dt>Credits</dt><dd id="credit-balance">0</dd></div>
+                <div><dt>Rhythm</dt><dd id="study-rhythm">-</dd></div>
+                <div><dt>Eligibility</dt><dd id="credit-eligibility">-</dd></div>
+              </dl>
+              <div class="profile-menu-actions">
+                <button id="profile-account-settings" class="profile-menu-action" type="button">Account settings</button>
+                <button id="logout-btn" class="profile-menu-action profile-sign-out" type="button" hidden>Sign out</button>
               </div>
             </div>
           </div>
@@ -266,9 +252,6 @@
 
       <section class="view" id="view-setup" aria-labelledby="view-title">
         <div class="setup-layout">
-          <section class="setup-intro-panel" aria-label="Setup overview">
-            <!-- Decorative soft background surface -->
-          </section>
           <section class="onboarding-panel">
             <div class="section-heading">
               <div>
@@ -688,65 +671,45 @@
               </div>
             </div>
             <div id="quota-panel" class="quota-panel"></div>
-          </section>
-
-          <section class="account-panel account-pricing-section" id="pricing" tabindex="-1" aria-label="StudentOS pricing">
-            <div class="pricing-hero">
-              <div>
-                <p class="eyebrow">Pricing</p>
-                <h3>Choose the StudentOS plan that fits your study system.</h3>
-                <p>Compare how each plan supports your semester. Your academic context can grow with you.</p>
+            <div class="account-pricing-section" id="pricing" tabindex="-1" aria-label="StudentOS pricing">
+              <div class="pricing-hero">
+                <div>
+                  <p class="eyebrow">Pricing</p>
+                  <h3>Choose the StudentOS plan that fits your study system.</h3>
+                  <p>Compare how each plan supports your semester. Your academic context can grow with you.</p>
+                </div>
+                <span class="brain-badge">Four student plans</span>
               </div>
-              <span class="brain-badge">Four student plans</span>
+              <div id="pricing-panel" class="pricing-panel"></div>
             </div>
-            <div id="pricing-panel" class="pricing-panel"></div>
           </section>
 
-          <section class="account-panel account-privacy-panel">
+          <section class="account-panel account-privacy-panel" aria-labelledby="consent-preferences-title">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">Privacy and consent</p>
-                <h3>Control how StudentOS uses your data</h3>
+                <p class="eyebrow">Privacy</p>
+                <h3 id="consent-preferences-title">Consent preferences</h3>
+                <p>Choose how StudentOS may use your activity. Sharing stays off unless you approve it.</p>
               </div>
             </div>
-            <div class="privacy-grid">
-              <div class="account-mini-section">
-                <h4>Terms and privacy notice</h4>
-                <div id="legal-status" class="lifecycle-status"></div>
-                <label class="check-row">
-                  <input id="legal-accept-check" type="checkbox">
-                  <span>I accept the current StudentOS terms and privacy notice.</span>
-                </label>
-                <button id="legal-accept-btn" class="secondary-button" type="button">Record acceptance</button>
-                <div id="legal-result" class="result-box" aria-live="polite"></div>
+            <form id="consent-form" class="consent-form">
+              <label class="consent-option">
+                <input name="aiPersonalization" type="checkbox" checked>
+                <span>Use my StudentOS activity to personalize tutoring.</span>
+              </label>
+              <label class="consent-option">
+                <input name="productResearch" type="checkbox">
+                <span>Allow de-identified quality review to improve StudentOS.</span>
+              </label>
+              <label class="consent-option">
+                <input name="externalProgressSharing" type="checkbox">
+                <span>Allow progress sharing outside my account only after I approve it.</span>
+              </label>
+              <div class="account-save-row">
+                <button class="secondary-button" type="submit">Save preferences</button>
+                <div id="consent-result" class="consent-save-result" role="status" aria-live="polite"></div>
               </div>
-              <div class="account-mini-section">
-                <h4>Consent preferences</h4>
-                <form id="consent-form" class="consent-form">
-                  <label class="check-row">
-                    <input name="aiPersonalization" type="checkbox" checked>
-                    <span>Use my StudentOS activity to personalize tutoring.</span>
-                  </label>
-                  <label class="check-row">
-                    <input name="productResearch" type="checkbox">
-                    <span>Allow de-identified quality review to improve StudentOS.</span>
-                  </label>
-                  <label class="check-row">
-                    <input name="externalProgressSharing" type="checkbox">
-                    <span>Allow progress sharing outside my account only after I approve it.</span>
-                  </label>
-                  <label class="check-row">
-                    <input name="guardianSharingFuture" type="checkbox">
-                    <span>Prepare family or mentor sharing for a future consent flow.</span>
-                  </label>
-                  <div class="account-actions-grid">
-                    <button class="secondary-button" type="submit">Save preferences</button>
-                    <button class="text-button" type="button" id="consent-withdraw-btn">Request withdrawal</button>
-                  </div>
-                </form>
-                <div id="consent-result" class="result-box" aria-live="polite"></div>
-              </div>
-            </div>
+            </form>
           </section>
 
           <section class="account-panel account-data-rights-panel">
@@ -763,19 +726,6 @@
             </div>
             <div id="account-action-result" class="result-box" aria-live="polite"></div>
             <div id="account-lifecycle-status" class="lifecycle-grid"></div>
-          </section>
-
-          <section class="account-panel account-roles-panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Family and institution access</p>
-                <h3>Access sharing</h3>
-              </div>
-              <span class="brain-badge">Off until you consent</span>
-            </div>
-            <p class="muted-copy">Guardian, teacher, and institution access remains inactive. Any future invitation requires an explicit student consent flow.</p>
-            <button id="guardian-preview-btn" class="secondary-button" type="button">Preview sharing safeguards</button>
-            <div id="invitation-result" class="result-box" aria-live="polite"></div>
           </section>
         </div>
       </section>

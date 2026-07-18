@@ -999,6 +999,7 @@ test("Setup saves availability without manual roadmap or weak-topic controls", a
 });
 
 test("desktop core flows stay usable in local mock mode", async ({ page }) => {
+  await prepareLocalWorkspace();
   const pageErrors = [];
   let expectingAssignmentFlowFailure = false;
   page.on("pageerror", (error) => pageErrors.push(redact(error.message)));
@@ -1017,7 +1018,8 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "StudentOS" })).toBeVisible();
   await expect(page.locator("#public-auth-shell")).toBeHidden();
   await expect(page.locator("#auth-session")).toContainText("Local preview");
-  await expect(page.locator("#rail-session-status")).toContainText("Local preview");
+  await expect(page.locator(".rail-session-card")).toHaveCount(0);
+  await expect(page.locator("#profile-menu-trigger")).toHaveAccessibleName("Open account menu");
   await expect(page.locator("#connector-status")).toContainText("Local preview");
   await expect(page.locator("#dashboard-summary")).toContainText("Your academic context is ready to prepare.");
   await expect(page.getByRole("button", { name: "Prepare Academic Context" })).toBeVisible();
@@ -1267,9 +1269,27 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await clickNav(page, "Account");
   await expect(page.locator("#account-summary")).toContainText(/Student|local preview/i);
   await expect(page.locator("#view-account")).toContainText("Profile / Identity");
-  await expect(page.locator("#view-account")).toContainText("Privacy and consent");
+  await expect(page.locator("#view-account")).toContainText("Consent preferences");
   await expect(page.locator("#view-account")).toContainText("Your data rights");
-  await expect(page.locator("#view-account")).toContainText("Access sharing");
+  await expect(page.locator("#view-account")).not.toContainText(/Terms and privacy notice|Record acceptance|Acceptance recorded|Access sharing|Family access|Request withdrawal/i);
+  await expect(page.locator("#consent-form .consent-option")).toHaveCount(3);
+  const consentAlignment = await page.locator("#consent-form .consent-option").evaluateAll((rows) => rows.map((row) => {
+    const checkbox = row.querySelector('input[type="checkbox"]')?.getBoundingClientRect();
+    const copy = row.querySelector("span")?.getBoundingClientRect();
+    return checkbox && copy ? {
+      topDifference: Math.abs(checkbox.top - copy.top),
+      checkboxLeft: Math.round(checkbox.left),
+      overlapsPrevious: false,
+    } : null;
+  }));
+  expect(consentAlignment.every((item) => item && item.topDifference <= 4)).toBe(true);
+  expect(new Set(consentAlignment.map((item) => item.checkboxLeft)).size).toBe(1);
+  await page.locator('#consent-form input[name="productResearch"]').check();
+  await page.getByRole("button", { name: "Save preferences" }).click();
+  await expect(page.locator("#consent-result")).toHaveText("Preferences saved.");
+  await page.locator('#consent-form input[name="productResearch"]').uncheck();
+  await page.getByRole("button", { name: "Save preferences" }).click();
+  await expect(page.locator("#consent-result")).toHaveText("Preferences saved.");
   await expect(page.locator("#quota-panel")).toContainText(/academic context|semester/i);
   await expect(page.locator("#quota-panel")).not.toContainText(/MB|GB|storage|tokens/i);
   await expect(page.locator("#pricing-panel")).toContainText(/Starter|Essential|Plus|Pro/i);
@@ -1313,8 +1333,6 @@ test("desktop core flows stay usable in local mock mode", async ({ page }) => {
   await expect(page.locator("#account-action-result")).toContainText("Deletion safety preview ready");
   await expect(page.locator("#account-action-result")).toContainText("No data has been deleted yet");
   await page.unroute("**/api/account/deletion-requests/*/dry-run");
-  await page.getByRole("button", { name: "Preview sharing safeguards" }).click();
-  await expect(page.locator("#invitation-result")).toContainText(/Access inactive|Safeguards previewed|Consent required/i);
   await page.getByRole("button", { name: "Upgrade" }).click();
   await expect(page.locator("#account-action-result")).toContainText("Pro is now your active plan");
 
@@ -2129,26 +2147,154 @@ test("Study and Evaluate generates and runs a durable in-app test", async ({ pag
   await page.unroute("**/api/bootstrap");
 });
 
-test("responsive surfaces and AI drawer avoid horizontal overflow", async ({ page }) => {
-  test.setTimeout(75_000);
-  const widths = [1440, 1280, 1024, 768, 430, 390, 360];
+test("profile menu is accessible, flat, and navigates to Account", async ({ page }) => {
+  await prepareLocalWorkspace();
+  await page.goto(baseUrl);
+  const trigger = page.locator("#profile-menu-trigger");
+  const menu = page.locator("#profile-menu");
+
+  await trigger.click();
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  await expect(menu).toBeVisible();
+  await expect(menu).toContainText("E2E Student");
+  await expect(menu).toContainText(/Local preview|studentos\.local/i);
+  await expect(menu).toContainText("Plan");
+  await expect(menu).toContainText("Credits");
+  await expect(menu).toContainText("Rhythm");
+  await expect(menu).toContainText("Eligibility");
+  await expect(menu.locator(".metric-pill, .student-chip")).toHaveCount(0);
+  await expect(page.locator("#profile-account-settings")).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await page.getByRole("button", { name: "Account settings" }).click();
+  await expect(page.locator("#view-title")).toHaveText("Account");
+  await expect(menu).toBeHidden();
+
+  await trigger.click();
+  await page.locator("#view-title").click();
+  await expect(menu).toBeHidden();
+  await expect(page.locator("#logout-btn")).toHaveCount(1);
+});
+
+test("authenticated profile sign out uses the existing session cleanup path", async ({ page }) => {
+  await prepareLocalWorkspace();
+  const [config, bootstrap, account, classroom] = await Promise.all([
+    fetch(`${baseUrl}/api/config`).then((response) => response.json()),
+    fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json()),
+    fetch(`${baseUrl}/api/account`).then((response) => response.json()),
+    fetch(`${baseUrl}/api/classroom/status`).then((response) => response.json()),
+  ]);
+  await page.route("**/api/config", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      ...config,
+      auth: { enabled: true, url: "https://example.supabase.co", anonKey: "public-anon-test-key" },
+    }),
+  }));
+  await page.route("**/api/bootstrap", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(bootstrap) }));
+  await page.route("**/api/account", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      ...account,
+      user: { ...account.user, email: "qa@studentos.local", authenticated: true, authMode: "supabase_auth" },
+    }),
+  }));
+  await page.route("**/api/classroom/status", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(classroom) }));
+  let logoutCalls = 0;
+  await page.route("https://example.supabase.co/auth/v1/logout", (route) => {
+    logoutCalls += 1;
+    return route.fulfill({ contentType: "application/json", body: "{}" });
+  });
+  await page.addInitScript(() => {
+    sessionStorage.setItem("studentos.auth.session", JSON.stringify({
+      access_token: "profile-menu-test-token",
+      user: { email: "qa@studentos.local" },
+    }));
+  });
+
+  await page.goto(baseUrl);
+  await expect(page.locator("#app-shell")).toBeVisible();
+  await page.locator("#profile-menu-trigger").click();
+  await expect(page.locator("#profile-email")).toHaveText("qa@studentos.local");
+  await expect(page.locator("#logout-btn")).toBeVisible();
+  await page.locator("#logout-btn").click();
+  await expect(page.locator("#profile-menu")).toBeHidden();
+  await expect(page.locator("#public-auth-shell")).toBeVisible();
+  await expect.poll(() => logoutCalls).toBe(1);
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("studentos.auth.session"))).toBeNull();
+});
+
+test("responsive surfaces, account menu, and AI drawer avoid horizontal overflow", async ({ page }) => {
+  test.setTimeout(120_000);
+  await prepareLocalWorkspace();
+  const viewports = [
+    { width: 1680, height: 945 },
+    { width: 1440, height: 900 },
+    { width: 1366, height: 768 },
+    { width: 1024, height: 768 },
+    { width: 900, height: 900 },
+    { width: 430, height: 932 },
+    { width: 390, height: 844 },
+    { width: 360, height: 800 },
+  ];
   const views = ["Today", "Setup", "Courses", "Academic Context", "Study and Evaluate", "Studio", "Account"];
 
-  for (const width of widths) {
-    await page.setViewportSize({ width, height: width <= 430 ? 820 : 900 });
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
     await page.goto(baseUrl);
     await expect(page.locator("#public-auth-shell")).toBeHidden();
 
     for (const view of views) {
       await clickNav(page, view);
-      await expectNoHorizontalOverflow(page, `${width}px ${view}`);
-      if (view === "Academic Context" && width <= 768) {
+      await expectNoHorizontalOverflow(page, `${viewport.width}x${viewport.height} ${view}`);
+      if (view === "Account" && [1440, 390].includes(viewport.width)) {
+        const rows = page.locator("#consent-form .consent-option");
+        const rowGeometry = await rows.evaluateAll((options) => options.map((option) => {
+          const checkbox = option.querySelector('input[type="checkbox"]')?.getBoundingClientRect();
+          const copy = option.querySelector("span")?.getBoundingClientRect();
+          const row = option.getBoundingClientRect();
+          return checkbox && copy ? {
+            checkboxTop: checkbox.top,
+            copyTop: copy.top,
+            checkboxLeft: checkbox.left,
+            copyHeight: copy.height,
+            rowTop: row.top,
+            rowBottom: row.bottom,
+          } : null;
+        }));
+        expect(rowGeometry.every((item) => item && Math.abs(item.checkboxTop - item.copyTop) <= 4)).toBe(true);
+        expect(new Set(rowGeometry.map((item) => Math.round(item.checkboxLeft))).size).toBe(1);
+        expect(rowGeometry.slice(1).every((item, index) => item.rowTop >= rowGeometry[index].rowBottom - 1)).toBe(true);
+        if (viewport.width === 390) expect(rowGeometry[2].copyHeight).toBeGreaterThan(30);
+
+        const preferenceInputs = page.locator("#consent-form input[type='checkbox']");
+        const before = await preferenceInputs.evaluateAll((inputs) => inputs.map((input) => input.checked));
+        await rows.nth(1).locator("span").click();
+        const after = await preferenceInputs.evaluateAll((inputs) => inputs.map((input) => input.checked));
+        expect(after.filter((value, index) => value !== before[index])).toHaveLength(1);
+        await rows.nth(1).locator("span").click();
+        await page.getByRole("button", { name: "Save preferences" }).focus();
+        await page.keyboard.press("Shift+Tab");
+        await expect(preferenceInputs.nth(2)).toBeFocused();
+        const focusStyle = await preferenceInputs.nth(2).evaluate((input) => {
+          const style = getComputedStyle(input);
+          return { outlineWidth: style.outlineWidth, outlineStyle: style.outlineStyle };
+        });
+        expect(focusStyle.outlineStyle).not.toBe("none");
+        expect(Number.parseFloat(focusStyle.outlineWidth)).toBeGreaterThan(0);
+      }
+      if (view === "Academic Context" && viewport.width <= 768) {
         const stacked = await page.evaluate(() => {
           const content = document.querySelector(".academic-context-content-panel")?.getBoundingClientRect();
           const support = document.querySelector(".academic-context-support-column")?.getBoundingClientRect();
           return Boolean(content && support && support.top >= content.bottom - 1);
         });
-        expect(stacked, `${width}px Academic Context support column should stack after included work`).toBe(true);
+        expect(stacked, `${viewport.width}px Academic Context support column should stack after included work`).toBe(true);
         await page.locator("#source-submit-button").scrollIntoViewIfNeeded();
         const overlapsLauncher = await page.evaluate(() => {
           const submit = document.querySelector("#source-submit-button")?.getBoundingClientRect();
@@ -2156,17 +2302,38 @@ test("responsive surfaces and AI drawer avoid horizontal overflow", async ({ pag
           if (!submit || !launcher) return false;
           return submit.left < launcher.right && submit.right > launcher.left && submit.top < launcher.bottom && submit.bottom > launcher.top;
         });
-        expect(overlapsLauncher, `${width}px Ask StudentOS launcher should not cover upload`).toBe(false);
+        expect(overlapsLauncher, `${viewport.width}px Ask StudentOS launcher should not cover upload`).toBe(false);
       }
       await openAiDrawer(page);
-      await expectAiDrawerWithinViewport(page, `${width}px ${view}`);
+      await expectAiDrawerWithinViewport(page, `${viewport.width}px ${view}`);
       await closeAiDrawer(page);
     }
+
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.locator("#profile-menu-trigger").click();
+    await expect(page.locator("#profile-menu")).toBeVisible();
+    const menuBounds = await page.locator("#profile-menu").evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return {
+        left: Math.round(bounds.left),
+        right: Math.round(bounds.right),
+        top: Math.round(bounds.top),
+        bottom: Math.round(bounds.bottom),
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+      };
+    });
+    expect(menuBounds.left, `${viewport.width}x${viewport.height} menu bounds ${JSON.stringify(menuBounds)}`).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.right, `${viewport.width}x${viewport.height} menu bounds ${JSON.stringify(menuBounds)}`).toBeLessThanOrEqual(menuBounds.viewportWidth);
+    expect(menuBounds.top, `${viewport.width}x${viewport.height} menu bounds ${JSON.stringify(menuBounds)}`).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.bottom, `${viewport.width}x${viewport.height} menu bounds ${JSON.stringify(menuBounds)}`).toBeLessThanOrEqual(menuBounds.viewportHeight);
+    await expectNoHorizontalOverflow(page, `${viewport.width}x${viewport.height} account menu`);
+    await page.keyboard.press("Escape");
 
     await page.evaluate(() => { window.location.hash = "pricing"; });
     await expect(page.locator("#view-title")).toHaveText("Account");
     await expect(page.locator("#pricing")).toBeVisible();
-    await expectNoHorizontalOverflow(page, `${width}px pricing`);
+    await expectNoHorizontalOverflow(page, `${viewport.width}x${viewport.height} pricing`);
   }
 });
 

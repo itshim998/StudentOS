@@ -10,6 +10,7 @@ import {
 import {
   createDataExportWorkflow,
   createDeletionWorkflow,
+  createConsentWithdrawalRequest,
   getAccountLifecycleConfig,
   getLifecycleSnapshot,
   updateVersionedConsents,
@@ -146,10 +147,15 @@ export function updateConsentPreferences(state, payload = {}, now = new Date(), 
   const preferences = accountPreferences(state);
   const consent = preferences.consent;
   const allowedKeys = ["externalProgressSharing", "guardianSharingFuture", "productResearch", "aiPersonalization"];
-  for (const key of allowedKeys) {
-    if (key in payload) consent[key] = Boolean(payload[key]);
-  }
+  const changes = allowedKeys
+    .filter((key) => key in payload)
+    .map((key) => ({ key, previous: Boolean(consent[key]), next: Boolean(payload[key]) }))
+    .filter(({ previous, next }) => previous !== next);
+  if (!changes.length) return consent;
+
+  for (const { key, next } of changes) consent[key] = next;
   consent.updatedAt = nowIso(now);
+  state.auditLog = state.auditLog || [];
   state.auditLog.push({
     id: requestId("audit_consent"),
     actorId: state.studentProfile.id,
@@ -162,10 +168,20 @@ export function updateConsentPreferences(state, payload = {}, now = new Date(), 
       guardianSharingFuture: consent.guardianSharingFuture,
       productResearch: consent.productResearch,
       aiPersonalization: consent.aiPersonalization,
+      changedKeys: changes.map(({ key }) => key),
     },
     createdAt: nowIso(now),
   });
-  updateVersionedConsents(state, payload, lifecycleConfig, now);
+
+  const granted = {};
+  for (const change of changes) {
+    if (change.previous && !change.next) {
+      createConsentWithdrawalRequest(state, { consentKey: change.key }, lifecycleConfig, now);
+    } else {
+      granted[change.key] = change.next;
+    }
+  }
+  if (Object.keys(granted).length) updateVersionedConsents(state, granted, lifecycleConfig, now);
   return consent;
 }
 

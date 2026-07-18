@@ -56,6 +56,8 @@ const withdrawal = createConsentWithdrawalRequest(state, {
   consentKey: "externalProgressSharing",
 }, config, now);
 assert.equal(withdrawal.status, "withdrawal_requested");
+assert.equal(withdrawal.granted, false);
+assert.equal(withdrawal.withdrawnAt, now.toISOString());
 
 state.sourceMaterials.push({
   id: "source_sensitive",

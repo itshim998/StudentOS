@@ -60,6 +60,11 @@ const els = {
   studyRhythm: document.getElementById("study-rhythm"),
   creditEligibility: document.getElementById("credit-eligibility"),
   studentName: document.getElementById("student-name"),
+  profileEmail: document.getElementById("profile-email"),
+  profileAvatar: document.getElementById("profile-avatar"),
+  profileMenuTrigger: document.getElementById("profile-menu-trigger"),
+  profileMenu: document.getElementById("profile-menu"),
+  profileAccountSettings: document.getElementById("profile-account-settings"),
   connectorStatus: document.getElementById("connector-status"),
   classroomPanel: document.getElementById("classroom-panel"),
   classroomConnectBtn: document.getElementById("classroom-connect-btn"),
@@ -159,8 +164,6 @@ const els = {
   authModeLabel: document.getElementById("auth-mode-label"),
   authShellTitle: document.getElementById("auth-shell-title"),
   authShellCopy: document.getElementById("auth-shell-copy"),
-  railSessionStatus: document.getElementById("rail-session-status"),
-  railSessionHelp: document.getElementById("rail-session-help"),
   accountSummary: document.getElementById("account-summary"),
   quotaPanel: document.getElementById("quota-panel"),
   accountResetForm: document.getElementById("account-reset-form"),
@@ -169,19 +172,12 @@ const els = {
   verificationResendForm: document.getElementById("verification-resend-form"),
   verificationEmail: document.getElementById("verification-email"),
   verificationResult: document.getElementById("verification-result"),
-  legalStatus: document.getElementById("legal-status"),
-  legalAcceptCheck: document.getElementById("legal-accept-check"),
-  legalAcceptBtn: document.getElementById("legal-accept-btn"),
-  legalResult: document.getElementById("legal-result"),
   consentForm: document.getElementById("consent-form"),
-  consentWithdrawBtn: document.getElementById("consent-withdraw-btn"),
   consentResult: document.getElementById("consent-result"),
   exportRequestBtn: document.getElementById("export-request-btn"),
   deletionRequestBtn: document.getElementById("deletion-request-btn"),
   accountActionResult: document.getElementById("account-action-result"),
   accountLifecycleStatus: document.getElementById("account-lifecycle-status"),
-  guardianPreviewBtn: document.getElementById("guardian-preview-btn"),
-  invitationResult: document.getElementById("invitation-result"),
   upgradeBtn: document.getElementById("upgrade-btn"),
   manageBillingBtn: document.getElementById("manage-billing-btn"),
   pricingSection: document.getElementById("pricing"),
@@ -717,8 +713,6 @@ function renderAuth(message = "") {
     setText(els.authSession, "Configuration required");
     setText(els.authHelp, "Please try again after the StudentOS deployment is updated.");
     setText(els.authMessage, message || "");
-    setText(els.railSessionStatus, "Sign in unavailable");
-    setText(els.railSessionHelp, "Production sign-in configuration is required.");
     updateShellVisibility();
     return;
   }
@@ -728,8 +722,6 @@ function renderAuth(message = "") {
     els.logoutBtn.hidden = true;
     setText(els.authSession, "Local preview");
     setText(els.authHelp, "Local preview keeps account actions available without contacting live sign-in.");
-    setText(els.railSessionStatus, "Local preview");
-    setText(els.railSessionHelp, "Local preview with private-account controls simulated.");
     updateShellVisibility();
     return;
   }
@@ -739,8 +731,6 @@ function renderAuth(message = "") {
     const email = authSession.user?.email || authSession.email || "Signed in";
     setText(els.authSession, email);
     setText(els.authHelp, "Session active. Account settings and export requests stay private to your session.");
-    setText(els.railSessionStatus, email);
-    setText(els.railSessionHelp, "StudentOS workspace is open.");
     updateShellVisibility();
     return;
   }
@@ -748,8 +738,6 @@ function renderAuth(message = "") {
   els.logoutBtn.hidden = true;
   setText(els.authSession, message || "Ready to sign in");
   setText(els.authHelp, "Create an account or sign in. Email verification may be required.");
-  setText(els.railSessionStatus, "Sign in required");
-  setText(els.railSessionHelp, "Use the secure sign-in screen to open StudentOS.");
   updateShellVisibility();
 }
 
@@ -2167,7 +2155,11 @@ function render() {
   const lifecyclePlan = productPlan(state.productLifecycle?.selectedPlanId);
   const accountPlan = productPlan(accountSnapshot?.planAccess?.plan?.selected?.planKey || accountSnapshot?.quota?.plan?.selected?.planKey);
   const plan = lifecyclePlan || accountPlan || pendingPlanSummary();
-  els.studentName.textContent = state.studentProfile.displayName || "Student";
+  const displayName = state.studentProfile.displayName || "Student";
+  const profileEmail = accountSnapshot?.user?.email || authSession?.user?.email || authSession?.email || "Local preview";
+  els.studentName.textContent = displayName;
+  setText(els.profileEmail, profileEmail);
+  setText(els.profileAvatar, displayName.slice(0, 1).toUpperCase());
   els.creditBalance.textContent = state.creditBalance || 0;
   els.planBadge.textContent = plan.displayName || plan.label || "Plan setup pending";
   els.studyRhythm.textContent = humanize(state.studentProfile.studyRhythm || "not set");
@@ -4537,14 +4529,6 @@ function accountAuthLabel(mode) {
   return humanize(mode || "StudentOS session");
 }
 
-function accountVisibilityLabel(value) {
-  const audience = String(value || "").toLowerCase();
-  if (audience === "student_only") return "Student-only";
-  if (audience.includes("guardian")) return "Guardian access prepared";
-  if (audience.includes("institution")) return "Institution access prepared";
-  return humanize(value || "Student-only");
-}
-
 function subscriptionLabel(status) {
   const value = String(status || "unselected").toLowerCase();
   if (["free", "unselected", "selected", "cancelled", "canceled"].includes(value)) return "Plan setup pending";
@@ -4592,14 +4576,6 @@ function billingStatusLabel(status) {
   return humanize(status || "Preview ready");
 }
 
-function policyVersionNote(value, label) {
-  const raw = String(value || "").trim();
-  if (!raw) return `${label} ready`;
-  const cleaned = raw.replace(/^(privacy|terms)[-_]/i, "").replace(/_/g, " ");
-  if (!cleaned || cleaned.toLowerCase() === "current") return "Current version";
-  return `Version ${cleaned}`;
-}
-
 function requestReference(id) {
   return id ? `
     <details class="account-request-meta account-reference-detail">
@@ -4622,19 +4598,6 @@ function deletionStatusCopy(request) {
   if (!request) return "No deletion requests.";
   const gracePeriod = request.gracePeriodEndsAt ? ` Grace period active until ${formatDate(request.gracePeriodEndsAt)}.` : "";
   return `Deletion request recorded.${gracePeriod} No data has been deleted yet.`;
-}
-
-function familyAccessStatusCopy(invitations = []) {
-  if (!invitations.length) return "Family, guardian, teacher, and institution access is inactive.";
-  return `${invitations.length} sharing preview ${invitations.length === 1 ? "record" : "records"} saved. Access stays off until you consent.`;
-}
-
-function familyAccessLabel(status) {
-  const value = String(status || "").toLowerCase();
-  if (value.includes("enabled")) return "Sharing preview ready";
-  if (value.includes("disabled") || value.includes("inactive")) return "Access inactive";
-  if (value.includes("consent")) return "Consent required";
-  return "Safeguards previewed";
 }
 
 function localAccountSnapshot() {
@@ -4715,6 +4678,8 @@ function renderAccount() {
   if (els.verificationEmail && !els.verificationEmail.value) {
     els.verificationEmail.value = account.user?.email || "";
   }
+  setText(els.profileEmail, account.user?.email || "Local preview");
+  setText(els.profileAvatar, (account.profile?.displayName || "S").slice(0, 1).toUpperCase());
   if (els.consentForm) {
     for (const input of els.consentForm.querySelectorAll("input[type='checkbox']")) {
       input.checked = Boolean(consent[input.name]);
@@ -4728,16 +4693,14 @@ function renderAccount() {
         <p>${escapeHtml(account.user?.email || "No email session")} - ${escapeHtml(accountAuthLabel(account.user?.authMode || "local_preview"))}</p>
       </div>
     </div>
-    <div class="account-summary-list">
-      <span><strong>${escapeHtml(plan.displayName || plan.label || "Plan setup pending")}</strong> current plan</span>
-      <span><strong>${escapeHtml(account.user?.emailVerified ? "Verified" : "Verification ready")}</strong> email status</span>
-      <span><strong>${escapeHtml(accountVisibilityLabel(account.profile?.visibility?.defaultAudience || "student_only"))}</strong> visibility</span>
-      <span><strong>${escapeHtml(subscriptionLabel(quota.subscription?.status))}</strong>${quota.subscription?.renewalAt ? ` renews ${escapeHtml(formatDate(quota.subscription.renewalAt))}` : ""}</span>
-    </div>
-    <p>Progress visibility is student-only by default. Future parent, teacher, and institution views require explicit consent and clear permissions.</p>
+    <dl class="account-detail-list">
+      <div><dt>Current plan</dt><dd>${escapeHtml(plan.displayName || plan.label || "Plan setup pending")}</dd></div>
+      <div><dt>Email status</dt><dd>${escapeHtml(account.user?.emailVerified ? "Verified" : "Verification ready")}</dd></div>
+      <div><dt>Subscription</dt><dd>${escapeHtml(subscriptionLabel(quota.subscription?.status))}${quota.subscription?.renewalAt ? ` - renews ${escapeHtml(formatDate(quota.subscription.renewalAt))}` : ""}</dd></div>
+    </dl>
   `;
   els.quotaPanel.innerHTML = `
-    <div class="plan-card account-current-plan-card">
+    <div class="account-current-plan">
       <div>
         <span class="workspace-label">Current plan</span>
         <strong>${escapeHtml(plan.displayName || plan.label || "Plan setup pending")}</strong>
@@ -4756,40 +4719,25 @@ function renderAccount() {
 }
 
 function renderLifecycle(lifecycle = {}) {
-  const legal = lifecycle.legal || {};
   const exports = lifecycle.exportRequests || [];
   const exportJobs = lifecycle.exportJobs || [];
   const deletions = lifecycle.deletionRequests || [];
-  const invitations = lifecycle.roleInvitations || [];
-  if (els.legalStatus) {
-    els.legalStatus.innerHTML = `
-      <div class="account-status-list">
-        <span><strong>${escapeHtml(legal.accepted ? "Accepted" : "Review needed")}</strong> current notice</span>
-        <span><strong>Privacy notice</strong><small>${escapeHtml(policyVersionNote(legal.privacyVersion, "Privacy notice"))}</small></span>
-        <span><strong>Terms</strong><small>${escapeHtml(policyVersionNote(legal.termsVersion, "Terms"))}</small></span>
-      </div>
-    `;
-  }
   if (els.accountLifecycleStatus) {
     const latestExport = exports[0];
     const latestJob = exportJobs.find((job) => job.exportRequestId === latestExport?.id);
     const latestDeletion = deletions[0];
     els.accountLifecycleStatus.innerHTML = `
-      <article class="lifecycle-item">
+      <article class="lifecycle-item data-rights-row">
         <strong>Export</strong>
         <p>${escapeHtml(exportStatusCopy(latestExport, latestJob))}</p>
         ${latestExport ? requestReference(latestExport.id) : ""}
         ${latestExport?.downloadAvailable ? `<button class="mini-action" type="button" data-download-export-id="${escapeHtml(latestExport.id)}">Download private export</button>` : ""}
       </article>
-      <article class="lifecycle-item">
+      <article class="lifecycle-item data-rights-row data-rights-row-danger">
         <strong>Deletion review</strong>
         <p>${escapeHtml(deletionStatusCopy(latestDeletion))}</p>
         ${latestDeletion ? requestReference(latestDeletion.id) : ""}
         ${latestDeletion ? `<button class="mini-action danger-action" type="button" data-deletion-dry-run-id="${escapeHtml(latestDeletion.id)}">Preview deletion safety</button>` : ""}
-      </article>
-      <article class="lifecycle-item">
-        <strong>Family access</strong>
-        <p>${escapeHtml(familyAccessStatusCopy(invitations))}</p>
       </article>
     `;
   }
@@ -5890,7 +5838,6 @@ function consentPayloadFromForm(form) {
     aiPersonalization: Boolean(form.elements.aiPersonalization?.checked),
     productResearch: Boolean(form.elements.productResearch?.checked),
     externalProgressSharing: Boolean(form.elements.externalProgressSharing?.checked),
-    guardianSharingFuture: Boolean(form.elements.guardianSharingFuture?.checked),
   };
 }
 
@@ -5903,53 +5850,9 @@ async function submitConsent(event) {
       body: JSON.stringify(consentPayloadFromForm(event.currentTarget)),
     });
     accountSnapshot = result.account;
-    setResult(els.consentResult, `
-      <strong>Consent preferences saved</strong>
-      <div class="tag-row">
-        ${tag(result.consent.aiPersonalization ? "personalization on" : "personalization off", "source")}
-        ${tag(result.consent.externalProgressSharing ? "external sharing on" : "student-only progress", result.consent.externalProgressSharing ? "medium" : "source")}
-      </div>
-    `);
+    setResult(els.consentResult, "<span>Preferences saved.</span>");
     renderAccount();
   }, { timeoutTarget: els.consentResult, timeoutCopy: "Saving preferences is taking longer than expected. You can try again." });
-}
-
-async function acceptCurrentLegalTerms() {
-  if (!els.legalAcceptCheck.checked) {
-    setResult(els.legalResult, `<p>Confirm the checkbox before recording acceptance.</p>`);
-    return;
-  }
-  setLoading(els.legalResult, "Recording your acceptance...");
-  const result = await api("/api/account/legal/accept", {
-    method: "POST",
-    body: JSON.stringify({ accepted: true, acceptanceSource: "account_settings" }),
-  });
-  accountSnapshot = result.account;
-  setResult(els.legalResult, `
-    <strong>Acceptance recorded</strong>
-    <p>Your current terms and privacy notice acceptance is saved.</p>
-    <div class="tag-row">
-      ${tag(policyVersionNote(result.acceptance.privacyVersion, "Privacy notice"), "source")}
-      ${tag(policyVersionNote(result.acceptance.termsVersion, "Terms"), "source")}
-    </div>
-  `);
-  renderAccount();
-}
-
-async function requestConsentWithdrawal() {
-  setLoading(els.consentResult, "Creating consent review request...");
-  const result = await api("/api/account/consent/withdrawal-request", {
-    method: "POST",
-    body: JSON.stringify({ consentKey: "externalProgressSharing" }),
-  });
-  accountSnapshot = result.account;
-  setResult(els.consentResult, `
-    <strong>Consent review request recorded</strong>
-    <p>StudentOS recorded a review request for external progress sharing. No sharing changes until the request is reviewed.</p>
-    <div class="tag-row">${tag("review request", "medium")}${tag("no sharing change yet", "source")}</div>
-    ${requestReference(result.request.id)}
-  `);
-  renderAccount();
 }
 
 async function requestDataExport() {
@@ -6044,24 +5947,6 @@ async function requestDeletionDryRun(requestId) {
     ${requestReference(requestId)}
   `);
   renderAccount();
-}
-
-async function previewGuardianGroundwork() {
-  setLoading(els.invitationResult, "Checking sharing safeguards...");
-  const result = await api("/api/account/invitations/guardian-preview", {
-    method: "POST",
-    body: JSON.stringify({ explicitStudentConsent: false }),
-  });
-  setResult(els.invitationResult, `
-    <strong>${escapeHtml(familyAccessLabel(result.invitation.status))}</strong>
-    <p>No family, guardian, teacher, or institution access was enabled. Student consent is required before sharing is turned on.</p>
-    <div class="tag-row">
-      ${tag("student consent required", "source")}
-      ${tag(result.invitation.enabled ? "enabled" : "inactive", result.invitation.enabled ? "medium" : "source")}
-    </div>
-    ${requestReference(result.invitation.id)}
-  `);
-  await loadAccountSnapshot();
 }
 
 async function previewPlanUpgrade(planId = "pro") {
@@ -6621,26 +6506,66 @@ function toggleProductFlowAsk() {
     : "Finish the current setup step to activate your academic assistant. I can guide you through what comes next.";
 }
 
-function toggleStatusDropdown() {
-  const trigger = document.getElementById("status-dropdown-trigger");
-  const panel = document.getElementById("status-dropdown-panel");
-  if (!trigger || !panel) return;
-  const isExpanded = trigger.getAttribute("aria-expanded") === "true";
-  trigger.setAttribute("aria-expanded", !isExpanded ? "true" : "false");
-  panel.classList.toggle("active", !isExpanded);
+function profileMenuActions() {
+  if (!els.profileMenu) return [];
+  return [...els.profileMenu.querySelectorAll("button:not([hidden]):not(:disabled)")];
 }
 
-function closeStatusDropdown() {
-  const trigger = document.getElementById("status-dropdown-trigger");
-  const panel = document.getElementById("status-dropdown-panel");
-  if (!trigger || !panel) return;
-  trigger.setAttribute("aria-expanded", "false");
-  panel.classList.remove("active");
+function positionProfileMenu() {
+  if (!isProfileMenuOpen()) return;
+  els.profileMenu.classList.remove("open-up");
+  if (els.profileMenu.getBoundingClientRect().bottom > window.innerHeight - 8) {
+    els.profileMenu.classList.add("open-up");
+  }
 }
 
-function isStatusDropdownOpen() {
-  const panel = document.getElementById("status-dropdown-panel");
-  return panel && panel.classList.contains("active");
+function openProfileMenu() {
+  if (!els.profileMenuTrigger || !els.profileMenu) return;
+  els.profileMenuTrigger.setAttribute("aria-expanded", "true");
+  els.profileMenu.hidden = false;
+  window.requestAnimationFrame(() => {
+    positionProfileMenu();
+    profileMenuActions()[0]?.focus();
+  });
+}
+
+function closeProfileMenu({ restoreFocus = false } = {}) {
+  if (!els.profileMenuTrigger || !els.profileMenu) return;
+  els.profileMenuTrigger.setAttribute("aria-expanded", "false");
+  els.profileMenu.hidden = true;
+  els.profileMenu.classList.remove("open-up");
+  if (restoreFocus) els.profileMenuTrigger.focus();
+}
+
+function toggleProfileMenu() {
+  if (els.profileMenu?.hidden) openProfileMenu();
+  else closeProfileMenu({ restoreFocus: true });
+}
+
+function isProfileMenuOpen() {
+  return Boolean(els.profileMenu && !els.profileMenu.hidden);
+}
+
+function handleProfileMenuKeydown(event) {
+  if (!isProfileMenuOpen()) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeProfileMenu({ restoreFocus: true });
+    return;
+  }
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  const actions = profileMenuActions();
+  if (!actions.length) return;
+  event.preventDefault();
+  const currentIndex = actions.indexOf(document.activeElement);
+  const nextIndex = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? actions.length - 1
+      : event.key === "ArrowUp"
+        ? (currentIndex <= 0 ? actions.length - 1 : currentIndex - 1)
+        : (currentIndex + 1) % actions.length;
+  actions[nextIndex].focus();
 }
 
 function wireEvents() {
@@ -6658,28 +6583,35 @@ function wireEvents() {
   els.productFlowLogoutBtn?.addEventListener("click", () => {
     logout().catch((error) => productFlowMessage(error.message));
   });
-  document.getElementById("status-dropdown-trigger")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    toggleStatusDropdown();
+  els.profileMenuTrigger?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleProfileMenu();
+  });
+  els.profileMenu?.addEventListener("keydown", handleProfileMenuKeydown);
+  els.profileAccountSettings?.addEventListener("click", () => {
+    setView("account");
+    closeProfileMenu();
+    document.querySelector('.nav-item[data-view="account"]')?.focus();
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && isAiDrawerOpen()) {
       closeAiDrawer();
     }
-    if (event.key === "Escape" && isStatusDropdownOpen()) {
-      closeStatusDropdown();
+    if (event.key === "Escape" && isProfileMenuOpen()) {
+      closeProfileMenu({ restoreFocus: true });
     }
   });
   window.addEventListener("hashchange", handleAuthLocationChange);
-  window.addEventListener("resize", updateStudyQueuePositions);
+  window.addEventListener("resize", () => {
+    updateStudyQueuePositions();
+    positionProfileMenu();
+  });
   document.addEventListener("input", (event) => {
     if (event.target.matches("[data-study-test-answer]")) scheduleStudyTestAutosave(event.target);
   });
   document.addEventListener("click", (event) => {
-    const panel = document.getElementById("status-dropdown-panel");
-    const trigger = document.getElementById("status-dropdown-trigger");
-    if (panel && trigger && !panel.contains(event.target) && !trigger.contains(event.target)) {
-      closeStatusDropdown();
+    if (els.profileMenu && els.profileMenuTrigger && !els.profileMenu.contains(event.target) && !els.profileMenuTrigger.contains(event.target)) {
+      closeProfileMenu();
     }
 
     const collapseBtn = event.target.closest(".study-queue-collapse-btn");
@@ -7080,6 +7012,7 @@ function wireEvents() {
     });
   });
   els.logoutBtn.addEventListener("click", () => {
+    closeProfileMenu();
     logout().catch((error) => renderAuth(error.message));
   });
   els.accountResetForm.addEventListener("submit", (event) => {
@@ -7094,24 +7027,8 @@ function wireEvents() {
       setResult(els.verificationResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
-  els.legalAcceptBtn.addEventListener("click", () => {
-    withButtonLoading(els.legalAcceptBtn, "Saving...", acceptCurrentLegalTerms, {
-      timeoutTarget: els.legalResult,
-      timeoutCopy: "Saving acceptance is taking longer than expected. You can try again.",
-    }).catch((error) => {
-      setResult(els.legalResult, `<p>${escapeHtml(error.message)}</p>`);
-    });
-  });
   els.consentForm.addEventListener("submit", (event) => {
     submitConsent(event).catch((error) => {
-      setResult(els.consentResult, `<p>${escapeHtml(error.message)}</p>`);
-    });
-  });
-  els.consentWithdrawBtn.addEventListener("click", () => {
-    withButtonLoading(els.consentWithdrawBtn, "Preparing...", requestConsentWithdrawal, {
-      timeoutTarget: els.consentResult,
-      timeoutCopy: "Preparing the review request is taking longer than expected. You can try again.",
-    }).catch((error) => {
       setResult(els.consentResult, `<p>${escapeHtml(error.message)}</p>`);
     });
   });
@@ -7154,14 +7071,6 @@ function wireEvents() {
         setResult(els.accountActionResult, `<p>${escapeHtml(error.message)}</p>`);
       });
     }
-  });
-  els.guardianPreviewBtn.addEventListener("click", () => {
-    withButtonLoading(els.guardianPreviewBtn, "Checking...", previewGuardianGroundwork, {
-      timeoutTarget: els.invitationResult,
-      timeoutCopy: "Checking sharing safeguards is taking longer than expected. You can try again.",
-    }).catch((error) => {
-      setResult(els.invitationResult, `<p>${escapeHtml(error.message)}</p>`);
-    });
   });
   els.upgradeBtn.addEventListener("click", () => {
     withButtonLoading(els.upgradeBtn, "Preparing...", () => previewPlanUpgrade("pro"), {
