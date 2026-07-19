@@ -412,6 +412,32 @@ export function buildSafeExportPreview(state) {
     roadmap: (state.roadmap || []).map((item) => pick(item, [
       "id", "courseId", "topicId", "title", "kind", "priority", "dueAt", "status",
     ])),
+    recovery: {
+      userState: (state.recoveryUserStates || []).map((item) => pick(item, [
+        "id", "academicRevision", "snapshotVersion", "planVersion", "currentSnapshotId", "currentPlanId", "updatedAt",
+      ])),
+      academicEvents: (state.academicEvents || []).map((item) => pick(item, [
+        "id", "eventType", "sourceEntityType", "sourceEntityId", "payload", "occurredAt", "processedAt", "correlationId",
+      ])),
+      snapshots: (state.academicStateSnapshots || []).map((item) => pick(item, [
+        "id", "version", "academicRevision", "fingerprint", "triggeringEventIds", "state", "createdAt",
+      ])),
+      topicStates: (state.topicRecoveryStates || []).map((item) => pick(item, [
+        "id", "courseId", "topicId", "evidenceIds", "strength", "priorityScore", "priorityBand", "status", "reasons", "updatedAt",
+      ])),
+      topicStateHistory: (state.topicRecoveryStateHistory || []).map((item) => pick(item, [
+        "id", "topicRecoveryStateId", "courseId", "topicId", "fromStatus", "toStatus", "reason", "createdAt",
+      ])),
+      runs: (state.recoveryRuns || []).map((item) => pick(item, [
+        "id", "status", "triggerEventIds", "previousSnapshotId", "currentSnapshotId", "previewId", "failureCode", "failureMessage", "failureRetryable", "providerAttempts", "correlationId", "createdAt", "updatedAt",
+      ])),
+      previews: (state.recoveryPreviews || []).map((item) => pick(item, [
+        "id", "runId", "status", "basePlanVersion", "basePlanId", "academicRevision", "proposedPlan", "backendDiff", "affectedRecords", "deferrals", "expiresAt", "appliedAt", "rejectedAt",
+      ])),
+      planVersions: (state.planVersions || []).map((item) => pick(item, [
+        "id", "version", "parentPlanId", "source", "recoveryPreviewId", "dailyTodoPlan", "roadmap", "createdAt",
+      ])),
+    },
     consents: state.userConsents.map((item) => pick(item, [
       "id", "consentVersionId", "consentKey", "granted", "status", "withdrawnAt", "updatedAt",
     ])),

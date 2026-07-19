@@ -115,6 +115,8 @@ jobs:
           GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+          STUDENTOS_BACKGROUND_WORKERS_ENABLED: ${{ vars.STUDENTOS_BACKGROUND_WORKERS_ENABLED || 'false' }}
+          STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: ${{ vars.STUDENTOS_ADAPTIVE_RECOVERY_ENABLED || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ENABLED || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_SHADOW: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_SHADOW || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT || '0' }}
@@ -143,6 +145,10 @@ jobs:
             exit 1
           fi
           echo "Required backend runtime secret names are configured."
+          if [ "$STUDENTOS_ADAPTIVE_RECOVERY_ENABLED" = "true" ] && [ "$STUDENTOS_BACKGROUND_WORKERS_ENABLED" != "true" ]; then
+            echo "Adaptive recovery cannot be enabled until background worker deployment is confirmed." >&2
+            exit 1
+          fi
           node scripts/validateAzureAiProviderSecrets.js
 
       - name: Deploy Container App infrastructure
@@ -195,6 +201,8 @@ jobs:
           GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+          STUDENTOS_BACKGROUND_WORKERS_ENABLED: ${{ vars.STUDENTOS_BACKGROUND_WORKERS_ENABLED || 'false' }}
+          STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: ${{ vars.STUDENTOS_ADAPTIVE_RECOVERY_ENABLED || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ENABLED || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_SHADOW: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_SHADOW || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT || '0' }}
@@ -277,6 +285,9 @@ jobs:
                 STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4=secretref:studentos-supabase-service-role-key-4 \
                 STUDENTOS_SUPABASE_JWT_SECRET=secretref:studentos-supabase-jwt-secret \
                 STUDENTOS_AI_MODE=auto \
+                STUDENTOS_BACKGROUND_WORKERS_ENABLED="$STUDENTOS_BACKGROUND_WORKERS_ENABLED" \
+                STUDENTOS_ADAPTIVE_RECOVERY_ENABLED="$STUDENTOS_ADAPTIVE_RECOVERY_ENABLED" \
+                STUDENTOS_RECOVERY_PREVIEW_TTL_HOURS=24 \
                 STUDENTOS_AI_PROVIDER_CYCLE_ENABLED="$STUDENTOS_AI_PROVIDER_CYCLE_ENABLED" \
                 STUDENTOS_AI_PROVIDER_CYCLE_SHADOW="$STUDENTOS_AI_PROVIDER_CYCLE_SHADOW" \
                 STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT="$STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT" \

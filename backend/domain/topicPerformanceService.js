@@ -47,10 +47,11 @@ export function buildTopicEvidenceFromEvaluation({ session, evaluation, testResu
     if (mappingSource !== AUTHORITATIVE_MAPPING_SOURCE || !courseId || !clean(topicTitle) || !(marksAvailable > 0) || !Number.isFinite(marksEarned)) continue;
     const record = { courseId: String(courseId), topicId: topicId ? String(topicId) : null, topicTitle: clean(topicTitle, 240) };
     const key = evidenceKey(record);
-    const group = groups.get(key) || { ...record, marksEarned: 0, marksAvailable: 0, questionNumbers: [] };
+    const group = groups.get(key) || { ...record, marksEarned: 0, marksAvailable: 0, questionNumbers: [], incorrectQuestionNumbers: [] };
     group.marksEarned += Math.max(0, Math.min(marksAvailable, marksEarned));
     group.marksAvailable += marksAvailable;
     group.questionNumbers.push(result.question_number);
+    if (marksEarned < marksAvailable) group.incorrectQuestionNumbers.push(result.question_number);
     groups.set(key, group);
   }
   return [...groups.values()].map((group) => ({

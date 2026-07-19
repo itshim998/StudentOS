@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { confidenceLabel, createDeterministicEmbedding } from "../embeddings/embeddingService.js";
 import { createEmptyStudentState, MIN_GROUNDING_CONFIDENCE, retrieveGroundedSources } from "../domain/studentosDomain.js";
 import { publicShardRoute, routeUserToShard } from "../supabase/shardRouter.js";
@@ -43,8 +44,77 @@ const COLLECTIONS = [
   ["classroomItems", "classroom_items"],
 ];
 
+const RECOVERY_COLLECTIONS = [
+  ["recoveryUserStates", "recovery_user_state"],
+  ["academicEvents", "academic_events"],
+  ["academicStateSnapshots", "academic_state_snapshots"],
+  ["topicRecoveryStates", "topic_recovery_states"],
+  ["topicRecoveryStateHistory", "topic_recovery_state_history"],
+  ["recoveryRuns", "recovery_runs"],
+  ["recoveryPreviews", "recovery_previews"],
+  ["planVersions", "plan_versions"],
+];
+
+const ALL_COLLECTIONS = [...COLLECTIONS, ...RECOVERY_COLLECTIONS];
+const RECOVERY_PERSISTENCE_VERSION = Symbol("recoveryPersistenceVersion");
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function recoveryVersions(state = {}) {
+  const userId = state.studentProfile?.id;
+  const userState = (state.recoveryUserStates || []).find((item) => item.userId === userId);
+  return {
+    academicRevision: Number(userState?.academicRevision || 0),
+    planVersion: Number(userState?.planVersion || 0),
+  };
+}
+
+function markRecoveryPersistenceVersion(state, versions = recoveryVersions(state)) {
+  Object.defineProperty(state, RECOVERY_PERSISTENCE_VERSION, {
+    value: { ...versions },
+    configurable: true,
+    writable: true,
+    enumerable: false,
+  });
+  return state;
+}
+
+function recoveryConcurrencyError(reason = "lease_held") {
+  const error = new Error("Recovery state changed while this request was in progress.");
+  error.status = 409;
+  error.code = "RECOVERY_CONCURRENCY_CONFLICT";
+  error.retryable = true;
+  error.conflictReason = reason;
+  return error;
+}
+
+function normalizeRecoveryDatabaseError(error) {
+  const label = String(error?.message || "");
+  if (
+    label.includes("recovery_runs_user_idempotency_idx")
+    || label.includes("recovery_previews_user_mutation_idempotency_idx")
+  ) {
+    error.code = "RECOVERY_IDEMPOTENCY_CONFLICT";
+    error.status = 409;
+    error.retryable = false;
+    return error;
+  }
+  const codes = [
+    ["RECOVERY_UNAUTHORIZED", 403, false],
+    ["RECOVERY_PREVIEW_ALREADY_APPLIED", 409, false],
+    ["RECOVERY_PREVIEW_STALE", 409, false],
+    ["RECOVERY_CONCURRENCY_CONFLICT", 409, true],
+    ["RECOVERY_PLAN_INFEASIBLE", 422, false],
+    ["RECOVERY_IDEMPOTENCY_CONFLICT", 409, false],
+  ];
+  const match = codes.find(([code]) => label.includes(code));
+  if (!match) return error;
+  error.code = match[0];
+  error.status = match[1];
+  error.retryable = match[2];
+  return error;
 }
 
 function accountDisplayName(user = {}) {
@@ -63,7 +133,7 @@ export function initialStateForUser(user = {}) {
 }
 
 export function removeDemoSeedRowsForRealUser(state = {}) {
-  return removeLegacyDemoArtifacts(state, COLLECTIONS.map(([key]) => key));
+  return removeLegacyDemoArtifacts(state, ALL_COLLECTIONS.map(([key]) => key));
 }
 
 function ensureStateShape(state) {
@@ -81,7 +151,7 @@ function ensureStateShape(state) {
     jobEvents: state.jobEvents || [],
     assignmentLearningFlows: state.assignmentLearningFlows || [],
   };
-  for (const [key] of COLLECTIONS) {
+  for (const [key] of ALL_COLLECTIONS) {
     shaped[key] = shaped[key] || [];
   }
   removeDemoSeedRowsForRealUser(shaped);
@@ -89,6 +159,126 @@ function ensureStateShape(state) {
   migrateLegacyClassroomAcademicData(shaped);
   normalizeLegacyWeakTopicState(shaped);
   return shaped;
+}
+
+function finalizeRecoveryApplyState(state, { preview, run, idempotencyKey, correlationId, now = new Date(), planVersionId = null } = {}) {
+  const timestamp = now.toISOString();
+  const userState = (state.recoveryUserStates || []).find((item) => item.userId === state.studentProfile.id);
+  if (!userState) throw new Error("recovery_user_state_missing");
+  if (preview.status === "applied" && preview.applyIdempotencyKey === idempotencyKey) {
+    return { preview, planVersion: (state.planVersions || []).find((item) => item.id === preview.appliedPlanId), replayed: true };
+  }
+  const nextVersion = Number(userState.planVersion || 0) + 1;
+  const planVersion = {
+    id: planVersionId || `plan_version_${randomUUID()}`,
+    userId: state.studentProfile.id,
+    version: nextVersion,
+    parentPlanId: userState.currentPlanId || null,
+    source: "recovery_preview_apply",
+    recoveryPreviewId: preview.id,
+    dailyTodoPlan: clone(preview.proposedPlan),
+    roadmap: clone(state.roadmap || []),
+    createdAt: timestamp,
+  };
+  state.planVersions.push(planVersion);
+  state.studentProfile.dailyTodoPlan = clone(preview.proposedPlan);
+  userState.planVersion = nextVersion;
+  userState.currentPlanId = planVersion.id;
+  userState.academicRevision = Number(userState.academicRevision || 0) + 1;
+  userState.updatedAt = timestamp;
+  for (const intent of preview.recoveryIntents || []) {
+    const scheduled = (preview.proposedPlan?.items || []).some((item) => item.recovery_intent_id === intent.id);
+    const recovery = (state.topicRecoveryStates || []).find((item) => item.topicId === intent.topicId);
+    if (recovery && scheduled && recovery.status !== "resolved") {
+      const previousStatus = recovery.status;
+      recovery.status = "scheduled";
+      recovery.version = Number(recovery.version || 0) + 1;
+      recovery.updatedAt = timestamp;
+      if (previousStatus !== "scheduled") {
+        state.topicRecoveryStateHistory.push({
+          id: `topic_recovery_history_${randomUUID()}`,
+          userId: recovery.userId,
+          topicRecoveryStateId: recovery.id,
+          topicId: recovery.topicId,
+          fromStatus: previousStatus,
+          toStatus: "scheduled",
+          evidenceIds: recovery.evidenceIds || [],
+          priority: recovery.priority,
+          reasonCode: "PREVIEW_APPLIED_SCHEDULED",
+          version: recovery.version,
+          createdAt: timestamp,
+        });
+      }
+    }
+    const roadmapId = `roadmap_recovery:${intent.topicId}:${intent.activityType}`;
+    const existing = (state.roadmap || []).find((item) => item.id === roadmapId);
+    if (intent.status === "resolved") {
+      if (existing && existing.status === "open") {
+        existing.status = "completed";
+        existing.completedAt = timestamp;
+        existing.reasonCode = "REASSESSMENT_SECURE";
+      }
+      continue;
+    }
+    const deferred = (preview.deferredWork || []).some((item) => item.id === intent.id);
+    const record = existing || {
+      id: roadmapId,
+      userId: state.studentProfile.id,
+      courseId: intent.courseId,
+      topicId: intent.topicId,
+      kind: intent.activityType === "reassessment" ? "reassessment" : "weak_topic_recovery",
+      title: `${intent.activityType === "reassessment" ? "Reassess" : "Recover"} ${intent.topicTitle}`,
+      createdAt: timestamp,
+    };
+    Object.assign(record, {
+      priority: intent.priority >= 80 ? "urgent" : intent.priority >= 60 ? "high" : intent.priority >= 35 ? "medium" : "low",
+      status: "open",
+      recoveryState: scheduled ? "scheduled" : deferred ? "deferred" : "active",
+      evidenceIds: intent.evidenceIds,
+      reasonCode: deferred ? "INSUFFICIENT_AVAILABLE_TIME" : intent.reasonCode,
+      explanation: intent.explanation,
+      updatedAt: timestamp,
+    });
+    if (!existing) state.roadmap.push(record);
+  }
+  planVersion.roadmap = clone(state.roadmap || []);
+  preview.status = "applied";
+  preview.applyIdempotencyKey = idempotencyKey;
+  preview.appliedPlanId = planVersion.id;
+  preview.appliedAt = timestamp;
+  preview.updatedAt = timestamp;
+  run.status = "applied";
+  run.appliedAt = timestamp;
+  run.updatedAt = timestamp;
+  run.statusHistory = run.statusHistory || [];
+  run.statusHistory.push({ status: "applied", at: timestamp });
+  state.academicEvents.push({
+    id: `academic_event_${randomUUID()}`,
+    userId: state.studentProfile.id,
+    eventType: "recovery_preview_applied",
+    sourceEntityType: "recovery_preview",
+    sourceEntityId: preview.id,
+    idempotencyKey: `preview_applied:${preview.id}`,
+    correlationId: correlationId || null,
+    occurredAt: timestamp,
+    payload: { planVersionId: planVersion.id, planVersion: nextVersion },
+    processingStatus: "processed",
+    processedAt: timestamp,
+    createdAt: timestamp,
+  });
+  state.auditLog = state.auditLog || [];
+  state.auditLog.push({
+    id: `audit_recovery_${randomUUID()}`,
+    userId: state.studentProfile.id,
+    actorId: state.studentProfile.id,
+    action: "recovery.preview_applied",
+    targetType: "recovery_preview",
+    targetId: preview.id,
+    riskLevel: "medium",
+    metadata: { planVersionId: planVersion.id, correlationId: correlationId || null, topicCount: preview.affectedTopicIds?.length || 0 },
+    createdAt: timestamp,
+  });
+  return { preview, planVersion, replayed: false };
 }
 
 function asIsoDate(value) {
@@ -837,12 +1027,35 @@ class MockStudentOsRepository {
     if (!this.states.has(user.id)) {
       this.states.set(user.id, ensureStateShape(initialStateForUser(user)));
     }
-    return clone(this.states.get(user.id));
+    const state = clone(this.states.get(user.id));
+    return markRecoveryPersistenceVersion(state);
   }
 
   async saveState(session, state) {
     const userId = session?.user?.id || state.studentProfile.id;
     this.states.set(userId, ensureStateShape(clone(state)));
+  }
+
+  async saveRecoveryState(session, state) {
+    const userId = session?.user?.id || state.studentProfile.id;
+    const stored = this.states.get(userId);
+    const expected = state[RECOVERY_PERSISTENCE_VERSION];
+    if (stored && expected) {
+      const current = recoveryVersions(stored);
+      if (current.academicRevision !== expected.academicRevision || current.planVersion !== expected.planVersion) {
+        throw recoveryConcurrencyError("version_changed");
+      }
+    }
+    await this.saveState(session, state);
+    markRecoveryPersistenceVersion(state);
+  }
+
+  async applyRecoveryPreviewTransaction(session, request = {}) {
+    const current = ensureStateShape(request.state || await this.loadState(session));
+    const result = finalizeRecoveryApplyState(current, request);
+    await this.saveState(session, current);
+    Object.assign(request.state, current);
+    return result;
   }
 
   async saveTestResultBundle(session, state) {
@@ -1416,7 +1629,7 @@ class SupabaseStudentOsRepository {
     if (!profileRows.length) {
       const initialState = ensureStateShape(initialStateForUser(user));
       await this.saveState(session, initialState);
-      return initialState;
+      return markRecoveryPersistenceVersion(initialState);
     }
 
     const storedProfile = fromPayload(profileRows[0]);
@@ -1432,6 +1645,20 @@ class SupabaseStudentOsRepository {
         order: "created_at.asc",
       });
       state[key] = rows.map(fromPayload).filter(Boolean);
+    }
+    for (const [key, table] of RECOVERY_COLLECTIONS) {
+      try {
+        const rows = await route.client.select(table, {
+          columns: "payload",
+          filters: { user_id: `eq.${user.id}` },
+          order: "created_at.asc",
+        });
+        state[key] = rows.map(fromPayload).filter(Boolean);
+      } catch (error) {
+        const label = `${error?.code || ""} ${error?.message || ""}`.toLowerCase();
+        if (error?.status !== 404 && !label.includes("42p01") && !label.includes("does not exist")) throw error;
+        state[key] = [];
+      }
     }
     const classroomMigrationKeys = [
       "classroomItems",
@@ -1461,7 +1688,7 @@ class SupabaseStudentOsRepository {
     if (changedClassroomKeys.length) {
       await this.saveChangedCollections(session, shaped, changedClassroomKeys);
     }
-    return shaped;
+    return markRecoveryPersistenceVersion(shaped);
   }
 
   async saveState(session, state) {
@@ -1482,12 +1709,81 @@ class SupabaseStudentOsRepository {
     }
   }
 
+  async saveRecoveryState(session, state) {
+    const route = this.route(session);
+    const expected = state[RECOVERY_PERSISTENCE_VERSION] || recoveryVersions(state);
+    const leaseToken = `recovery_lease_${randomUUID()}`;
+    const rows = await route.client.rpc("acquire_recovery_mutation_lease", {
+      p_user_id: session.user.id,
+      p_lease_token: leaseToken,
+      p_expected_academic_revision: expected.academicRevision,
+      p_expected_plan_version: expected.planVersion,
+      p_lease_seconds: 30,
+    });
+    const lease = Array.isArray(rows) ? rows[0] : rows;
+    if (!lease?.acquired) throw recoveryConcurrencyError(lease?.conflict_reason || "lease_held");
+    try {
+      await this.saveState(session, state);
+      const recoveryKeys = RECOVERY_COLLECTIONS.map(([key]) => key);
+      await this.saveChangedCollections(session, state, recoveryKeys.filter((key) => key !== "recoveryUserStates"));
+      await this.saveChangedCollections(session, state, ["recoveryUserStates"]);
+      markRecoveryPersistenceVersion(state);
+    } catch (error) {
+      await route.client.rpc("release_recovery_mutation_lease", {
+        p_user_id: session.user.id,
+        p_lease_token: leaseToken,
+      }).catch(() => null);
+      throw normalizeRecoveryDatabaseError(error);
+    }
+  }
+
+  async applyRecoveryPreviewTransaction(session, request = {}) {
+    const route = this.route(session);
+    const working = ensureStateShape(clone(request.state));
+    const originalPreview = request.preview;
+    const originalUserState = (working.recoveryUserStates || []).find((item) => item.userId === session.user.id);
+    const planVersionId = `plan_version_${randomUUID()}`;
+    const result = finalizeRecoveryApplyState(working, { ...request, preview: working.recoveryPreviews.find((item) => item.id === originalPreview.id), run: working.recoveryRuns.find((item) => item.id === request.run.id), planVersionId });
+    const appliedEvent = working.academicEvents.find((item) => item.eventType === "recovery_preview_applied" && item.sourceEntityId === originalPreview.id);
+    const audit = working.auditLog.find((item) => item.action === "recovery.preview_applied" && item.targetId === originalPreview.id);
+    let rows;
+    try {
+      rows = await route.client.rpc("apply_recovery_preview", {
+        p_user_id: session.user.id,
+        p_preview_id: originalPreview.id,
+        p_run_id: request.run.id,
+        p_idempotency_key: request.idempotencyKey,
+        p_expected_academic_revision: originalPreview.academicRevision,
+        p_expected_plan_version: originalPreview.basePlanVersion,
+        p_expected_plan_id: originalPreview.basePlanId,
+        p_plan_version_id: result.planVersion.id,
+        p_plan_version: result.planVersion.version,
+        p_plan_payload: result.planVersion,
+        p_daily_plan: result.planVersion.dailyTodoPlan,
+        p_roadmap_rows: working.roadmap,
+        p_topic_recovery_rows: working.topicRecoveryStates,
+        p_topic_recovery_history_rows: working.topicRecoveryStateHistory,
+        p_preview_payload: result.preview,
+        p_run_payload: working.recoveryRuns.find((item) => item.id === request.run.id),
+        p_event_payload: appliedEvent,
+        p_audit_payload: audit,
+        p_correlation_id: request.correlationId || null,
+      });
+    } catch (error) {
+      throw normalizeRecoveryDatabaseError(error);
+    }
+    const row = Array.isArray(rows) ? rows[0] : rows;
+    if (!row?.applied && !row?.replayed) throw new Error("recovery_apply_transaction_failed");
+    Object.assign(request.state, working);
+    return { ...result, replayed: row.replayed === true };
+  }
+
   async saveChangedCollections(session, state, keys) {
     const route = this.route(session);
     const userId = session.user.id;
     const shaped = ensureStateShape(state);
     for (const key of keys) {
-      const table = COLLECTIONS.find(([collectionKey]) => collectionKey === key)?.[1];
+      const table = ALL_COLLECTIONS.find(([collectionKey]) => collectionKey === key)?.[1];
       if (!table) continue;
       const rows = (shaped[key] || []).filter((item) => item?.id).map((item) => rowForCollection(key, item, userId));
       if (rows.length) {
@@ -1861,6 +2157,14 @@ class SupabaseStudentOsRepository {
     const userFilter = { user_id: `eq.${userId}` };
     const tables = [
       "account_deletion_reviews",
+      "recovery_previews",
+      "recovery_runs",
+      "topic_recovery_state_history",
+      "topic_recovery_states",
+      "academic_state_snapshots",
+      "academic_events",
+      "plan_versions",
+      "recovery_user_state",
       "role_invitations",
       "data_export_jobs",
       "data_export_requests",
@@ -2277,6 +2581,18 @@ export class StudentOsRepository {
 
   async saveState(session, state) {
     return this.useSupabase(session) ? this.supabase.saveState(session, state) : this.mock.saveState(session, state);
+  }
+
+  async saveRecoveryState(session, state) {
+    return this.useSupabase(session)
+      ? this.supabase.saveRecoveryState(session, state)
+      : this.mock.saveRecoveryState(session, state);
+  }
+
+  async applyRecoveryPreviewTransaction(session, request) {
+    return this.useSupabase(session)
+      ? this.supabase.applyRecoveryPreviewTransaction(session, request)
+      : this.mock.applyRecoveryPreviewTransaction(session, request);
   }
 
   async saveTestResultBundle(session, state) {

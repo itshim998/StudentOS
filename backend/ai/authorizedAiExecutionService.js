@@ -109,12 +109,24 @@ async function beginWithWait({ repository, session, allowanceRequest, requestFin
   return result;
 }
 
-async function executeLegacyOperation({ repository, session, allowanceRequest, run, isLogicalSuccess, logger }) {
+async function executeLegacyOperation({ repository, session, config, allowanceRequest, responseMode, fixedProviderOrder, fetchImpl, run, isLogicalSuccess, logger }) {
   const reservation = await repository.reserveAiWeeklyAllowance(session, allowanceRequest);
   if (!reservation.allowed) return { blocked: true, reservation, result: null, settlement: null, success: false };
   let result;
   try {
-    result = await run({ providerExecutor: runProviderFallback, routed: false });
+    const providerOrder = Array.isArray(fixedProviderOrder) && fixedProviderOrder.length
+      ? [...new Set(fixedProviderOrder)]
+      : null;
+    const providerExecutor = providerOrder
+      ? (providerRequest = {}) => runProviderFallback({
+          ...providerRequest,
+          responseMode: providerRequest.responseMode || responseMode,
+          providerOrder,
+          config,
+          fetchImpl: providerRequest.fetchImpl || fetchImpl,
+        })
+      : runProviderFallback;
+    result = await run({ providerExecutor, routed: false });
   } catch (error) {
     await repository.settleAiWeeklyAllowance(session, { requestId: allowanceRequest.requestId, status: "refunded" }).catch(() => null);
     throw error;
@@ -138,6 +150,7 @@ export async function executeAuthorizedAiOperation({
   requestFingerprint,
   workflow,
   responseMode = "text",
+  fixedProviderOrder = null,
   run,
   isLogicalSuccess,
   outcomeForReplay = (result) => result,
@@ -160,7 +173,7 @@ export async function executeAuthorizedAiOperation({
         }))
         .catch(() => null);
     }
-    return executeLegacyOperation({ repository, session, allowanceRequest, run, isLogicalSuccess, logger });
+    return executeLegacyOperation({ repository, session, config, allowanceRequest, responseMode, fixedProviderOrder, fetchImpl, run, isLogicalSuccess, logger });
   }
 
   const reservation = await beginWithWait({ repository, session, allowanceRequest, requestFingerprint, config });
@@ -186,7 +199,9 @@ export async function executeAuthorizedAiOperation({
   }
 
   const ordinal = Number(reservation.selectedOrdinal || reservation.successfulCount + 1);
-  const providerOrder = providerOrderForOrdinal(ordinal);
+  const providerOrder = Array.isArray(fixedProviderOrder) && fixedProviderOrder.length
+    ? [...new Set(fixedProviderOrder)]
+    : providerOrderForOrdinal(ordinal);
   const operationDeadline = Date.now() + Number(config.routing.operationTimeoutMs || 120_000);
   let latestProviderResult = null;
   const providerExecutor = async (providerRequest = {}) => {

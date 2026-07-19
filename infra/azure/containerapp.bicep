@@ -131,6 +131,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: 'false'
             }
             {
+              name: 'STUDENTOS_ADAPTIVE_RECOVERY_ENABLED'
+              value: 'false'
+            }
+            {
+              name: 'STUDENTOS_RECOVERY_PREVIEW_TTL_HOURS'
+              value: '24'
+            }
+            {
               name: 'STUDENTOS_DEMO_SEED_ENABLED'
               value: 'false'
             }

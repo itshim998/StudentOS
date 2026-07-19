@@ -60,6 +60,14 @@ export function buildDeletionDryRunReport(state, requestId, now = new Date()) {
     group("account_deletion_requests", "Deletion requests", state.accountDeletionRequests),
     group("account_deletion_reviews", "Deletion review history", state.accountDeletionReviews),
     group("role_invitations", "Role invitation groundwork", state.roleInvitations),
+    group("recovery_user_state", "Recovery engine state", state.recoveryUserStates),
+    group("academic_events", "Recovery academic events", state.academicEvents),
+    group("academic_state_snapshots", "Recovery academic snapshots", state.academicStateSnapshots),
+    group("topic_recovery_states", "Topic recovery states", state.topicRecoveryStates),
+    group("topic_recovery_state_history", "Topic recovery state history", state.topicRecoveryStateHistory),
+    group("recovery_runs", "Recovery analysis runs", state.recoveryRuns),
+    group("recovery_previews", "Recovery plan previews", state.recoveryPreviews),
+    group("plan_versions", "Recovery plan versions", state.planVersions),
   ];
   const storageObjects = [
     ...activeSources

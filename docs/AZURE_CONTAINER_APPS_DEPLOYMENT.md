@@ -98,6 +98,8 @@ Non-secret runtime values:
 - `STUDENTOS_SERVE_FRONTEND=false`
 - `STUDENTOS_MODE=supabase`
 - `STUDENTOS_BACKGROUND_WORKERS_ENABLED=false`
+- `STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false` until the recovery migration, API, and worker have been validated on all data shards
+- `STUDENTOS_RECOVERY_PREVIEW_TTL_HOURS=24`
 - `STUDENTOS_DEMO_SEED_ENABLED=false`
 - `STUDENTOS_GOOGLE_CLASSROOM_MODE=disabled`
 - `STUDENTOS_BILLING_PROVIDER=none`

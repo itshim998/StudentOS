@@ -1,5 +1,8 @@
 import { processBackgroundJob } from "./jobService.js";
 import { recordJobEvent, sanitizeLogText } from "./jobObservability.js";
+import { getRecoveryConfig } from "../recovery/recoveryConfig.js";
+import { processRecoveryRun } from "../recovery/recoveryEngineService.js";
+import { getAiProviderConfig } from "../ai/providerConfig.js";
 
 export function safeWorkerError(error) {
   return sanitizeLogText(error?.message || error || "worker_failed");
@@ -41,6 +44,17 @@ export async function processClaimedJob({ repository, config, listedJob }) {
       bucket: material.storageBucket,
       path: material.storagePath,
     }),
+    processRecovery: async ({ state: recoveryState, job: recoveryJob }) => {
+      const run = await processRecoveryRun({
+        repository,
+        session,
+        state: recoveryState,
+        runId: recoveryJob.payload?.runId || recoveryJob.sourceId,
+        config: getRecoveryConfig(),
+        providerConfig: getAiProviderConfig(),
+      });
+      return { recoveryRunId: run.id, recoveryStatus: run.status, previewId: run.previewId || null };
+    },
   });
   recordJobEvent(state, {
     job,

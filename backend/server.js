@@ -135,6 +135,20 @@ import {
   extractStudyAnswerSheet,
 } from "./ai/studyTestEvaluationService.js";
 import { getSafeAiProviderStatus, getAiProviderConfig } from "./ai/providerConfig.js";
+import { getRecoveryConfig } from "./recovery/recoveryConfig.js";
+import {
+  applyRecoveryPreview,
+  createCurrentPlanVersion,
+  publicRecoveryPreview,
+  publicRecoveryRun,
+  queueAutomaticRecovery,
+  queueRecoveryAnalysis,
+  rejectRecoveryPreview,
+} from "./recovery/recoveryEngineService.js";
+import { RecoveryAnalyzeInputSchema, EmptyRecoveryMutationSchema } from "./recovery/recoverySchemas.js";
+import { RECOVERY_FAILURES, RecoveryError, assertRecoveryEnabled, recoveryErrorEnvelope } from "./recovery/recoveryErrors.js";
+import { recordAcademicEvent } from "./recovery/academicStateBuilder.js";
+import { markRecoveryTaskProgress } from "./recovery/recoveryPolicy.js";
 import {
   AI_ALLOWANCE_COPY,
   buildPublicAiAllowance,
@@ -265,6 +279,7 @@ loadDotEnv({ cwd: ROOT });
 
 const supabaseConfig = getSupabaseEnvironment();
 const aiProviderConfig = getAiProviderConfig();
+const recoveryConfig = getRecoveryConfig();
 const embeddingConfig = getEmbeddingConfig();
 const billingProviderConfig = getBillingProviderConfig();
 const googleClassroomConfig = getGoogleClassroomConfig();
@@ -637,6 +652,12 @@ function publicState(state, persistence) {
     storagePlan: getSourceStoragePlan(supabaseConfig),
     internalMetricsHidden: true,
   };
+}
+
+async function readRecoveryBody(req, schema) {
+  const parsed = schema.safeParse(await readJsonBody(req));
+  if (parsed.success) return parsed.data;
+  throw new RecoveryError(RECOVERY_FAILURES.INPUT_INVALID, "Recovery request input is invalid.", { correlationId: req.requestId });
 }
 
 function getPublicAiStatus(config) {
@@ -1112,6 +1133,98 @@ function routedOperationBusyPayload(state, persistence, kind = "generated") {
 async function handleApi(req, res, url) {
   if (req.method === "OPTIONS") {
     sendJson(res, 204, {});
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/recovery/analyze") {
+    assertRecoveryEnabled(recoveryConfig, req.requestId);
+    const body = await readRecoveryBody(req, RecoveryAnalyzeInputSchema);
+    const { session, state } = await getStateContext(req);
+    requireAccountSession(session);
+    const queued = await queueRecoveryAnalysis({
+      repository,
+      session,
+      state,
+      input: body,
+      idempotencyKey: req.headers["idempotency-key"],
+      correlationId: req.requestId,
+      config: recoveryConfig,
+    });
+    sendJson(res, 202, {
+      runId: queued.run.id,
+      run: publicRecoveryRun(queued.run),
+      replayed: queued.replayed,
+      correlationId: req.requestId,
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  const recoveryRunMatch = url.pathname.match(/^\/api\/recovery\/runs\/([^/]+)$/);
+  if (req.method === "GET" && recoveryRunMatch) {
+    assertRecoveryEnabled(recoveryConfig, req.requestId);
+    const { session, state } = await getStateContext(req);
+    requireAccountSession(session);
+    const id = decodeURIComponent(recoveryRunMatch[1]);
+    const run = (state.recoveryRuns || []).find((item) => item.id === id && item.userId === session.user.id);
+    if (!run) throw new RecoveryError("RECOVERY_UNAUTHORIZED", "Recovery run is not available for this account.", { correlationId: req.requestId });
+    sendJson(res, 200, { run: publicRecoveryRun(run), correlationId: req.requestId, secretsPrinted: false });
+    return;
+  }
+
+  const recoveryPreviewMatch = url.pathname.match(/^\/api\/recovery\/previews\/([^/]+)$/);
+  if (req.method === "GET" && recoveryPreviewMatch) {
+    assertRecoveryEnabled(recoveryConfig, req.requestId);
+    const { session, state } = await getStateContext(req);
+    requireAccountSession(session);
+    const id = decodeURIComponent(recoveryPreviewMatch[1]);
+    const preview = (state.recoveryPreviews || []).find((item) => item.id === id && item.userId === session.user.id);
+    if (!preview) throw new RecoveryError("RECOVERY_UNAUTHORIZED", "Recovery preview is not available for this account.", { correlationId: req.requestId });
+    sendJson(res, 200, { preview: publicRecoveryPreview(preview, state), correlationId: req.requestId, secretsPrinted: false });
+    return;
+  }
+
+  const recoveryApplyMatch = url.pathname.match(/^\/api\/recovery\/previews\/([^/]+)\/apply$/);
+  if (req.method === "POST" && recoveryApplyMatch) {
+    assertRecoveryEnabled(recoveryConfig, req.requestId);
+    await readRecoveryBody(req, EmptyRecoveryMutationSchema);
+    const { session, state } = await getStateContext(req);
+    requireAccountSession(session);
+    const result = await applyRecoveryPreview({
+      repository,
+      session,
+      state,
+      previewId: decodeURIComponent(recoveryApplyMatch[1]),
+      idempotencyKey: req.headers["idempotency-key"],
+      config: recoveryConfig,
+      correlationId: req.requestId,
+    });
+    sendJson(res, 200, {
+      preview: publicRecoveryPreview(result.preview, state),
+      planVersion: result.planVersion ? { id: result.planVersion.id, version: result.planVersion.version } : null,
+      replayed: result.replayed,
+      correlationId: req.requestId,
+      secretsPrinted: false,
+    });
+    return;
+  }
+
+  const recoveryRejectMatch = url.pathname.match(/^\/api\/recovery\/previews\/([^/]+)\/reject$/);
+  if (req.method === "POST" && recoveryRejectMatch) {
+    assertRecoveryEnabled(recoveryConfig, req.requestId);
+    await readRecoveryBody(req, EmptyRecoveryMutationSchema);
+    const { session, state } = await getStateContext(req);
+    requireAccountSession(session);
+    const result = await rejectRecoveryPreview({
+      repository,
+      session,
+      state,
+      previewId: decodeURIComponent(recoveryRejectMatch[1]),
+      idempotencyKey: req.headers["idempotency-key"],
+      config: recoveryConfig,
+      correlationId: req.requestId,
+    });
+    sendJson(res, 200, { preview: publicRecoveryPreview(result.preview, state), replayed: result.replayed, correlationId: req.requestId, secretsPrinted: false });
     return;
   }
 
@@ -2009,7 +2122,16 @@ async function handleApi(req, res, url) {
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
     const exam = addManualExam(state, body);
-    await repository.saveState(session, state);
+    if (recoveryConfig.enabled) recordAcademicEvent(state, {
+      eventType: "exam_date_changed",
+      sourceEntityType: "exam",
+      sourceEntityId: exam.id,
+      idempotencyKey: `exam_created:${exam.id}`,
+      correlationId: req.requestId,
+      payload: { previousDate: null, newDate: exam.examDate || null },
+    });
+    if (recoveryConfig.enabled) queueAutomaticRecovery(state, { correlationId: req.requestId });
+    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
     sendJson(res, 201, {
       exam,
       state: publicState(state, persistence),
@@ -2024,11 +2146,24 @@ async function handleApi(req, res, url) {
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
     const examId = decodeURIComponent(manualExamPath[1]);
+    const previousExam = state.exams.find((item) => item.id === examId);
+    const previousDate = previousExam?.examDate || null;
     const exam = req.method === "PATCH"
       ? updateManualExam(state, examId, await readJsonBody(req))
       : removeManualExam(state, examId);
     if (req.method === "DELETE") await repository.deleteAcademicExam(session, examId);
-    await repository.saveState(session, state);
+    if (recoveryConfig.enabled && ((req.method === "PATCH" && previousDate !== exam?.examDate) || req.method === "DELETE")) {
+      recordAcademicEvent(state, {
+        eventType: "exam_date_changed",
+        sourceEntityType: "exam",
+        sourceEntityId: examId,
+        idempotencyKey: `exam_date:${examId}:${req.method === "DELETE" ? "removed" : exam?.examDate || "removed"}`,
+        correlationId: req.requestId,
+        payload: { previousDate, newDate: exam?.examDate || null },
+      });
+      queueAutomaticRecovery(state, { correlationId: req.requestId });
+    }
+    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
     sendJson(res, 200, {
       exam,
       state: publicState(state, persistence),
@@ -2133,9 +2268,24 @@ async function handleApi(req, res, url) {
       });
       return;
     }
+    const previousDailyPlan = state.studentProfile.dailyTodoPlan;
+    if (recoveryConfig.enabled && previousDailyPlan?.date && previousDailyPlan.date !== result.plan?.date) {
+      for (const item of (previousDailyPlan.items || []).filter((candidate) => !["done", "completed"].includes(candidate.study_status))) {
+        recordAcademicEvent(state, {
+          eventType: "study_task_missed",
+          sourceEntityType: "study_task",
+          sourceEntityId: item.id,
+          idempotencyKey: `task_rollover:${previousDailyPlan.date}:${result.plan?.date || "unknown"}:${item.id}`,
+          correlationId: req.requestId,
+          payload: { previousPlanDate: previousDailyPlan.date, nextPlanDate: result.plan?.date || null, courseId: item.courseId || null, topicId: item.topicId || null },
+        });
+      }
+      queueAutomaticRecovery(state, { correlationId: req.requestId });
+    }
     state.studentProfile.dailyTodoPlan = result.plan;
     markPlanningStateCurrent(state, result.plan);
-    await repository.saveState(session, state);
+    if (recoveryConfig.enabled) createCurrentPlanVersion(state, { source: "today_generation" });
+    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
     sendJson(res, 200, {
       generated: true,
       plan: result.plan,
@@ -2160,7 +2310,22 @@ async function handleApi(req, res, url) {
     let completion = null;
     if (body.status === "done") completion = completeCurrentMasteryTarget(state, item);
     else updateDailyTodoStudyStatus(state, body.itemId, body.status);
-    await repository.saveState(session, state);
+    if (recoveryConfig.enabled) {
+      markRecoveryTaskProgress(state, item, body.status);
+      if (body.status === "done") {
+        recordAcademicEvent(state, {
+          eventType: "study_task_completed",
+          sourceEntityType: "study_task",
+          sourceEntityId: item.id,
+          idempotencyKey: `study_task_completed:${item.id}`,
+          correlationId: req.requestId,
+          payload: { status: body.status, topicId: item.topicId || null, courseId: item.courseId || null },
+        });
+        queueAutomaticRecovery(state, { correlationId: req.requestId });
+      }
+      createCurrentPlanVersion(state, { source: "study_status_changed" });
+    }
+    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
     sendJson(res, 200, {
       item,
       completion,
@@ -2631,8 +2796,26 @@ async function handleApi(req, res, url) {
         });
         return;
       }
+      const assessedTopicIds = new Set((testSession.testPaper?.questions || []).map((question) => question.topic_id || question.topicId).filter(Boolean));
+      const priorEvidenceCount = (state.testResults || []).filter((testResult) => (testResult.topicEvidence || []).some((evidence) => assessedTopicIds.has(evidence.topicId))).length;
       applyStudyTestEvaluation({ state, item, session: testSession, evaluation: result.evaluation, answerSheet });
-      await repository.saveState(session, state);
+      if (recoveryConfig.enabled) {
+        const persistedResult = (state.testResults || []).find((testResult) => testResult.testSessionId === testSession.id);
+        recordAcademicEvent(state, {
+          eventType: priorEvidenceCount > 0 ? "reassessment_completed" : "assessment_completed",
+          sourceEntityType: "test_result",
+          sourceEntityId: persistedResult?.id || testSession.id,
+          idempotencyKey: `assessment:${persistedResult?.id || testSession.id}`,
+          correlationId: req.requestId,
+          payload: {
+            testSessionId: testSession.id,
+            testResultId: persistedResult?.id || null,
+            topicIds: (persistedResult?.topicEvidence || []).map((evidence) => evidence.topicId).filter(Boolean),
+          },
+        });
+        queueAutomaticRecovery(state, { correlationId: req.requestId });
+      }
+      await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
       sendJson(res, 200, {
         evaluated: true,
         testSession: publicTestSession(testSession),
@@ -2757,9 +2940,36 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
+    const previousSchedule = state.studentProfile?.preferences?.scheduleText || state.studentProfile?.preferences?.timetableText || "";
+    const previousAcademicProfile = JSON.stringify({
+      gradeBand: state.studentProfile?.gradeBand || null,
+      schoolSystem: state.studentProfile?.schoolSystem || null,
+      academicGoal: state.studentProfile?.preferences?.academicGoal || null,
+      dailyStudyAvailabilityMinutes: state.studentProfile?.preferences?.dailyStudyAvailabilityMinutes || null,
+      schedule: previousSchedule,
+    });
     const onboarding = applyStudentOnboarding(state, body);
     markAcademicContextNeedsPreparation(state, "profile_or_academic_context_updated");
-    await repository.saveState(session, state);
+    const nextSchedule = state.studentProfile?.preferences?.scheduleText || state.studentProfile?.preferences?.timetableText || "";
+    const nextAcademicProfile = JSON.stringify({
+      gradeBand: state.studentProfile?.gradeBand || null,
+      schoolSystem: state.studentProfile?.schoolSystem || null,
+      academicGoal: state.studentProfile?.preferences?.academicGoal || null,
+      dailyStudyAvailabilityMinutes: state.studentProfile?.preferences?.dailyStudyAvailabilityMinutes || null,
+      schedule: nextSchedule,
+    });
+    if (recoveryConfig.enabled && previousAcademicProfile !== nextAcademicProfile) {
+      recordAcademicEvent(state, {
+        eventType: previousSchedule !== nextSchedule ? "availability_changed" : "academic_context_updated",
+        sourceEntityType: "student_profile",
+        sourceEntityId: session.user.id,
+        idempotencyKey: `onboarding:${req.headers["idempotency-key"] || req.requestId}`,
+        correlationId: req.requestId,
+        payload: previousSchedule !== nextSchedule ? { availabilityChanged: true } : { contextUpdated: true },
+      });
+      queueAutomaticRecovery(state, { correlationId: req.requestId });
+    }
+    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
     sendJson(res, 200, {
       onboarding,
       state: publicState(state, persistence),
@@ -2773,7 +2983,18 @@ async function handleApi(req, res, url) {
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
     const course = addManualCourse(state, body);
-    await repository.saveState(session, state);
+    if (recoveryConfig.enabled) {
+      recordAcademicEvent(state, {
+        eventType: "academic_context_updated",
+        sourceEntityType: "course",
+        sourceEntityId: course.id,
+        idempotencyKey: `course_created:${course.id}`,
+        correlationId: req.requestId,
+        payload: { change: "created" },
+      });
+      queueAutomaticRecovery(state, { correlationId: req.requestId });
+    }
+    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
     sendJson(res, 201, {
       course,
       state: publicState(state, persistence),
@@ -2791,7 +3012,18 @@ async function handleApi(req, res, url) {
     const course = req.method === "PATCH"
       ? updateManualCourse(state, courseId, await readJsonBody(req))
       : archiveManualCourse(state, courseId);
-    await repository.saveState(session, state);
+    if (recoveryConfig.enabled) {
+      recordAcademicEvent(state, {
+        eventType: "academic_context_updated",
+        sourceEntityType: "course",
+        sourceEntityId: courseId,
+        idempotencyKey: `course_${req.method === "PATCH" ? "updated" : "archived"}:${courseId}:${course.updatedAt || req.requestId}`,
+        correlationId: req.requestId,
+        payload: { change: req.method === "PATCH" ? "updated" : "archived" },
+      });
+      queueAutomaticRecovery(state, { correlationId: req.requestId });
+    }
+    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
     sendJson(res, 200, {
       course,
       state: publicState(state, persistence),
@@ -3028,7 +3260,21 @@ async function handleApi(req, res, url) {
     if ((result.summary?.importedCourses || 0) + (result.summary?.updatedCourses || 0) > 0) {
       markAcademicContextNeedsPreparation(state, "classroom_courses_updated");
     }
-    await repository.saveState(session, state);
+    if (recoveryConfig.enabled) {
+      const meaningfulChanges = Number(result.summary?.importedAssignments || result.summary?.discoveredAssignments || 0) + Number(result.summary?.updatedAssignments || 0) + Number(result.summary?.importedCourses || 0) + Number(result.summary?.updatedCourses || 0);
+      if (meaningfulChanges > 0) {
+        recordAcademicEvent(state, {
+          eventType: "classroom_sync_completed",
+          sourceEntityType: "classroom_sync_run",
+          sourceEntityId: result.syncRun?.id || req.requestId,
+          idempotencyKey: `classroom_sync:${result.syncRun?.id || req.requestId}`,
+          correlationId: req.requestId,
+          payload: { meaningfulChanges, importedAssignments: result.summary?.importedAssignments || result.summary?.discoveredAssignments || 0, updatedAssignments: result.summary?.updatedAssignments || 0 },
+        });
+        queueAutomaticRecovery(state, { correlationId: req.requestId });
+      }
+    }
+    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
     sendJson(res, 200, {
       ...result,
       connector: publicClassroomConnector(result.connector),
@@ -3433,7 +3679,16 @@ async function handleApi(req, res, url) {
     const result = applyTestScore(state, body);
     markPlanningStateStale(state, "test_result_updated", { clearPlan: false });
     refreshAcademicRoadmap(state);
-    await repository.saveState(session, state);
+    if (recoveryConfig.enabled) recordAcademicEvent(state, {
+      eventType: "assessment_completed",
+      sourceEntityType: "test_result",
+      sourceEntityId: result?.testResult?.id || result?.id || req.requestId,
+      idempotencyKey: `legacy_assessment:${result?.testResult?.id || result?.id || req.requestId}`,
+      correlationId: req.requestId,
+      payload: { testResultId: result?.testResult?.id || result?.id || null },
+    });
+    if (recoveryConfig.enabled) queueAutomaticRecovery(state, { correlationId: req.requestId });
+    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
     sendJson(res, 200, result);
     return;
   }
@@ -3731,9 +3986,22 @@ async function handleApi(req, res, url) {
         },
         createdAt: new Date().toISOString(),
       });
+      if (recoveryConfig.enabled) {
+        recordAcademicEvent(state, {
+          eventType: assignment ? "assignment_deadline_changed" : "academic_context_updated",
+          sourceEntityType: assignment ? "assignment" : contract.kind,
+          sourceEntityId: assignment?.id || syllabus?.id || material.id,
+          idempotencyKey: `academic_context_upload:${material.id}`,
+          correlationId: req.requestId,
+          payload: assignment
+            ? { previousDueAt: null, newDueAt: assignment.dueAt || null, courseId: assignment.courseId || null }
+            : { contextKind: contract.kind, courseId: material.courseId || null },
+        });
+        queueAutomaticRecovery(state, { correlationId: req.requestId });
+      }
 
       uploadStage = "source_persist";
-      await runUploadStage(req, uploadStage, () => repository.saveSourceIngestion(session, state), {
+      await runUploadStage(req, uploadStage, () => recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveSourceIngestion(session, state), {
         timeoutMs: SOURCE_UPLOAD_STAGE_TIMEOUT_MS,
       });
       sendJson(res, 200, {
@@ -3849,7 +4117,18 @@ async function handleApi(req, res, url) {
       await repository.hardDeleteSourceArtifacts(session, { assignmentIds: assignmentIdsWithoutSource });
     }
     applyAcademicContextDeletion(state, deletionPlan);
-    await repository.saveState(session, state);
+    if (recoveryConfig.enabled) {
+      recordAcademicEvent(state, {
+        eventType: deletionPlan.assignmentIds?.length ? "assignment_deadline_changed" : "academic_context_updated",
+        sourceEntityType: deletionPlan.assignmentIds?.length ? "assignment" : deletionPlan.kind,
+        sourceEntityId: deletionPlan.itemId,
+        idempotencyKey: `academic_context_deleted:${deletionPlan.kind}:${deletionPlan.itemId}`,
+        correlationId: req.requestId,
+        payload: { removed: true, courseId: deletionPlan.courseId || null },
+      });
+      queueAutomaticRecovery(state, { correlationId: req.requestId });
+    }
+    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
     sendJson(res, 200, {
       deleted: true,
       hardDeleted: true,
@@ -4007,6 +4286,13 @@ const server = createServer(async (req, res) => {
       policy: error.policy,
       rateLimit: error.rateLimit,
     });
+    if (url.pathname.startsWith("/api/recovery/")) {
+      sendJson(res, error.status || 500, {
+        ...recoveryErrorEnvelope(error, requestId),
+        secretsPrinted: false,
+      });
+      return;
+    }
     if (url.pathname === "/api/ai/verb") {
       const setupRequired = /setup|dashboard|workspace/i.test(String(error.message || ""));
       const rateLimited = (error.status || 0) === 429;

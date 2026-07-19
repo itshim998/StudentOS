@@ -9,7 +9,7 @@ import {
 import { reindexSourceChunkEmbeddings } from "../embeddings/embeddingService.js";
 
 export const JOB_STATUSES = Object.freeze(["queued", "processing", "completed", "failed", "cancelled"]);
-export const JOB_TYPES = Object.freeze(["source_ingestion", "source_reindex", "embedding_reindex"]);
+export const JOB_TYPES = Object.freeze(["source_ingestion", "source_reindex", "embedding_reindex", "recovery_analysis"]);
 
 function nowIso() {
   return new Date().toISOString();
@@ -225,6 +225,7 @@ export async function processBackgroundJob({
   job,
   alreadyClaimed = false,
   downloadSourceBytes = null,
+  processRecovery = null,
 } = {}) {
   if (!job || job.status === "cancelled") {
     return { skipped: true, reason: "job_not_runnable" };
@@ -238,7 +239,10 @@ export async function processBackgroundJob({
   try {
     const result = job.jobType === "source_ingestion"
       ? await processSourceIngestionJob({ state, job, downloadSourceBytes })
-      : await processReindexJob({ state, job });
+      : job.jobType === "recovery_analysis"
+        ? await processRecovery?.({ state, job })
+        : await processReindexJob({ state, job });
+    if (job.jobType === "recovery_analysis" && typeof processRecovery !== "function") throw new Error("recovery_job_processor_unavailable");
     job.status = "completed";
     job.lastError = null;
     job.processedAt = nowIso();

@@ -149,6 +149,7 @@ const dangerousDefaults = [
   ["STUDENTOS_INTERNAL_OPS_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_BILLING_LIVE_CHARGES_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_BACKGROUND_WORKERS_ENABLED=false", envExample, envTemplate],
+  ["STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_AI_PROVIDER_CYCLE_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT=0", envExample, envTemplate],
 ];

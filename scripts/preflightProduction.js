@@ -13,6 +13,7 @@ import { getBillingCancellationConfig, getSafeBillingCancellationStatus } from "
 import { getMonitoringAlertConfig, getSafeMonitoringAlertStatus } from "../backend/monitoring/alertService.js";
 import { getGoogleClassroomConfig, getSafeGoogleClassroomStatus } from "../backend/connectors/googleClassroom/config.js";
 import { getProductFlowConfig } from "../backend/domain/productLifecycleService.js";
+import { getRecoveryConfig, getSafeRecoveryStatus } from "../backend/recovery/recoveryConfig.js";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
@@ -51,6 +52,7 @@ export function runProductionPreflight(env = process.env) {
   const billingCancellationConfig = getBillingCancellationConfig(env);
   const monitoringAlertConfig = getMonitoringAlertConfig(env);
   const classroomConfig = getGoogleClassroomConfig(env);
+  const recoveryConfig = getRecoveryConfig(env);
   const saasConfig = getSaasConfig({
     env,
     supabaseConfig,
@@ -74,6 +76,10 @@ export function runProductionPreflight(env = process.env) {
     readiness.warnings.push("production_google_classroom_token_encryption_secret_missing");
   }
   if (saasConfig.deployment === "production") {
+    if (recoveryConfig.enabled && String(env.STUDENTOS_BACKGROUND_WORKERS_ENABLED || "").toLowerCase() !== "true") {
+      readiness.errors.push("adaptive_recovery_requires_background_workers");
+      readiness.ok = false;
+    }
     if (classroomConfig.mode === "mock") {
       readiness.warnings.push("production_google_classroom_mock_mode_should_be_disabled_or_oauth");
     }
@@ -110,6 +116,7 @@ export function runProductionPreflight(env = process.env) {
     billingCancellationSafety: getSafeBillingCancellationStatus(billingCancellationConfig),
     monitoringAlerts: getSafeMonitoringAlertStatus(monitoringAlertConfig),
     googleClassroom: getSafeGoogleClassroomStatus(classroomConfig),
+    adaptiveRecovery: getSafeRecoveryStatus(recoveryConfig),
     productFlow: productFlowConfig,
     authRedirects: {
       signupCallbackPath: "/auth/callback",

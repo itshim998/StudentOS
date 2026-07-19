@@ -80,6 +80,14 @@ const LEARNING_STATE_ARRAYS = [
   "accountDeletionReviews",
   "roleInvitations",
   "classroomItems",
+  "recoveryUserStates",
+  "academicEvents",
+  "academicStateSnapshots",
+  "topicRecoveryStates",
+  "topicRecoveryStateHistory",
+  "recoveryRuns",
+  "recoveryPreviews",
+  "planVersions",
 ];
 
 export function normalizeLearningState(state = {}) {
