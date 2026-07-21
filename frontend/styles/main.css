@@ -5288,6 +5288,18 @@ textarea:focus-visible {
   background: linear-gradient(145deg, rgba(240, 246, 242, 0.96), rgba(255, 255, 255, 0.96));
 }
 
+.study-result-progress {
+  margin-top: 28px;
+}
+
+.study-result-progress > .eyebrow {
+  margin-bottom: 12px;
+}
+
+.study-result-progress .topic-mastery {
+  margin-top: 0;
+}
+
 .study-test-warning h4,
 .study-test-closed h4,
 .study-test-result h4 {

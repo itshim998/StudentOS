@@ -31,6 +31,7 @@ let academicContextPreparationPoll = null;
 let todayTodoGenerating = false;
 let todayTodoMessage = "";
 let selectedStudyItemId = null;
+let selectedStudyTestSessionId = null;
 let studyWorkspaceLoadingId = null;
 let studyQueueExpanded = false;
 let studyWorkspaceMessage = "";
@@ -45,6 +46,8 @@ const studyTestActionsInFlight = new Map();
 const STUDY_TEST_AUTOSAVE_DELAY_MS = 700;
 const STUDY_TEST_DRAFT_PREFIX = "studentos.study-test-draft.v1";
 const STUDY_TEST_OPERATION_PREFIX = "studentos.study-test-operation.v1";
+const STUDY_TEST_RESULT_ACK_PREFIX = "studentos.study-test-result-ack.v1";
+const acknowledgedStudyTestResultIds = new Set();
 const STUDY_TEST_SAVE_FAILURE_COPY = "Couldn\u2019t save yet. Your answers remain on this device.";
 const STUDY_TEST_SUBMIT_FAILURE_COPY = "We couldn\u2019t save your answers yet. They are still on this device. Check your connection and try again.";
 const STUDY_TEST_EVALUATION_FAILURE_COPY = "We couldn\u2019t evaluate this test yet. Your answers are safe. Please try again.";
@@ -209,6 +212,9 @@ function storeSession(session) {
   authSession = session?.access_token ? session : null;
   if ((authSession?.access_token || "") !== previousToken) {
     resetStudyTestSaveFlows();
+    selectedStudyItemId = null;
+    selectedStudyTestSessionId = null;
+    acknowledgedStudyTestResultIds.clear();
     state = null;
     accountSnapshot = null;
     bootstrapLoaded = false;
@@ -252,10 +258,15 @@ function studyTestOperationStorageKey(userId, sessionId, operation) {
   return `${studyTestStorageUserPrefix(STUDY_TEST_OPERATION_PREFIX, userId)}${encodeURIComponent(sessionId)}:${operation}`;
 }
 
+function studyTestResultAcknowledgementStorageKey(userId, sessionId) {
+  return `${studyTestStorageUserPrefix(STUDY_TEST_RESULT_ACK_PREFIX, userId)}${encodeURIComponent(sessionId)}`;
+}
+
 function clearStudyTestStorageForUser(userId) {
   const prefixes = [
     studyTestStorageUserPrefix(STUDY_TEST_DRAFT_PREFIX, userId),
     studyTestStorageUserPrefix(STUDY_TEST_OPERATION_PREFIX, userId),
+    studyTestStorageUserPrefix(STUDY_TEST_RESULT_ACK_PREFIX, userId),
   ];
   try {
     for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
@@ -264,6 +275,30 @@ function clearStudyTestStorageForUser(userId) {
     }
   } catch {
     // Private draft storage is a best-effort same-device safety net.
+  }
+}
+
+function isStudyTestResultAcknowledged(sessionId) {
+  if (!sessionId) return false;
+  if (acknowledgedStudyTestResultIds.has(sessionId)) return true;
+  const userId = authenticatedStudyTestUserId();
+  if (!userId) return false;
+  try {
+    return sessionStorage.getItem(studyTestResultAcknowledgementStorageKey(userId, sessionId)) === "acknowledged";
+  } catch {
+    return false;
+  }
+}
+
+function acknowledgeStudyTestResult(sessionId) {
+  if (!sessionId) return;
+  acknowledgedStudyTestResultIds.add(sessionId);
+  const userId = authenticatedStudyTestUserId();
+  if (!userId) return;
+  try {
+    sessionStorage.setItem(studyTestResultAcknowledgementStorageKey(userId, sessionId), "acknowledged");
+  } catch {
+    // In-memory acknowledgement still releases the result for this page.
   }
 }
 
@@ -3573,10 +3608,95 @@ function studyMaterialEmptyCopy(item) {
   return "Add a study handout or notes, or create a concise lesson for this task.";
 }
 
-function currentStudyTestSession(item) {
+const UNFINISHED_STUDY_TEST_STATUS_PRIORITY = new Map([
+  ["in_progress", 0],
+  ["submitted_pending_evaluation", 1],
+  ["ready_for_evaluation", 2],
+  ["time_expired", 3],
+  ["ready_to_start", 4],
+]);
+
+function studyTestSessionTimestamp(session) {
+  return Math.max(...[
+    session?.updatedAt,
+    session?.evaluatedAt,
+    session?.submittedAt,
+    session?.startedAt,
+    session?.generatedAt,
+    session?.createdAt,
+  ].map((value) => new Date(value || 0).getTime()).filter(Number.isFinite), 0);
+}
+
+function newestStudyTestSession(sessions) {
+  return [...sessions].sort((left, right) => {
+    const timestampDifference = studyTestSessionTimestamp(right) - studyTestSessionTimestamp(left);
+    return timestampDifference || String(right?.id || "").localeCompare(String(left?.id || ""));
+  })[0] || null;
+}
+
+function unfinishedStudyTestSessionForItem(item) {
+  if (!item) return null;
+  const sessions = (state?.testSessions || []).filter((session) => session.todoItemId === item.id && UNFINISHED_STUDY_TEST_STATUS_PRIORITY.has(session.status));
+  return [...sessions].sort((left, right) => {
+    const priorityDifference = UNFINISHED_STUDY_TEST_STATUS_PRIORITY.get(left.status) - UNFINISHED_STUDY_TEST_STATUS_PRIORITY.get(right.status);
+    return priorityDifference || studyTestSessionTimestamp(right) - studyTestSessionTimestamp(left) || String(right.id).localeCompare(String(left.id));
+  })[0] || null;
+}
+
+function presentedStudyTestSessionForItem(item) {
+  if (!item || !selectedStudyTestSessionId) return null;
+  const session = studyTestSessionById(selectedStudyTestSessionId);
+  if (session?.todoItemId !== item.id || session.status !== "evaluated" || !session.evaluation || isStudyTestResultAcknowledged(session.id)) return null;
+  return session;
+}
+
+function persistedStudyTestResultForItem(item) {
+  const session = studyTestSessionById(item?.test_session_id);
+  if (session?.todoItemId !== item?.id || session.status !== "evaluated" || !session.evaluation || isStudyTestResultAcknowledged(session.id)) return null;
+  return session;
+}
+
+function activeTopicStudyTestSessionForItem(item) {
   if (!item) return null;
   const topic = activeStudyMasteryTopic(item);
-  return (state.testSessions || []).find((session) => session.todoItemId === item.id && (!topic?.id || !session.parentTopicId || session.parentTopicId === topic.id)) || null;
+  const matches = (state?.testSessions || []).filter((session) => {
+    if (session.todoItemId !== item.id) return false;
+    if (topic?.id && session.parentTopicId && session.parentTopicId !== topic.id) return false;
+    return session.status !== "evaluated" || (session.evaluation && !isStudyTestResultAcknowledged(session.id));
+  });
+  return newestStudyTestSession(matches);
+}
+
+function resolveStudyTestSessionForWorkspace(item) {
+  return presentedStudyTestSessionForItem(item)
+    || unfinishedStudyTestSessionForItem(item)
+    || activeTopicStudyTestSessionForItem(item);
+}
+
+function restoreStudyTestResultPresentation(plan) {
+  if (!plan?.items?.length) return;
+  if (selectedStudyTestSessionId) {
+    const pinned = studyTestSessionById(selectedStudyTestSessionId);
+    if (!pinned || pinned.status !== "evaluated" || !pinned.evaluation || isStudyTestResultAcknowledged(pinned.id)) selectedStudyTestSessionId = null;
+  }
+  if (!selectedStudyItemId) {
+    const unfinished = newestStudyTestSession((state?.testSessions || []).filter((session) => (
+      plan.items.some((item) => item.id === session.todoItemId) && session.status === "in_progress"
+    )));
+    if (unfinished) selectedStudyItemId = unfinished.todoItemId;
+  }
+  if (!selectedStudyItemId) {
+    const candidates = plan.items.map((item) => ({ item, session: persistedStudyTestResultForItem(item) })).filter((entry) => entry.session);
+    candidates.sort((left, right) => studyTestSessionTimestamp(right.session) - studyTestSessionTimestamp(left.session) || String(right.session.id).localeCompare(String(left.session.id)));
+    if (candidates[0]) {
+      selectedStudyItemId = candidates[0].item.id;
+      selectedStudyTestSessionId = candidates[0].session.id;
+    }
+  }
+  const selected = plan.items.find((item) => item.id === selectedStudyItemId) || null;
+  if (!selected || presentedStudyTestSessionForItem(selected) || unfinishedStudyTestSessionForItem(selected)) return;
+  const persistedResult = persistedStudyTestResultForItem(selected);
+  if (persistedResult) selectedStudyTestSessionId = persistedResult.id;
 }
 
 function masteryStatusLabel(status) {
@@ -3788,7 +3908,7 @@ function studyTestResultMarkup(session) {
         <section><h5>What went well</h5><ul>${strengths.map((entry) => `<li>${renderAcademicInlineMarkup(entry)}</li>`).join("")}</ul></section>
         <section><h5>What to revise</h5><ul>${weakTopics.map((entry) => `<li>${renderAcademicInlineMarkup(entry)}</li>`).join("")}</ul></section>
       </div>
-      <section class="study-result-questions">
+      <section class="study-result-questions" tabindex="-1">
         <div class="study-result-section-heading"><p class="eyebrow">Corrections</p><h5>Question-by-question feedback</h5></div>
         ${result.question_results.map((question) => `
           <article class="study-result-question">
@@ -3879,6 +3999,7 @@ function renderStudyAndEvaluate() {
   const plan = currentStudyPlan();
   if (!plan?.items?.length) {
     selectedStudyItemId = null;
+    selectedStudyTestSessionId = null;
     studyWorkspaceLoadingId = null;
     els.studyEvaluateContent.innerHTML = `
       <section class="study-empty-state">
@@ -3889,17 +4010,15 @@ function renderStudyAndEvaluate() {
     `;
     return;
   }
-  if (!selectedStudyItemId) {
-    const activeSession = (state.testSessions || []).find((session) => session.status === "in_progress");
-    if (activeSession && plan.items.some((item) => item.id === activeSession.todoItemId)) selectedStudyItemId = activeSession.todoItemId;
-  }
   if (selectedStudyItemId && !plan.items.some((item) => item.id === selectedStudyItemId)) selectedStudyItemId = null;
+  restoreStudyTestResultPresentation(plan);
   const selected = plan.items.find((item) => item.id === selectedStudyItemId) || null;
   const isWorkspaceLoading = selected && studyWorkspaceLoadingId === selected.id;
   const masteryTarget = isWorkspaceLoading ? null : currentStudyMasteryTarget(selected);
   const activeTopic = masteryTarget?.topic || null;
   const material = isWorkspaceLoading ? null : relatedStudyMaterial(selected);
-  const testSession = isWorkspaceLoading ? null : currentStudyTestSession(selected);
+  const testSession = isWorkspaceLoading ? null : resolveStudyTestSessionForWorkspace(selected);
+  const presentedResult = Boolean(testSession?.status === "evaluated" && testSession.evaluation);
   const status = selected ? studyStatusLabel(selected.study_status) : "";
   const testReady = activeTopic?.status === "done" || (!activeTopic && selected?.study_status === "done");
   els.studyEvaluateContent.innerHTML = `
@@ -3932,8 +4051,13 @@ function renderStudyAndEvaluate() {
           </div>
           ${tag(status, selected.study_status === "done" ? "source" : selected.study_status === "studying" ? "medium" : "low")}
         </header>
-        ${topicMasteryChecklistMarkup(selected)}
-        ${testSession ? studyTestMarkup(testSession) : `
+        ${presentedResult ? studyTestMarkup(testSession) : topicMasteryChecklistMarkup(selected)}
+        ${presentedResult ? `
+          <section class="study-result-progress" aria-label="Updated topic progress">
+            <p class="eyebrow">Your topic progress has been updated.</p>
+            ${topicMasteryChecklistMarkup(selected)}
+          </section>
+        ` : testSession ? studyTestMarkup(testSession) : `
           <dl class="study-task-details">
             <div><dt>Course</dt><dd>${escapeHtml(selected.related_course || "Not specified")}</dd></div>
             <div><dt>Related context</dt><dd>${escapeHtml(friendlyContextLabel(selected))}</dd></div>
@@ -5901,7 +6025,24 @@ async function evaluateStudyTestAttempt(sessionId) {
       state = result.state || state;
       throw new Error(STUDY_TEST_EVALUATION_FAILURE_COPY);
     }
+    const selectedItemIdBeforeEvaluation = selectedStudyItemId;
     state = result.state || state;
+    const evaluatedSessionId = result.testSession?.id || sessionId;
+    const projectedSession = studyTestSessionById(evaluatedSessionId);
+    const authoritativeSession = {
+      ...(session || {}),
+      ...(projectedSession || {}),
+      ...(result.testSession || {}),
+      id: evaluatedSessionId,
+      status: "evaluated",
+      evaluation: result.testSession?.evaluation || result.evaluation || projectedSession?.evaluation,
+    };
+    state.testSessions = state.testSessions || [];
+    const projectedIndex = state.testSessions.findIndex((entry) => entry.id === evaluatedSessionId);
+    if (projectedIndex >= 0) state.testSessions[projectedIndex] = authoritativeSession;
+    else state.testSessions.push(authoritativeSession);
+    selectedStudyItemId = selectedItemIdBeforeEvaluation || authoritativeSession.todoItemId || null;
+    selectedStudyTestSessionId = evaluatedSessionId;
     clearStudyTestOperationKey(sessionId, "evaluate");
     studyWorkspaceMessage = result.message || "Your result is ready.";
     studyWorkspaceLoadingId = null;
@@ -5911,11 +6052,13 @@ async function evaluateStudyTestAttempt(sessionId) {
 }
 
 function continueStudyAndEvaluate() {
-  const items = currentStudyPlan()?.items || [];
-  const next = items.find((item) => currentStudyTestSession(item)?.status !== "evaluated") || null;
-  if (next) selectedStudyItemId = next.id;
+  const selected = currentStudyPlan()?.items?.find((item) => item.id === selectedStudyItemId) || null;
+  const presentedSession = presentedStudyTestSessionForItem(selected) || resolveStudyTestSessionForWorkspace(selected);
+  if (presentedSession?.status === "evaluated" && presentedSession.evaluation) acknowledgeStudyTestResult(presentedSession.id);
+  selectedStudyTestSessionId = null;
+  const nextTopic = activeStudyMasteryTopic(selected);
   studyWorkspaceLoadingId = null;
-  studyWorkspaceMessage = next ? "Choose the next step for this study item." : "Today’s Study and Evaluate items are complete.";
+  studyWorkspaceMessage = nextTopic?.status !== "done" ? "Choose the next step for this study item." : "Today’s Study and Evaluate items are complete.";
   renderStudyAndEvaluate();
 }
 
@@ -7066,7 +7209,9 @@ function wireEvents() {
     }
     const reviewCorrectionsButton = event.target.closest("[data-study-review-corrections]");
     if (reviewCorrectionsButton) {
-      els.studyEvaluateContent?.querySelector(".study-result-questions")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      const corrections = els.studyEvaluateContent?.querySelector(".study-result-questions");
+      corrections?.focus({ preventScroll: true });
+      corrections?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
     const continueStudyButton = event.target.closest("[data-study-continue]");
