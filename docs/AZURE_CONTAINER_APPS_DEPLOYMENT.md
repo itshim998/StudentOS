@@ -134,8 +134,9 @@ Backend-only secret values:
 - at least one Groq key is required for the production Ask StudentOS route: `GROQ_API_KEY` or any of `GROQ_API_KEY_1` through `GROQ_API_KEY_5`
 - `GROQ_API_KEY` is the backward-compatible single-key fallback
 - `GROQ_API_KEY_1` through `GROQ_API_KEY_5` are the preferred production key pool
-- `GEMINI_API_KEY_1` through `GEMINI_API_KEY_5` are required, distinct backend-only slots before cyclic routing is enabled
+- `GEMINI_API_KEY` or `GEMINI_API_KEY_1` through `GEMINI_API_KEY_5` provide backend-only Gemini fallback; all five distinct numbered slots are required only before cyclic routing is enabled
 - `POLLINATIONS_API_KEY` if Pollinations paid/authenticated mode is enabled
+- At least two enabled provider families must have credentials in production. `auto` mode attempts every configured provider rather than depending on Groq alone.
 - `STUDENTOS_EMBEDDING_API_KEY` if real embeddings are enabled
 - billing provider secrets only after a billing launch review
 - operator/internal/deletion secrets only after an internal-ops launch review

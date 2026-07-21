@@ -185,16 +185,36 @@ export async function generateStudyTest({ state, item, now = new Date(), provide
   if (["mock", "bridge"].includes(providerConfig.requestedMode)) {
     paper = buildDeterministicTestPaper({ state, item });
   } else {
-    const result = await providerExecutor({ messages: testGenerationMessages(context), config: providerConfig, fetchImpl, responseMode: "json" });
-    if (result.providerFailure || !result.text) return { generationSucceeded: false, session: null };
-    paper = normalizeTestPaper(parseJsonObject(result.text), {
+    const fallback = {
       test_title: `${context.item.topic || context.item.title} check`,
       course: context.item.course,
       topic: context.item.topic,
+    };
+    const result = await providerExecutor({
+      messages: testGenerationMessages(context),
+      config: providerConfig,
+      fetchImpl,
+      responseMode: "json",
+      validateOutput: (providerResult) => {
+        const normalized = normalizeTestPaper(parseJsonObject(providerResult?.text), fallback);
+        if (!normalized) throw new Error("invalid_study_test_output");
+        return normalized;
+      },
     });
+    const providerRouting = {
+      providerFailure: result.providerFailure === true,
+      invalidOutputSeen: result.invalidOutputSeen === true,
+      fallbackReason: clean(result.fallbackReason, 500) || null,
+      attempts: Array.isArray(result.attempts) ? result.attempts : [],
+    };
+    if (result.providerFailure || !result.text) {
+      return { generationSucceeded: false, session: null, failureCode: result.invalidOutputSeen ? "invalid_provider_output" : "provider_unavailable", providerRouting };
+    }
+    paper = result.validatedOutput || normalizeTestPaper(parseJsonObject(result.text), fallback);
+    if (!paper) return { generationSucceeded: false, session: null, failureCode: "invalid_provider_output", providerRouting };
   }
   paper = normalizeTestPaper(paper, { course: context.item.course, topic: context.item.topic });
-  if (!paper) return { generationSucceeded: false, session: null };
+  if (!paper) return { generationSucceeded: false, session: null, failureCode: "invalid_test_paper" };
   const lockedTopic = clean(context.strictSyllabusBoundary?.parentTopic || context.item.topic, 240) || paper.topic;
   paper.topic = lockedTopic;
   paper.course = context.item.course || paper.course;

@@ -118,6 +118,7 @@ jobs:
           GROQ_API_KEY_3: ${{ secrets.GROQ_API_KEY_3 }}
           GROQ_API_KEY_4: ${{ secrets.GROQ_API_KEY_4 }}
           GROQ_API_KEY_5: ${{ secrets.GROQ_API_KEY_5 }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
           GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
@@ -201,6 +202,7 @@ jobs:
           GROQ_API_KEY_3: ${{ secrets.GROQ_API_KEY_3 }}
           GROQ_API_KEY_4: ${{ secrets.GROQ_API_KEY_4 }}
           GROQ_API_KEY_5: ${{ secrets.GROQ_API_KEY_5 }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
           GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
@@ -252,6 +254,7 @@ jobs:
             add_optional_provider_secret GROQ_API_KEY_3 groq-api-key-3
             add_optional_provider_secret GROQ_API_KEY_4 groq-api-key-4
             add_optional_provider_secret GROQ_API_KEY_5 groq-api-key-5
+            add_optional_provider_secret GEMINI_API_KEY gemini-api-key
             add_optional_provider_secret GEMINI_API_KEY_1 gemini-api-key-1
             add_optional_provider_secret GEMINI_API_KEY_2 gemini-api-key-2
             add_optional_provider_secret GEMINI_API_KEY_3 gemini-api-key-3

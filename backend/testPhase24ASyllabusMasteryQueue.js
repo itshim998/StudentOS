@@ -193,6 +193,53 @@ assert.equal(providerGeneratedTest.session.testPaper.course, "Mathematics");
 assert.equal(providerGeneratedTest.session.testPaper.test_title, "Matrix decomposition and systems of linear & non-linear equations check");
 assert.match(testProviderPayload.messages[0].content, /Do not rename the topic/);
 assert.match(testProviderPayload.messages[0].content, /Use clean Markdown in question prompts/);
+
+const fallbackCalls = [];
+const providerFallbackTest = await generateStudyTest({
+  state: structuredClone(state),
+  item: structuredClone(item),
+  now,
+  providerConfig: {
+    requestedMode: "auto",
+    routing: { providers: { groq: true, gemini: true, pollinations: true } },
+    groq: {
+      configured: true,
+      keys: [{ name: "groq-test", value: "groq-test-key", index: 1 }],
+      model: "test-model",
+      endpoint: "https://groq.example.invalid/v1/chat/completions",
+      maxCompletionTokens: 2000,
+      reasoningEffort: null,
+      timeoutMs: 2000,
+    },
+    gemini: {
+      configured: true,
+      keys: [{ name: "gemini-test", value: "gemini-test-key", index: 1 }],
+      model: "test-model",
+      apiBase: "https://gemini.example.invalid/v1beta",
+      maxCompletionTokens: 2000,
+      timeoutMs: 2000,
+    },
+    pollinations: { configured: false },
+  },
+  fetchImpl: async (url) => {
+    if (url.includes("groq.example.invalid")) {
+      fallbackCalls.push("groq");
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ test_title: "Missing questions" }) }, finish_reason: "stop" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    fallbackCalls.push("gemini");
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({
+      test_title: "Valid fallback test",
+      course: "Mathematics",
+      topic: "Matrix decomposition and systems of linear & non-linear equations",
+      estimated_minutes: 20,
+      instructions: ["Answer every question."],
+      questions: [{ question_number: 1, type: "short_answer", prompt: "Explain LU decomposition.", marks: 5 }],
+    }) }] }, finishReason: "STOP" }] }), { status: 200, headers: { "content-type": "application/json" } });
+  },
+});
+assert.equal(providerFallbackTest.generationSucceeded, true);
+assert.deepEqual(fallbackCalls, ["groq", "gemini"]);
+assert.equal(providerFallbackTest.session.testPaper.questions.length, 1);
 state.testSessions.push(generatedTest.session);
 
 applyStudyTestEvaluation({

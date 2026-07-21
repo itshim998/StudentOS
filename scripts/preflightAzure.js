@@ -239,12 +239,12 @@ addCheck(
 addCheck(
   "Gemini runtime env names map to ACA-safe secret refs",
   AZURE_GEMINI_SECRET_MAPPINGS.every(({ envName, secretName }) =>
-    /^GEMINI_API_KEY_[1-5]$/.test(envName) &&
+    /^GEMINI_API_KEY(?:_[1-5])?$/.test(envName) &&
       isAzureContainerAppSafeSecretName(secretName) &&
       !/[A-Z_]/.test(secretName)),
 );
 addCheck(
-  "workflow accepts all five Gemini secrets",
+  "workflow accepts legacy and all five Gemini secrets",
   AZURE_GEMINI_SECRET_NAMES.every((name) => workflow.includes(`${name}: \${{ secrets.${name} }}`)),
 );
 addCheck(
@@ -305,6 +305,16 @@ addCheck("Azure cyclic provider validation requires Pollinations authentication"
   GEMINI_API_KEY_4: "gemini-slot-4",
   GEMINI_API_KEY_5: "gemini-slot-5",
 }).ok);
+const redundantAutoProviderValidation = validateAzureAiProviderSecrets({
+  STUDENTOS_AI_MODE: "auto",
+  GROQ_API_KEY_1: "groq-slot-1",
+  GEMINI_API_KEY: "gemini-slot-1",
+});
+const singleAutoProviderValidation = validateAzureAiProviderSecrets({
+  STUDENTOS_AI_MODE: "auto",
+  GROQ_API_KEY_1: "groq-slot-1",
+});
+addCheck("Azure auto provider validation requires redundant provider families", redundantAutoProviderValidation.ok && !singleAutoProviderValidation.ok && singleAutoProviderValidation.errorCode === "provider_redundancy_required");
 addCheck("Azure provider validation never returns secret values", !JSON.stringify([cycleProviderValidation, incompleteCycleProviderValidation]).includes("slot-"));
 addCheck("workflow configures production storage buckets", workflow.includes("STUDENTOS_STORAGE_BUCKET=studentos-source-materials") && workflow.includes("STUDENTOS_EXPORT_STORAGE_BUCKET=studentos-data-exports"));
 const runtimeConfigText = `${read("frontend/runtime-config.js")}\n${read("scripts/writeCloudflareFrontendConfig.js")}`;

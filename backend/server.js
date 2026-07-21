@@ -801,11 +801,17 @@ async function persistRecoveryAwareMutation({ repository, session, state, baseli
 }
 
 function getPublicAiStatus(config) {
-  const realConfigured = Boolean(config?.groq?.configured || config?.gemini?.configured || config?.pollinations?.configured);
+  const configuredProviders = [
+    config?.groq?.enabled !== false && config?.groq?.configured ? "groq" : null,
+    config?.gemini?.enabled !== false && config?.gemini?.configured ? "gemini" : null,
+    config?.pollinations?.enabled !== false && config?.pollinations?.configured ? "pollinations" : null,
+  ].filter(Boolean);
   return {
     label: "StudentOS AI",
-    configured: realConfigured,
-    fallbackAvailable: true,
+    configured: configuredProviders.length > 0,
+    configuredProviderCount: configuredProviders.length,
+    configuredProviders,
+    fallbackAvailable: configuredProviders.length > 1,
     secretsExposed: false,
   };
 }
@@ -2716,6 +2722,12 @@ async function handleApi(req, res, url) {
     const generated = execution.success === true;
     const weeklyAiHelp = weeklyAiHelpForExecution({ execution, allowance, creditCost: task.creditCost, refreshesAt: period.refreshesAt });
     if (!generated) {
+      logger.warn("study_test.generation_failed", {
+        requestId: req.requestId,
+        failureCode: result.failureCode || "provider_unavailable",
+        attempts: result.providerRouting?.attempts || [],
+        invalidOutputSeen: result.providerRouting?.invalidOutputSeen === true,
+      });
       sendJson(res, 200, {
         generated: false,
         retryable: true,

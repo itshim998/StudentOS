@@ -103,6 +103,26 @@ assert.equal(geminiBody.generationConfig.responseMimeType, "application/json");
 assert.equal(buildGeminiRequestBody({ messages: [{ role: "system", content: "Rules" }, { role: "user", content: "Question" }], maxTokens: 20, safeRewrite: true }).contents[0].parts[0].text, "Rules\n\nQuestion");
 
 resetProviderRuntimeForTests();
+const autoFallbackCalls = [];
+const autoFallback = await runProviderFallback({
+  messages: [{ role: "user", content: "auto fallback" }],
+  config: getAiProviderConfig({
+    STUDENTOS_AI_MODE: "auto",
+    GROQ_API_KEY_1: "groq-test-key-1",
+    GEMINI_API_KEY: "gemini-test-key-1",
+    POLLINATIONS_API_KEY: "pollinations-test-key-1",
+  }),
+  fetchImpl: async (url) => {
+    const provider = url.includes("groq") ? "groq" : url.includes("googleapis") ? "gemini" : "pollinations";
+    autoFallbackCalls.push(provider);
+    if (provider === "groq") return response({ error: { message: "temporary" } }, 503);
+    return response({ candidates: [{ content: { parts: [{ text: "Gemini auto fallback" }] }, finishReason: "STOP" }] });
+  },
+});
+assert.equal(autoFallback.providerCode, "gemini");
+assert.deepEqual(autoFallbackCalls, ["groq", "gemini"]);
+
+resetProviderRuntimeForTests();
 const geminiBodies = [];
 const geminiProvider = new GeminiTextProvider({
   config: getAiProviderConfig(providerEnv()),
@@ -372,6 +392,17 @@ const azureCycleReady = validateAzureAiProviderSecrets({
 assert.equal(azureCycleReady.ok, true);
 assert.equal(azureCycleReady.geminiDistinctKeyCount, 5);
 assert.equal(JSON.stringify(azureCycleReady).includes("test-key"), false);
+const azureAutoRedundant = validateAzureAiProviderSecrets({
+  STUDENTOS_AI_MODE: "auto",
+  GROQ_API_KEY_1: "groq-test-key-1",
+  GEMINI_API_KEY: "gemini-test-key-1",
+});
+assert.equal(azureAutoRedundant.ok, true);
+assert.equal(azureAutoRedundant.fallbackReady, true);
+assert.deepEqual(azureAutoRedundant.configuredProviders, ["groq", "gemini"]);
+const azureAutoSingleProvider = validateAzureAiProviderSecrets({ STUDENTOS_AI_MODE: "auto", GROQ_API_KEY_1: "groq-test-key-1" });
+assert.equal(azureAutoSingleProvider.ok, false);
+assert.equal(azureAutoSingleProvider.errorCode, "provider_redundancy_required");
 
 const migration = await readFile(new URL("../supabase/migrations/202607130001_studentos_multi_provider_routing.sql", import.meta.url), "utf8");
 for (const marker of [

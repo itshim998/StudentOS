@@ -466,10 +466,11 @@ function legacyProviderOrder(config) {
   if (requested === "gemini") return [PROVIDER_CODES.gemini];
   if (requested === "pollinations") return [PROVIDER_CODES.pollinations];
   if (requested === "mock") return [];
-  return [PROVIDER_CODES.groq, PROVIDER_CODES.pollinations];
+  return [PROVIDER_CODES.groq, PROVIDER_CODES.gemini, PROVIDER_CODES.pollinations];
 }
 
 function createProvider(code, options) {
+  if (!options?.config?.[code]) return null;
   if (code === PROVIDER_CODES.groq) return new GroqGroundedProvider(options);
   if (code === PROVIDER_CODES.gemini) return new GeminiTextProvider(options);
   if (code === PROVIDER_CODES.pollinations) return new PollinationsTextProvider(options);

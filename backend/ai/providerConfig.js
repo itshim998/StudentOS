@@ -120,8 +120,16 @@ export function getAiProviderConfig(env = process.env) {
 }
 
 export function getSafeAiProviderStatus(config = getAiProviderConfig()) {
+  const configuredProviders = [
+    config.groq.enabled !== false && config.groq.configured ? "groq" : null,
+    config.gemini.enabled !== false && config.gemini.configured ? "gemini" : null,
+    config.pollinations.enabled !== false && config.pollinations.configured ? "pollinations" : null,
+  ].filter(Boolean);
   return {
     requestedMode: config.requestedMode,
+    configuredProviders,
+    configuredProviderCount: configuredProviders.length,
+    fallbackAvailable: configuredProviders.length > 1,
     routing: {
       enabled: config.routing.enabled,
       shadow: config.routing.shadow,
@@ -146,7 +154,7 @@ export function getSafeAiProviderStatus(config = getAiProviderConfig()) {
       imageModel: config.pollinations.imageModel,
       imageProviderScaffolded: true,
     },
-    fallbackOrder: ["groq", "gemini", "pollinations", "mock"],
+    fallbackOrder: ["groq", "gemini", "pollinations"],
     secretsExposed: false,
   };
 }

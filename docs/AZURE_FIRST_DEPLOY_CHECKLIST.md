@@ -97,7 +97,7 @@ Configure these without values in documentation or commits:
 - `GHCR_PULL_TOKEN`
 - `GROQ_API_KEY`
 
-For the minimum configuration, add `GROQ_API_KEY` to the `azure-dev` GitHub environment. For the recommended pool, set `GROQ_API_KEY` to the same value as `GROQ_API_KEY_1`, then add `GROQ_API_KEY_1` through `GROQ_API_KEY_5`. The workflow accepts any one of these Groq secrets, maps only non-empty values, and does not require all five numbered keys. `POLLINATIONS_API_KEY` remains optional.
+Production requires credentials for at least two enabled provider families so StudentOS cannot depend on one provider. Configure Groq with `GROQ_API_KEY` or `GROQ_API_KEY_1` through `GROQ_API_KEY_5`, then configure either `GEMINI_API_KEY`/`GEMINI_API_KEY_1` through `GEMINI_API_KEY_5` or `POLLINATIONS_API_KEY`. The workflow maps only non-empty secrets. In `auto` mode every configured provider participates in fallback in the order Groq, Gemini, Pollinations.
 
 Keep `STUDENTOS_AI_PROVIDER_CYCLE_ENABLED=false` and rollout percent `0` for the first deployment. Before a cyclic-routing canary, add five distinct `GEMINI_API_KEY_1` through `GEMINI_API_KEY_5` secrets plus `POLLINATIONS_API_KEY`; the workflow will fail closed if any cyclic provider is incomplete.
 
