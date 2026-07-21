@@ -277,6 +277,7 @@ test.beforeAll(async () => {
       STUDENTOS_AI_MODE: "mock",
       STUDENTOS_RATE_LIMIT_ENABLED: "false",
       STUDENTOS_QUOTA_ENFORCEMENT: "false",
+      STUDENTOS_TIER_OPERATIONAL: "false",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
