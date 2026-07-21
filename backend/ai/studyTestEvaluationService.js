@@ -224,11 +224,8 @@ function evaluationMessages({ state, item, session, answerSheetText }) {
 
 function parseJsonObject(text) {
   const value = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const start = value.indexOf("{");
-  const end = value.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
   try {
-    return JSON.parse(value.slice(start, end + 1));
+    return JSON.parse(value);
   } catch {
     return null;
   }
@@ -250,9 +247,19 @@ export async function evaluateStudyTest({ state, item, session, answerSheetText 
   if (["mock", "bridge"].includes(providerConfig.requestedMode)) {
     evaluation = buildDeterministicTestEvaluation({ session, answerSheetText });
   } else {
-    const result = await providerExecutor({ messages: evaluationMessages({ state, item, session, answerSheetText }), config: providerConfig, fetchImpl, responseMode: "json" });
+    const result = await providerExecutor({
+      messages: evaluationMessages({ state, item, session, answerSheetText }),
+      config: providerConfig,
+      fetchImpl,
+      responseMode: "json",
+      validateOutput: (providerResult) => {
+        const normalized = normalizeTestEvaluation(parseJsonObject(providerResult?.text), session.testPaper);
+        if (!normalized) throw new Error("invalid_test_evaluation_output");
+        return normalized;
+      },
+    });
     if (result.providerFailure || !result.text) return { evaluationSucceeded: false, evaluation: null };
-    evaluation = normalizeTestEvaluation(parseJsonObject(result.text), session.testPaper);
+    evaluation = result.validatedOutput || normalizeTestEvaluation(parseJsonObject(result.text), session.testPaper);
   }
   return { evaluationSucceeded: Boolean(evaluation), evaluation: evaluation || null, reused: false };
 }

@@ -271,7 +271,7 @@ export function queueAutomaticRecovery(state, { correlationId = null, now = new 
   return run;
 }
 
-async function reasonAboutRecovery({ repository, session, state, run, snapshot, events, providerConfig, fetchImpl, logger, now, executeAiOperation }) {
+async function reasonAboutRecovery({ repository, session, state, run, snapshot, events, providerConfig, fetchImpl, logger, now, executeAiOperation, signal = null }) {
   const context = buildEvidenceContext(snapshot, events);
   if (!context.syllabusTopics.length && !context.assignments.length && !context.exams.length && !context.unfinishedTasks.length) {
     throw new RecoveryError(RECOVERY_FAILURES.CONTEXT_INSUFFICIENT, "StudentOS does not yet have enough academic context for recovery analysis.", { correlationId: run.correlationId });
@@ -292,6 +292,7 @@ async function reasonAboutRecovery({ repository, session, state, run, snapshot, 
     storeFailedOutcome: false,
     requestFingerprint: fingerprintAiOperation({ workflow: "adaptive_recovery_reasoning", snapshot: snapshot.fingerprint }),
     fetchImpl,
+    signal,
     allowanceRequest: {
       planTier: activePlanKey,
       periodKey: period.periodKey,
@@ -354,6 +355,7 @@ export async function processRecoveryRun({
   now = new Date(),
   executeAiOperation = executeAuthorizedAiOperation,
   jobAttempt = null,
+  signal = null,
 } = {}) {
   assertRecoveryEnabled(config);
   ensureRecoveryCollections(state);
@@ -387,7 +389,7 @@ export async function processRecoveryRun({
       academicStateSnapshots: built.reused ? [] : [snapshot],
       recoveryRuns: [run],
     });
-    const providerResult = await reasonAboutRecovery({ repository, session, state, run, snapshot, events, providerConfig, fetchImpl, logger, now, executeAiOperation });
+    const providerResult = await reasonAboutRecovery({ repository, session, state, run, snapshot, events, providerConfig, fetchImpl, logger, now, executeAiOperation, signal });
     run.providerRouting = providerResult.providerRouting;
     run.providerAttempts = run.providerRouting?.attempts || [];
     transitionRun(run, "validating", now);

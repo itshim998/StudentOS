@@ -130,11 +130,8 @@ function testGenerationMessages(context) {
 
 function parseJsonObject(text) {
   const value = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const start = value.indexOf("{");
-  const end = value.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
   try {
-    return JSON.parse(value.slice(start, end + 1));
+    return JSON.parse(value);
   } catch {
     return null;
   }

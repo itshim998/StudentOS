@@ -124,14 +124,22 @@ jobs:
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
           GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_6: ${{ secrets.GEMINI_API_KEY_6 }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_API_KEY_1: ${{ secrets.NVIDIA_API_KEY_1 }}
+          NVIDIA_API_KEY_2: ${{ secrets.NVIDIA_API_KEY_2 }}
+          NVIDIA_API_KEY_3: ${{ secrets.NVIDIA_API_KEY_3 }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
           STUDENTOS_BACKGROUND_WORKERS_ENABLED: 'true'
           STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: 'false'
           STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ENABLED || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_SHADOW: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_SHADOW || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT || '0' }}
+          STUDENTOS_AI_ROUTER_V2_ENABLED: ${{ vars.STUDENTOS_AI_ROUTER_V2_ENABLED || 'false' }}
+          STUDENTOS_AI_ROUTER_V2_ROLLOUT_PERCENT: ${{ vars.STUDENTOS_AI_ROUTER_V2_ROLLOUT_PERCENT || '0' }}
           STUDENTOS_AI_GROQ_ENABLED: ${{ vars.STUDENTOS_AI_GROQ_ENABLED || 'true' }}
           STUDENTOS_AI_GEMINI_ENABLED: ${{ vars.STUDENTOS_AI_GEMINI_ENABLED || 'true' }}
+          STUDENTOS_AI_NVIDIA_ENABLED: ${{ vars.STUDENTOS_AI_NVIDIA_ENABLED || 'false' }}
           STUDENTOS_AI_POLLINATIONS_ENABLED: ${{ vars.STUDENTOS_AI_POLLINATIONS_ENABLED || 'true' }}
         run: |
           missing=()
@@ -156,6 +164,13 @@ jobs:
           fi
           echo "Required backend runtime secret names are configured."
           node scripts/validateAzureAiProviderSecrets.js
+          if [ "$STUDENTOS_AI_ROUTER_V2_ENABLED" = "true" ]; then
+            node scripts/verifyAiRouterV2Config.js --live-registries
+            node scripts/verifyAiRouterV2Migrations.js --live
+          else
+            node scripts/verifyAiRouterV2Config.js
+            node scripts/verifyAiRouterV2Migrations.js
+          fi
 
       - name: Deploy Container App infrastructure
         uses: azure/cli@v2
@@ -208,14 +223,22 @@ jobs:
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
           GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_6: ${{ secrets.GEMINI_API_KEY_6 }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_API_KEY_1: ${{ secrets.NVIDIA_API_KEY_1 }}
+          NVIDIA_API_KEY_2: ${{ secrets.NVIDIA_API_KEY_2 }}
+          NVIDIA_API_KEY_3: ${{ secrets.NVIDIA_API_KEY_3 }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
           STUDENTOS_BACKGROUND_WORKERS_ENABLED: 'true'
           STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: 'false'
           STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ENABLED || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_SHADOW: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_SHADOW || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT || '0' }}
+          STUDENTOS_AI_ROUTER_V2_ENABLED: ${{ vars.STUDENTOS_AI_ROUTER_V2_ENABLED || 'false' }}
+          STUDENTOS_AI_ROUTER_V2_ROLLOUT_PERCENT: ${{ vars.STUDENTOS_AI_ROUTER_V2_ROLLOUT_PERCENT || '0' }}
           STUDENTOS_AI_GROQ_ENABLED: ${{ vars.STUDENTOS_AI_GROQ_ENABLED || 'true' }}
           STUDENTOS_AI_GEMINI_ENABLED: ${{ vars.STUDENTOS_AI_GEMINI_ENABLED || 'true' }}
+          STUDENTOS_AI_NVIDIA_ENABLED: ${{ vars.STUDENTOS_AI_NVIDIA_ENABLED || 'false' }}
           STUDENTOS_AI_POLLINATIONS_ENABLED: ${{ vars.STUDENTOS_AI_POLLINATIONS_ENABLED || 'true' }}
         with:
           inlineScript: |
@@ -260,6 +283,11 @@ jobs:
             add_optional_provider_secret GEMINI_API_KEY_3 gemini-api-key-3
             add_optional_provider_secret GEMINI_API_KEY_4 gemini-api-key-4
             add_optional_provider_secret GEMINI_API_KEY_5 gemini-api-key-5
+            add_optional_provider_secret GEMINI_API_KEY_6 gemini-api-key-6
+            add_optional_provider_secret NVIDIA_API_KEY nvidia-api-key
+            add_optional_provider_secret NVIDIA_API_KEY_1 nvidia-api-key-1
+            add_optional_provider_secret NVIDIA_API_KEY_2 nvidia-api-key-2
+            add_optional_provider_secret NVIDIA_API_KEY_3 nvidia-api-key-3
             add_optional_provider_secret POLLINATIONS_API_KEY pollinations-api-key
 
             # run_redacted_az_step containerapp_secret_set is applied independently to both apps.
@@ -303,11 +331,20 @@ jobs:
                 STUDENTOS_AI_PROVIDER_CYCLE_ENABLED="$STUDENTOS_AI_PROVIDER_CYCLE_ENABLED" \
                 STUDENTOS_AI_PROVIDER_CYCLE_SHADOW="$STUDENTOS_AI_PROVIDER_CYCLE_SHADOW" \
                 STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT="$STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT" \
+                STUDENTOS_AI_ROUTER_V2_ENABLED="$STUDENTOS_AI_ROUTER_V2_ENABLED" \
+                STUDENTOS_AI_ROUTER_V2_ROLLOUT_PERCENT="$STUDENTOS_AI_ROUTER_V2_ROLLOUT_PERCENT" \
                 STUDENTOS_AI_GROQ_ENABLED="$STUDENTOS_AI_GROQ_ENABLED" \
                 STUDENTOS_AI_GEMINI_ENABLED="$STUDENTOS_AI_GEMINI_ENABLED" \
+                STUDENTOS_AI_NVIDIA_ENABLED="$STUDENTOS_AI_NVIDIA_ENABLED" \
                 STUDENTOS_AI_POLLINATIONS_ENABLED="$STUDENTOS_AI_POLLINATIONS_ENABLED" \
                 STUDENTOS_AI_LOGICAL_OPERATION_TIMEOUT_MS=120000 \
                 GEMINI_CHAT_MODEL=gemini-3.1-flash-lite \
+                NVIDIA_OPENAI_ENDPOINT=https://integrate.api.nvidia.com/v1/chat/completions \
+                NVIDIA_TEXT_MODEL=moonshotai/kimi-k2.6 \
+                NVIDIA_STRUCTURED_MODEL="${{ vars.NVIDIA_STRUCTURED_MODEL }}" \
+                POLLINATIONS_TEXT_MODEL=gpt-oss \
+                POLLINATIONS_FALLBACK_MAX_MS=3600000 \
+                POLLINATIONS_UPSTREAM_PROBE_INTERVAL_MS=300000 \
                 POLLINATIONS_ALLOW_FREE=false \
                 STUDENTOS_STORAGE_BUCKET=studentos-source-materials \
                 STUDENTOS_EXPORT_STORAGE_BUCKET=studentos-data-exports \

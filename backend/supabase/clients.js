@@ -17,8 +17,16 @@ export function createSupabaseClients(config) {
     }),
   }));
 
+  const routerClient = new SupabaseRestClient({
+    url: config.auth.url,
+    key: config.auth.serviceRoleKey,
+    label: "auth-project-1-ai-router",
+    role: "service_role",
+  });
+
   return {
     authClient,
     shardClients,
+    routerClient,
   };
 }

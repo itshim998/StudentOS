@@ -14,6 +14,7 @@ export function sanitizeLogText(value) {
   return String(value || "")
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
     .replace(/api[_-]?key[:=]\s*[A-Za-z0-9._-]+/gi, "api_key=[redacted]")
+    .replace(/nvapi-[A-Za-z0-9_-]{12,}/g, "[redacted]")
     .replace(/apikey[A-Za-z0-9._:= -]*/gi, "apikey=[redacted]")
     .replace(/service[_-]?role[_-]?key[:=]\s*[A-Za-z0-9._-]+/gi, "service_role_key=[redacted]")
     .slice(0, 220);

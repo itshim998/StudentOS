@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { providerForOrdinal, providerOrderForOrdinal, runProviderFallback } from "./providers.js";
+import { PRIMARY_KEY_RING, createRouterV2Session, runProviderRouterV2 } from "./providerRouterV2.js";
 
 const MAX_OPERATION_ID_LENGTH = 160;
 const MAX_OUTCOME_BYTES = 128 * 1024;
@@ -36,6 +37,17 @@ function cycleEnabledForUser(config, userId) {
   if (config?.routing?.enabled !== true) return false;
   const percent = Number(config.routing.rolloutPercent || 0);
   return percent >= 100 || (percent > 0 && rolloutBucket(userId) < percent);
+}
+
+function routerV2EnabledForUser(config, userId) {
+  if (config?.routing?.v2?.enabled !== true) return false;
+  const percent = Number(config.routing.v2.rolloutPercent || 0);
+  return percent >= 100 || (percent > 0 && rolloutBucket(userId) < percent);
+}
+
+function globalRouterOperationId(userId, requestId) {
+  const digest = createHash("sha256").update(`${String(userId)}:${String(requestId)}`).digest("hex");
+  return `router:${digest}`;
 }
 
 export function getAiOperationId({ idempotencyKey, requestId } = {}) {
@@ -158,13 +170,20 @@ export async function executeAuthorizedAiOperation({
   outcomeForReplay = (result) => result,
   logger = null,
   fetchImpl = globalThis.fetch,
+  signal = null,
 }) {
   const userId = session?.user?.id;
   if (!repository || !userId || !allowanceRequest?.requestId || typeof run !== "function" || typeof isLogicalSuccess !== "function") {
     throw new Error("invalid_authorized_ai_operation");
   }
+  if (signal?.aborted) {
+    const error = new Error("ai_operation_aborted");
+    error.name = "AbortError";
+    throw error;
+  }
 
-  const routed = forceRoutedLifecycle === true || cycleEnabledForUser(config, userId);
+  const routerV2 = routerV2EnabledForUser(config, userId);
+  const routed = routerV2 || forceRoutedLifecycle === true || cycleEnabledForUser(config, userId);
   if (!routed) {
     if (config?.routing?.shadow === true) {
       repository.getAiWeeklySuccessfulRequestCount(session, { periodKey: allowanceRequest.periodKey })
@@ -200,21 +219,68 @@ export async function executeAuthorizedAiOperation({
     };
   }
 
-  const ordinal = Number(reservation.selectedOrdinal || reservation.successfulCount + 1);
-  const providerOrder = Array.isArray(fixedProviderOrder) && fixedProviderOrder.length
-    ? [...new Set(fixedProviderOrder)]
-    : providerOrderForOrdinal(ordinal);
+  let routerOperationId = null;
+  let routerSession = null;
+  let routerClaim = null;
+  if (routerV2) {
+    routerOperationId = globalRouterOperationId(userId, allowanceRequest.requestId);
+    try {
+      routerClaim = await repository.claimAiRouterPrimary({
+        operationId: routerOperationId,
+        leaseMs: config.routing.leaseMs,
+      });
+    } catch (error) {
+      await completeWithRetry({
+        repository,
+        session,
+        logger,
+        completion: {
+          requestId: allowanceRequest.requestId,
+          succeeded: false,
+          primaryProvider: null,
+          finalProvider: null,
+          attempts: [{ outcome: "scheduler_claim_failed" }],
+          outcome: null,
+        },
+      }).catch(() => null);
+      throw error;
+    }
+    if (!routerClaim?.ordinal || !routerClaim?.slotOrdinal) throw new Error("ai_router_v2_primary_claim_failed");
+    routerSession = createRouterV2Session({ primarySlotOrdinal: routerClaim.slotOrdinal });
+  }
+  const ordinal = routerV2
+    ? Number(routerClaim.ordinal)
+    : Number(reservation.selectedOrdinal || reservation.successfulCount + 1);
+  const providerOrder = routerV2
+    ? [PRIMARY_KEY_RING[routerClaim.slotOrdinal - 1]?.providerCode || "groq"]
+    : Array.isArray(fixedProviderOrder) && fixedProviderOrder.length
+      ? [...new Set(fixedProviderOrder)]
+      : providerOrderForOrdinal(ordinal);
   const operationDeadline = Date.now() + Number(config.routing.operationTimeoutMs || 120_000);
   let latestProviderResult = null;
   const providerExecutor = async (providerRequest = {}) => {
-    latestProviderResult = await runProviderFallback({
-      ...providerRequest,
-      responseMode: providerRequest.responseMode || responseMode,
-      providerOrder,
-      operationDeadline,
-      config,
-      fetchImpl: providerRequest.fetchImpl || fetchImpl,
-    });
+    latestProviderResult = routerV2
+      ? await runProviderRouterV2({
+          ...providerRequest,
+          scheduler: repository,
+          operationId: routerOperationId,
+          routerSession,
+          responseMode: providerRequest.responseMode || responseMode,
+          operationDeadline,
+          config,
+          fetchImpl: providerRequest.fetchImpl || fetchImpl,
+          signal: providerRequest.signal || signal,
+          logger,
+        })
+      : await runProviderFallback({
+          ...providerRequest,
+          responseMode: providerRequest.responseMode || responseMode,
+          providerOrder,
+          operationDeadline,
+          config,
+          fetchImpl: providerRequest.fetchImpl || fetchImpl,
+          signal: providerRequest.signal || signal,
+        });
     return latestProviderResult;
   };
 
@@ -235,24 +301,30 @@ export async function executeAuthorizedAiOperation({
         outcome: null,
       },
     }).catch(() => null);
+    if (routerV2) await repository.completeAiRouterOperation({ operationId: routerOperationId }).catch(() => null);
     throw error;
   }
 
   const success = isLogicalSuccess(result);
   const replayOutcome = success ? outcomeForReplay(result) : storeFailedOutcome ? result : null;
-  const settlement = await completeWithRetry({
-    repository,
-    session,
-    logger,
-    completion: {
-      requestId: allowanceRequest.requestId,
-      succeeded: success,
-      primaryProvider: providerOrder[0],
-      finalProvider: success ? latestProviderResult?.providerCode || null : null,
-      attempts: latestProviderResult?.attempts || [],
-      outcome: safeOutcome(replayOutcome),
-    },
-  });
+  let settlement;
+  try {
+    settlement = await completeWithRetry({
+      repository,
+      session,
+      logger,
+      completion: {
+        requestId: allowanceRequest.requestId,
+        succeeded: success,
+        primaryProvider: providerOrder[0],
+        finalProvider: success ? latestProviderResult?.providerCode || null : null,
+        attempts: latestProviderResult?.attempts || [],
+        outcome: safeOutcome(replayOutcome),
+      },
+    });
+  } finally {
+    if (routerV2) await repository.completeAiRouterOperation({ operationId: routerOperationId }).catch(() => null);
+  }
 
   return {
     blocked: false,
@@ -263,10 +335,15 @@ export async function executeAuthorizedAiOperation({
     settlement,
     success,
     routed: true,
+    routerV2,
     ordinal,
   };
 }
 
 export function isProviderCycleEnabledForUser(config, userId) {
   return cycleEnabledForUser(config, userId);
+}
+
+export function isRouterV2EnabledForUser(config, userId) {
+  return routerV2EnabledForUser(config, userId);
 }

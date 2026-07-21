@@ -226,6 +226,7 @@ Operational documentation:
 
 - [`docs/CLOUDFLARE_AZURE_WIRING.md`](docs/CLOUDFLARE_AZURE_WIRING.md)
 - [`docs/AZURE_CONTAINER_APPS_DEPLOYMENT.md`](docs/AZURE_CONTAINER_APPS_DEPLOYMENT.md)
+- [`docs/PROVIDER_ROUTER_V2.md`](docs/PROVIDER_ROUTER_V2.md)
 - [`docs/AZURE_FIRST_DEPLOY_CHECKLIST.md`](docs/AZURE_FIRST_DEPLOY_CHECKLIST.md)
 - [`docs/adaptive-recovery-engine.md`](docs/adaptive-recovery-engine.md)
 
