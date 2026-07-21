@@ -177,7 +177,7 @@ If a dedicated backend API custom domain is configured, use that API origin inst
 Use this Cloudflare Pages build command to generate the public runtime config:
 
 ```bash
-npm run cloudflare:config
+npm run cloudflare:build
 ```
 
 Set the Azure Container App CORS allowlist env var:

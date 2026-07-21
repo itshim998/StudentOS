@@ -305,6 +305,7 @@ export function saveStudyTestAnswers(session, answers, { now = new Date() } = {}
 export function finishStudyTestSession(session, { now = new Date() } = {}) {
   synchronizeTestSession(session, { now });
   if (session.status === "time_expired") return session;
+  if (["submitted_pending_evaluation", "ready_for_evaluation", "evaluated"].includes(session.status)) return session;
   if (session.status !== "in_progress") {
     const error = new Error("This test is not currently in progress.");
     error.status = 409;

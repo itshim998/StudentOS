@@ -92,6 +92,7 @@ addCheck("package preflight:azure exists", pkg.scripts?.["preflight:azure"] === 
 addCheck("package verify:azure-deployment exists", pkg.scripts?.["verify:azure-deployment"] === "node scripts/verifyAzureDeployment.js");
 addCheck("package repository syntax check exists", pkg.scripts?.["check:syntax"] === "node scripts/checkNodeSyntax.js");
 addCheck("package cloudflare:config exists", pkg.scripts?.["cloudflare:config"] === "node scripts/writeCloudflareFrontendConfig.js");
+addCheck("package cloudflare:build vendors and verifies KaTeX", pkg.scripts?.["cloudflare:build"] === "node scripts/vendorKatex.js && node scripts/writeCloudflareFrontendConfig.js && node scripts/verifyCloudflareBuild.js");
 addCheck("package verify:cloudflare-azure exists", pkg.scripts?.["verify:cloudflare-azure"] === "node scripts/verifyCloudflareAzureWiring.js");
 addCheck("server reads PORT", /process\.env\.PORT/.test(server));
 addCheck("health route exists", server.includes('url.pathname === "/api/health"'));
@@ -99,6 +100,7 @@ addCheck("config route exists", server.includes('url.pathname === "/api/config"'
 addCheck("config exposes safe deployment target", server.includes("deploymentTarget: DEPLOYMENT_TARGET"));
 addCheck("Azure disables backend frontend serving", server.includes("const SERVE_FRONTEND") && server.includes("DEPLOYMENT_TARGET !== \"azure-container-apps\"") && server.includes("frontendServedByBackend: SERVE_FRONTEND"));
 addCheck("Cloudflare runtime config scaffold exists", exists("frontend/runtime-config.js") && exists("scripts/writeCloudflareFrontendConfig.js"));
+addCheck("Cloudflare KaTeX build verification exists", exists("scripts/vendorKatex.js") && exists("scripts/verifyCloudflareBuild.js"));
 addCheck("frontend API config reads runtime config", read("frontend/scripts/config.js").includes("StudentOSRuntimeConfig") && read("frontend/index.html").includes("runtime-config.js"));
 addCheck(
   "frontend detects Cloudflare API base misconfiguration",

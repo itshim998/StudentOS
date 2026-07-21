@@ -314,7 +314,7 @@ For a dedicated backend API custom domain, use that API origin instead, for exam
 Use this Cloudflare Pages build command so `frontend/runtime-config.js` is generated during the frontend deployment:
 
 ```bash
-npm run cloudflare:config
+npm run cloudflare:build
 ```
 
 The generated runtime config contains only a public API URL. It must not contain Supabase service-role keys, Google client secrets, model keys, OAuth tokens, or Azure credentials.

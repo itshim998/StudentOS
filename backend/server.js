@@ -329,6 +329,13 @@ const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const SOURCE_UPLOAD_STAGE_TIMEOUT_MS = Number(process.env.STUDENTOS_SOURCE_UPLOAD_STAGE_TIMEOUT_MS || 20000);
 const SOURCE_UPLOAD_PARSE_TIMEOUT_MS = Number(process.env.STUDENTOS_SOURCE_UPLOAD_PARSE_TIMEOUT_MS || 15000);
 const studyTestEvaluationsInFlight = new Set();
+const CORS_ALLOWED_METHODS = Object.freeze(["GET", "POST", "PATCH", "DELETE", "OPTIONS"]);
+const CORS_ALLOWED_HEADERS = Object.freeze([
+  "Content-Type",
+  "Authorization",
+  "Idempotency-Key",
+  "X-StudentOS-Internal-Token",
+]);
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -346,6 +353,16 @@ function corsOriginForRequest(req) {
   if (saasConfig.deployment !== "production") return origin || "*";
   if (origin && saasConfig.corsOrigins.includes(origin)) return origin;
   return "";
+}
+
+function corsHeadersForResponse(res) {
+  const headers = {
+    "Vary": "Origin",
+    "Access-Control-Allow-Headers": CORS_ALLOWED_HEADERS.join(", "),
+    "Access-Control-Allow-Methods": CORS_ALLOWED_METHODS.join(","),
+  };
+  if (res.corsOrigin) headers["Access-Control-Allow-Origin"] = res.corsOrigin;
+  return headers;
 }
 
 function createStageTimeoutError(stage, timeoutMs) {
@@ -407,29 +424,35 @@ async function runUploadStage(req, stage, action, options = {}) {
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload, null, 2);
   const headers = {
+    ...corsHeadersForResponse(res),
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
     "X-Request-Id": res.requestId || "",
-    "Vary": "Origin",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, Idempotency-Key, X-StudentOS-Internal-Token",
-    "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
   };
-  if (res.corsOrigin) headers["Access-Control-Allow-Origin"] = res.corsOrigin;
   res.writeHead(status, headers);
   res.end(body);
 }
 
+function sendCorsPreflight(res) {
+  res.writeHead(204, {
+    ...corsHeadersForResponse(res),
+    "Cache-Control": "no-store",
+    "Content-Length": "0",
+    "X-Request-Id": res.requestId || "",
+  });
+  res.end();
+}
+
 function sendPrivateDownload(res, bytes, filename = "studentos-export.json") {
   const headers = {
+    ...corsHeadersForResponse(res),
     "Content-Type": "application/json; charset=utf-8",
     "Content-Disposition": `attachment; filename="${filename}"`,
     "Content-Length": String(bytes.length),
     "Cache-Control": "private, no-store, max-age=0",
     "X-Content-Type-Options": "nosniff",
     "X-Request-Id": res.requestId || "",
-    "Vary": "Origin",
   };
-  if (res.corsOrigin) headers["Access-Control-Allow-Origin"] = res.corsOrigin;
   res.writeHead(200, headers);
   res.end(bytes);
 }
@@ -437,15 +460,14 @@ function sendPrivateDownload(res, bytes, filename = "studentos-export.json") {
 function sendPrivateMaterial(res, bytes, filename = "study-material.pdf", mimeType = "application/pdf") {
   const safeFilename = String(filename || "study-material.pdf").replace(/[^a-zA-Z0-9._ -]/g, "_").slice(0, 160);
   const headers = {
+    ...corsHeadersForResponse(res),
     "Content-Type": mimeType || "application/pdf",
     "Content-Disposition": `inline; filename="${safeFilename}"`,
     "Content-Length": String(bytes.length),
     "Cache-Control": "private, no-store, max-age=0",
     "X-Content-Type-Options": "nosniff",
     "X-Request-Id": res.requestId || "",
-    "Vary": "Origin",
   };
-  if (res.corsOrigin) headers["Access-Control-Allow-Origin"] = res.corsOrigin;
   res.writeHead(200, headers);
   res.end(bytes);
 }
@@ -1250,7 +1272,7 @@ function routedOperationBusyPayload(state, persistence, kind = "generated") {
 
 async function handleApi(req, res, url) {
   if (req.method === "OPTIONS") {
-    sendJson(res, 204, {});
+    sendCorsPreflight(res);
     return;
   }
 

@@ -20,7 +20,7 @@ https://studentos-39s.pages.dev
 Cloudflare Pages build command:
 
 ```bash
-npm run cloudflare:config
+npm run cloudflare:build
 ```
 
 That command writes `frontend/runtime-config.js` with only the public API origin. It must not contain Supabase service-role keys, provider keys, OAuth secrets, Azure credentials, or tokens.

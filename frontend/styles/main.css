@@ -5428,6 +5428,53 @@ textarea:focus-visible {
   color: #304b3e;
 }
 
+.study-test-save-feedback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.study-test-save-feedback .study-test-save-state {
+  flex: 1;
+  margin: 0;
+}
+
+.study-test-retry-save {
+  flex: 0 0 auto;
+}
+
+.study-test-recovery,
+.study-test-action-recovery {
+  margin: 18px 0 0;
+  padding: 14px 16px;
+  border: 1px solid rgba(150, 90, 42, 0.24);
+  border-radius: 12px;
+  background: rgba(255, 244, 226, 0.88);
+  color: #68401f;
+}
+
+.study-test-recovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.study-test-recovery[hidden] {
+  display: none;
+}
+
+.study-test-recovery p,
+.study-test-action-recovery {
+  line-height: 1.5;
+}
+
+.study-test-recovery p {
+  margin: 0;
+}
+
 .study-test-questions {
   display: grid;
   gap: 18px;

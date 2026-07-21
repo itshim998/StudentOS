@@ -66,6 +66,9 @@
     "smoke": "npm run smoke:core",
     "smoke:core": "node scripts/smokeCoreFlows.js",
     "test:e2e": "playwright test",
+    "test:hotfix:cors": "node backend/testHotfixStudyTestPreservation.js",
+    "test:hotfix:e2e": "playwright test tests/e2e/study-test-answer-preservation.spec.js",
+    "test:hotfix": "npm run test:hotfix:cors && npm run test:hotfix:e2e",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:supabase": "playwright test tests/e2e/studentos-supabase-live.spec.js",
     "jobs:work": "node scripts/runBackgroundJobs.js",
@@ -98,6 +101,7 @@
     "cleanup:e2e:supabase-users": "node scripts/cleanupSupabaseE2EUsers.js",
     "preflight:azure": "node scripts/preflightAzure.js",
     "cloudflare:config": "node scripts/writeCloudflareFrontendConfig.js",
+    "cloudflare:build": "node scripts/vendorKatex.js && node scripts/writeCloudflareFrontendConfig.js && node scripts/verifyCloudflareBuild.js",
     "verify:cloudflare-azure": "node scripts/verifyCloudflareAzureWiring.js",
     "verify:azure-deployment": "node scripts/verifyAzureDeployment.js"
   },

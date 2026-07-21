@@ -37,10 +37,17 @@ let studyWorkspaceMessage = "";
 let studyMaterialGenerating = false;
 let studyTestGenerating = false;
 let studyTestCountdown = null;
-let studyTestAutosave = null;
 let studyTestExpiryRefreshPending = false;
 let academicPdfObjectUrl = null;
 const productUploadResults = new Map();
+const studyTestSaveFlows = new Map();
+const studyTestActionsInFlight = new Map();
+const STUDY_TEST_AUTOSAVE_DELAY_MS = 700;
+const STUDY_TEST_DRAFT_PREFIX = "studentos.study-test-draft.v1";
+const STUDY_TEST_OPERATION_PREFIX = "studentos.study-test-operation.v1";
+const STUDY_TEST_SAVE_FAILURE_COPY = "Couldn\u2019t save yet. Your answers remain on this device.";
+const STUDY_TEST_SUBMIT_FAILURE_COPY = "We couldn\u2019t save your answers yet. They are still on this device. Check your connection and try again.";
+const STUDY_TEST_EVALUATION_FAILURE_COPY = "We couldn\u2019t evaluate this test yet. Your answers are safe. Please try again.";
 const ACTION_LOADING_TIMEOUT_MS = 30000;
 const LONG_ACTION_LOADING_TIMEOUT_MS = 60000;
 
@@ -198,8 +205,10 @@ function readStoredSession() {
 
 function storeSession(session) {
   const previousToken = authSession?.access_token || "";
+  const previousUserId = authenticatedStudyTestUserId(authSession);
   authSession = session?.access_token ? session : null;
   if ((authSession?.access_token || "") !== previousToken) {
+    resetStudyTestSaveFlows();
     state = null;
     accountSnapshot = null;
     bootstrapLoaded = false;
@@ -208,6 +217,7 @@ function storeSession(session) {
     sessionStorage.setItem("studentos.auth.session", JSON.stringify(authSession));
   } else {
     sessionStorage.removeItem("studentos.auth.session");
+    if (previousUserId) clearStudyTestStorageForUser(previousUserId);
   }
 }
 
@@ -224,6 +234,157 @@ function decodeAuthUser(accessToken) {
   } catch {
     return null;
   }
+}
+
+function authenticatedStudyTestUserId(session = authSession) {
+  return String(session?.user?.id || decodeAuthUser(session?.access_token || "")?.id || "").trim();
+}
+
+function studyTestStorageUserPrefix(prefix, userId) {
+  return `${prefix}:${encodeURIComponent(userId)}:`;
+}
+
+function studyTestDraftStorageKey(userId, sessionId) {
+  return `${studyTestStorageUserPrefix(STUDY_TEST_DRAFT_PREFIX, userId)}${encodeURIComponent(sessionId)}`;
+}
+
+function studyTestOperationStorageKey(userId, sessionId, operation) {
+  return `${studyTestStorageUserPrefix(STUDY_TEST_OPERATION_PREFIX, userId)}${encodeURIComponent(sessionId)}:${operation}`;
+}
+
+function clearStudyTestStorageForUser(userId) {
+  const prefixes = [
+    studyTestStorageUserPrefix(STUDY_TEST_DRAFT_PREFIX, userId),
+    studyTestStorageUserPrefix(STUDY_TEST_OPERATION_PREFIX, userId),
+  ];
+  try {
+    for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+      const key = sessionStorage.key(index) || "";
+      if (prefixes.some((prefix) => key.startsWith(prefix))) sessionStorage.removeItem(key);
+    }
+  } catch {
+    // Private draft storage is a best-effort same-device safety net.
+  }
+}
+
+function resetStudyTestSaveFlows() {
+  for (const flow of studyTestSaveFlows.values()) {
+    if (flow.timer) window.clearTimeout(flow.timer);
+  }
+  studyTestSaveFlows.clear();
+  studyTestActionsInFlight.clear();
+}
+
+function ensureStudyTestSaveFlow(sessionId) {
+  if (!studyTestSaveFlows.has(sessionId)) {
+    studyTestSaveFlows.set(sessionId, {
+      timer: null,
+      revision: 0,
+      acknowledgedRevision: 0,
+      inFlight: null,
+      inFlightRevision: null,
+      lastResult: null,
+    });
+  }
+  return studyTestSaveFlows.get(sessionId);
+}
+
+function readStudyTestDraft(sessionId) {
+  const userId = authenticatedStudyTestUserId();
+  if (!userId) return null;
+  try {
+    const draft = JSON.parse(sessionStorage.getItem(studyTestDraftStorageKey(userId, sessionId)) || "null");
+    if (draft?.version !== 1 || draft.userId !== userId || draft.sessionId !== sessionId || !draft.answers || typeof draft.answers !== "object") return null;
+    return draft;
+  } catch {
+    return null;
+  }
+}
+
+function writeStudyTestDraft(session) {
+  const userId = authenticatedStudyTestUserId();
+  if (!userId || session?.status !== "in_progress" || session.answerMode !== "typed") return;
+  const flow = ensureStudyTestSaveFlow(session.id);
+  try {
+    sessionStorage.setItem(studyTestDraftStorageKey(userId, session.id), JSON.stringify({
+      version: 1,
+      userId,
+      sessionId: session.id,
+      answers: { ...(session.answers || {}) },
+      revision: flow.revision,
+      acknowledgedRevision: flow.acknowledgedRevision,
+      lastServerSavedAt: session.lastSavedAt || null,
+      updatedAt: new Date().toISOString(),
+    }));
+  } catch {
+    // The in-memory draft remains primary when sessionStorage is unavailable.
+  }
+}
+
+function clearStudyTestDraft(sessionId) {
+  const userId = authenticatedStudyTestUserId();
+  if (!userId) return;
+  try {
+    sessionStorage.removeItem(studyTestDraftStorageKey(userId, sessionId));
+  } catch {
+    // A storage failure must not block a confirmed finish transition.
+  }
+}
+
+function studyTestOperationKey(sessionId, operation) {
+  const userId = authenticatedStudyTestUserId();
+  if (!userId) return aiActionIdempotencyKey();
+  const storageKey = studyTestOperationStorageKey(userId, sessionId, operation);
+  try {
+    const existing = sessionStorage.getItem(storageKey);
+    if (existing) return existing;
+    const created = aiActionIdempotencyKey();
+    sessionStorage.setItem(storageKey, created);
+    return created;
+  } catch {
+    return aiActionIdempotencyKey();
+  }
+}
+
+function clearStudyTestOperationKey(sessionId, operation) {
+  const userId = authenticatedStudyTestUserId();
+  if (!userId) return;
+  try {
+    sessionStorage.removeItem(studyTestOperationStorageKey(userId, sessionId, operation));
+  } catch {
+    // Operation-key cleanup is best effort after an acknowledged transition.
+  }
+}
+
+function restoreStudyTestDrafts() {
+  if (!state || !authenticatedStudyTestUserId()) return;
+  for (const session of state.testSessions || []) {
+    if (session.status !== "in_progress" || session.answerMode !== "typed") continue;
+    const draft = readStudyTestDraft(session.id);
+    if (!draft) continue;
+    const questionNumbers = new Set((session.testPaper?.questions || []).map((question) => String(question.question_number)));
+    const restoredAnswers = {};
+    for (const [questionNumber, answer] of Object.entries(draft.answers)) {
+      if (questionNumbers.has(String(questionNumber)) && typeof answer === "string") restoredAnswers[String(questionNumber)] = answer.slice(0, 20_000);
+    }
+    const draftRevision = Number(draft.revision) || 0;
+    const acknowledgedRevision = Number(draft.acknowledgedRevision) || 0;
+    if (draftRevision > acknowledgedRevision) {
+      session.answers = { ...(session.answers || {}), ...restoredAnswers };
+    }
+    const flow = ensureStudyTestSaveFlow(session.id);
+    flow.revision = Math.max(flow.revision, draftRevision);
+    flow.acknowledgedRevision = Math.min(flow.revision, Math.max(flow.acknowledgedRevision, acknowledgedRevision));
+  }
+}
+
+function runStudyTestActionOnce(key, action) {
+  if (studyTestActionsInFlight.has(key)) return studyTestActionsInFlight.get(key);
+  const operation = Promise.resolve().then(action).finally(() => {
+    if (studyTestActionsInFlight.get(key) === operation) studyTestActionsInFlight.delete(key);
+  });
+  studyTestActionsInFlight.set(key, operation);
+  return operation;
 }
 
 function captureAuthReturnSession() {
@@ -624,7 +785,7 @@ function aiActionIdempotencyKey() {
 }
 
 async function providerBackedApi(path, options = {}) {
-  const idempotencyKey = aiActionIdempotencyKey();
+  const idempotencyKey = options.headers?.["Idempotency-Key"] || aiActionIdempotencyKey();
   return api(path, {
     ...options,
     headers: {
@@ -3562,8 +3723,17 @@ function studyTestAttemptMarkup(session) {
         <div class="study-test-timer" aria-live="polite"><small>Time remaining</small><strong data-study-test-timer>${studyTestTimerText(studyTestTimeLeft(session.deadlineAt))}</strong></div>
       </header>
       <div class="study-test-instructions"><strong>Instructions</strong><ul>${paper.instructions.map((instruction) => `<li>${renderAcademicInlineMarkup(instruction)}</li>`).join("")}</ul></div>
-      ${session.answerMode === "handwritten" ? `<p class="study-handwritten-guidance">After you finish on paper, you will upload your answer sheet for evaluation.</p>` : `<p class="study-test-save-state" data-study-test-save-state>${session.lastSavedAt ? "Answers saved." : "Answers save as you work."}</p>`}
+      ${session.answerMode === "handwritten" ? `<p class="study-handwritten-guidance">After you finish on paper, you will upload your answer sheet for evaluation.</p>` : `
+        <div class="study-test-save-feedback">
+          <p class="study-test-save-state" data-study-test-save-state aria-live="polite" aria-atomic="true">${session.lastSavedAt ? "Answers saved." : "Answers save as you work."}</p>
+          <button class="secondary-button study-test-retry-save" type="button" data-study-test-retry-save="${escapeHtml(session.id)}" hidden>Retry save</button>
+        </div>
+      `}
       <div class="study-test-questions">${paper.questions.map((question) => studyTestQuestionMarkup(question, session)).join("")}</div>
+      <div class="study-test-recovery" data-study-test-recovery hidden>
+        <p data-study-test-recovery-copy></p>
+        <button class="secondary-button" type="button" data-study-test-retry-finish="${escapeHtml(session.id)}">Try submission again</button>
+      </div>
       <div class="study-test-finish">
         <p>${session.answerMode === "handwritten" ? "Finish when your paper answers are complete." : "Submit when you have finished every answer."}</p>
         <button class="primary-button" type="button" data-study-test-finish="${escapeHtml(session.id)}">${session.answerMode === "handwritten" ? "I’ve finished" : "Submit for evaluation"}</button>
@@ -3583,7 +3753,7 @@ function studyTestClosedMarkup(session) {
       ? "Your handwritten answer sheet can be added during the evaluation step."
       : "Your answers are saved. Scoring will be completed in the evaluation step.";
   return `
-    <section class="study-test-closed">
+    <section class="study-test-closed" data-study-test-session="${escapeHtml(session.id)}">
       <p class="eyebrow">${escapeHtml(studyTestStatusLabel(session.status))}</p>
       <h4>${escapeHtml(title)}</h4>
       <p>${escapeHtml(copy)}</p>
@@ -3598,6 +3768,7 @@ function studyTestClosedMarkup(session) {
         ` : `<p>Your saved typed answers will be evaluated against this test.</p>`}
         <button class="primary-button" type="button" data-study-test-evaluate="${escapeHtml(session.id)}">${session.answerSheetDraft?.filename ? "Retry evaluation" : "Evaluate my test"}</button>
       </div>
+      <p class="study-test-action-recovery" data-study-test-action-recovery aria-live="polite" aria-atomic="true" hidden></p>
     </section>
   `;
 }
@@ -4852,6 +5023,7 @@ async function loadBootstrap(options = {}) {
   }
   try {
     state = await api("/api/bootstrap");
+    restoreStudyTestDrafts();
     bootstrapLoaded = true;
     render();
     if (academicContextReadiness().status === "context_preparing") scheduleAcademicContextPreparationPoll();
@@ -5513,80 +5685,229 @@ async function startStudyTest(sessionId) {
   renderStudyAndEvaluate();
 }
 
-function typedStudyTestAnswers() {
-  return Object.fromEntries([...els.studyEvaluateContent.querySelectorAll("[data-study-test-answer]")]
-    .map((input) => [input.dataset.studyTestAnswer, input.value]));
+function studyTestSessionById(sessionId) {
+  return (state?.testSessions || []).find((entry) => entry.id === sessionId) || null;
 }
 
-async function saveCurrentStudyTestAnswers(sessionId) {
-  const answers = typedStudyTestAnswers();
-  const result = await api(`/api/study/tests/${encodeURIComponent(sessionId)}`, {
+function studyTestAttemptElement(sessionId) {
+  const attempt = els.studyEvaluateContent?.querySelector("[data-study-test-session]");
+  return attempt?.dataset.studyTestSession === sessionId ? attempt : null;
+}
+
+function setStudyTestSaveUi(sessionId, copy, { retry = false } = {}) {
+  const attempt = studyTestAttemptElement(sessionId);
+  const saveState = attempt?.querySelector("[data-study-test-save-state]");
+  if (saveState && saveState.textContent !== copy) saveState.textContent = copy;
+  const retryButton = attempt?.querySelector("[data-study-test-retry-save]");
+  if (retryButton) retryButton.hidden = !retry;
+}
+
+function showStudyTestFinishRecovery(sessionId) {
+  setStudyTestSaveUi(sessionId, STUDY_TEST_SAVE_FAILURE_COPY, { retry: true });
+  const recovery = studyTestAttemptElement(sessionId)?.querySelector("[data-study-test-recovery]");
+  if (!recovery) return;
+  const copy = recovery.querySelector("[data-study-test-recovery-copy]");
+  if (copy) copy.textContent = STUDY_TEST_SUBMIT_FAILURE_COPY;
+  recovery.hidden = false;
+}
+
+function clearStudyTestFinishRecovery(sessionId) {
+  const recovery = studyTestAttemptElement(sessionId)?.querySelector("[data-study-test-recovery]");
+  if (recovery) recovery.hidden = true;
+}
+
+function showStudyTestEvaluationRecovery(sessionId) {
+  const closed = studyTestAttemptElement(sessionId);
+  const recovery = closed?.querySelector("[data-study-test-action-recovery]");
+  if (recovery) {
+    recovery.textContent = STUDY_TEST_EVALUATION_FAILURE_COPY;
+    recovery.hidden = false;
+  }
+  const evaluateButton = closed?.querySelector("[data-study-test-evaluate]");
+  if (evaluateButton) evaluateButton.textContent = "Retry evaluation";
+}
+
+function clearStudyTestEvaluationRecovery(sessionId) {
+  const recovery = studyTestAttemptElement(sessionId)?.querySelector("[data-study-test-action-recovery]");
+  if (recovery) recovery.hidden = true;
+}
+
+function isAuthoritativeStudyTestLockError(error) {
+  return /time is up|locked|answers cannot be changed|not currently in progress/i.test(String(error?.message || ""));
+}
+
+function updateStudyTestAnswerFromInput(input) {
+  const sessionId = input.closest("[data-study-test-session]")?.dataset.studyTestSession;
+  const questionNumber = String(input.dataset.studyTestAnswer || "");
+  const session = studyTestSessionById(sessionId);
+  if (!sessionId || !questionNumber || session?.status !== "in_progress" || session.answerMode !== "typed") return null;
+  const previous = String(session.answers?.[questionNumber] || "");
+  session.answers = { ...(session.answers || {}), [questionNumber]: input.value };
+  const flow = ensureStudyTestSaveFlow(sessionId);
+  if (previous !== input.value) flow.revision += 1;
+  writeStudyTestDraft(session);
+  return { sessionId, flow };
+}
+
+function captureTypedStudyTestAnswers(sessionId) {
+  const session = studyTestSessionById(sessionId);
+  const attempt = studyTestAttemptElement(sessionId);
+  if (!session || !attempt || session.answerMode !== "typed") return session?.answers || {};
+  let changed = false;
+  const answers = { ...(session.answers || {}) };
+  for (const input of attempt.querySelectorAll("[data-study-test-answer]")) {
+    const questionNumber = String(input.dataset.studyTestAnswer || "");
+    if (!questionNumber) continue;
+    if (answers[questionNumber] !== input.value) changed = true;
+    answers[questionNumber] = input.value;
+  }
+  session.answers = answers;
+  const flow = ensureStudyTestSaveFlow(sessionId);
+  if (changed) flow.revision += 1;
+  writeStudyTestDraft(session);
+  return answers;
+}
+
+function cancelPendingStudyTestSave(sessionId) {
+  const flow = ensureStudyTestSaveFlow(sessionId);
+  if (flow.timer) window.clearTimeout(flow.timer);
+  flow.timer = null;
+}
+
+async function saveLatestStudyTestAnswers(sessionId, { force = false, retrying = false } = {}) {
+  const flow = ensureStudyTestSaveFlow(sessionId);
+  const requestedRevision = flow.revision;
+  if (flow.inFlight) {
+    try {
+      await flow.inFlight;
+    } catch {
+      // A flush immediately retries the newest complete answer map.
+    }
+    if (flow.acknowledgedRevision >= requestedRevision) return flow.lastResult;
+  }
+  if (!force && flow.acknowledgedRevision >= flow.revision) return flow.lastResult;
+  const session = studyTestSessionById(sessionId);
+  if (!session || session.status !== "in_progress" || session.answerMode !== "typed") {
+    throw new Error("This test is not currently in progress.");
+  }
+  const revision = flow.revision;
+  const answers = { ...(session.answers || {}) };
+  setStudyTestSaveUi(sessionId, retrying ? "Retrying\u2026" : "Saving answers\u2026");
+  const request = api(`/api/study/tests/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     body: JSON.stringify({ answers }),
   });
-  state = result.state || state;
-  const saveState = els.studyEvaluateContent?.querySelector("[data-study-test-save-state]");
-  if (saveState) saveState.textContent = "Answers saved.";
+  flow.inFlight = request;
+  flow.inFlightRevision = revision;
+  try {
+    const result = await request;
+    const latestLocalAnswers = { ...(studyTestSessionById(sessionId)?.answers || {}) };
+    state = result.state || state;
+    const savedSession = studyTestSessionById(sessionId);
+    if (savedSession && flow.revision > revision) {
+      savedSession.answers = { ...(savedSession.answers || {}), ...latestLocalAnswers };
+    }
+    flow.acknowledgedRevision = Math.max(flow.acknowledgedRevision, revision);
+    flow.lastResult = result;
+    if (savedSession?.status === "in_progress") writeStudyTestDraft(savedSession);
+    if (flow.acknowledgedRevision >= flow.revision) setStudyTestSaveUi(sessionId, "Answers saved.");
+    else setStudyTestSaveUi(sessionId, "Saving answers\u2026");
+    return result;
+  } catch (error) {
+    const activeSession = studyTestSessionById(sessionId);
+    if (activeSession) writeStudyTestDraft(activeSession);
+    setStudyTestSaveUi(sessionId, STUDY_TEST_SAVE_FAILURE_COPY, { retry: true });
+    throw error;
+  } finally {
+    if (flow.inFlight === request) {
+      flow.inFlight = null;
+      flow.inFlightRevision = null;
+    }
+  }
+}
+
+async function flushPendingStudyTestSave(sessionId, options = {}) {
+  cancelPendingStudyTestSave(sessionId);
+  return saveLatestStudyTestAnswers(sessionId, { ...options, force: true });
 }
 
 function scheduleStudyTestAutosave(input) {
-  const sessionId = input.closest("[data-study-test-session]")?.dataset.studyTestSession;
-  if (!sessionId) return;
-  const saveState = els.studyEvaluateContent?.querySelector("[data-study-test-save-state]");
-  if (saveState) saveState.textContent = "Saving answers...";
-  if (studyTestAutosave) window.clearTimeout(studyTestAutosave);
-  studyTestAutosave = window.setTimeout(() => {
-    studyTestAutosave = null;
-    saveCurrentStudyTestAnswers(sessionId).catch(async (error) => {
-      if (saveState) saveState.textContent = error.message;
-      if (/time is up|locked/i.test(error.message)) await refreshStudyTestSession(sessionId);
+  const updated = updateStudyTestAnswerFromInput(input);
+  if (!updated) return;
+  const { sessionId, flow } = updated;
+  setStudyTestSaveUi(sessionId, "Saving answers\u2026");
+  if (flow.timer) window.clearTimeout(flow.timer);
+  flow.timer = window.setTimeout(() => {
+    flow.timer = null;
+    saveLatestStudyTestAnswers(sessionId).catch(async (error) => {
+      if (isAuthoritativeStudyTestLockError(error)) await refreshStudyTestSession(sessionId);
     });
-  }, 700);
+  }, STUDY_TEST_AUTOSAVE_DELAY_MS);
 }
 
 async function finishStudyTest(sessionId) {
-  const session = (state.testSessions || []).find((entry) => entry.id === sessionId);
-  if (studyTestAutosave) {
-    window.clearTimeout(studyTestAutosave);
-    studyTestAutosave = null;
-  }
-  if (session?.answerMode === "typed") await saveCurrentStudyTestAnswers(sessionId);
-  const result = await api(`/api/study/tests/${encodeURIComponent(sessionId)}/finish`, {
-    method: "POST",
-    body: JSON.stringify({}),
+  return runStudyTestActionOnce(`finish:${sessionId}`, async () => {
+    const session = studyTestSessionById(sessionId);
+    clearStudyTestFinishRecovery(sessionId);
+    if (session?.answerMode === "typed") {
+      captureTypedStudyTestAnswers(sessionId);
+      await flushPendingStudyTestSave(sessionId, { retrying: true });
+    }
+    const result = await api(`/api/study/tests/${encodeURIComponent(sessionId)}/finish`, {
+      method: "POST",
+      headers: { "Idempotency-Key": studyTestOperationKey(sessionId, "finish") },
+      body: JSON.stringify({}),
+    });
+    state = result.state || state;
+    const finishedSession = result.testSession || studyTestSessionById(sessionId);
+    if (session?.answerMode === "typed" && ["submitted_pending_evaluation", "ready_for_evaluation", "evaluated"].includes(finishedSession?.status)) {
+      clearStudyTestDraft(sessionId);
+    }
+    clearStudyTestOperationKey(sessionId, "finish");
+    studyWorkspaceMessage = result.message || "Your test attempt is saved.";
+    renderStudyAndEvaluate();
   });
-  state = result.state || state;
-  studyWorkspaceMessage = result.message || "Your test attempt is saved.";
-  renderStudyAndEvaluate();
 }
 
 async function evaluateStudyTestAttempt(sessionId) {
-  const session = (state.testSessions || []).find((entry) => entry.id === sessionId);
-  let body = JSON.stringify({});
-  if (session?.answerMode === "handwritten") {
-    const file = els.studyEvaluateContent?.querySelector("[data-study-answer-sheet]")?.files?.[0] || null;
-    const extension = file?.name?.toLowerCase().match(/\.[^.]+$/)?.[0] || "";
-    if (!file && !session.answerSheetDraft?.filename) {
-      studyWorkspaceMessage = "Upload your handwritten answer sheet as PDF or DOCX.";
-      renderStudyAndEvaluate();
-      return;
+  return runStudyTestActionOnce(`evaluate:${sessionId}`, async () => {
+    const session = studyTestSessionById(sessionId);
+    clearStudyTestEvaluationRecovery(sessionId);
+    let body = JSON.stringify({});
+    if (session?.answerMode === "handwritten") {
+      const file = els.studyEvaluateContent?.querySelector("[data-study-answer-sheet]")?.files?.[0] || null;
+      const extension = file?.name?.toLowerCase().match(/\.[^.]+$/)?.[0] || "";
+      if (!file && !session.answerSheetDraft?.filename) {
+        studyWorkspaceMessage = "Upload your handwritten answer sheet as PDF or DOCX.";
+        renderStudyAndEvaluate();
+        return;
+      }
+      if (file && ![".pdf", ".docx"].includes(extension)) {
+        studyWorkspaceMessage = "Upload your handwritten answer sheet as PDF or DOCX.";
+        renderStudyAndEvaluate();
+        return;
+      }
+      if (file) {
+        body = new FormData();
+        body.append("answerSheet", file);
+      }
     }
-    if (file && ![".pdf", ".docx"].includes(extension)) {
-      studyWorkspaceMessage = "Upload your handwritten answer sheet as PDF or DOCX.";
-      renderStudyAndEvaluate();
-      return;
+    const result = await providerBackedApi(`/api/study/tests/${encodeURIComponent(sessionId)}/evaluate`, {
+      method: "POST",
+      headers: { "Idempotency-Key": studyTestOperationKey(sessionId, "evaluate") },
+      body,
+    });
+    if (!result.evaluated) {
+      state = result.state || state;
+      throw new Error(STUDY_TEST_EVALUATION_FAILURE_COPY);
     }
-    if (file) {
-      body = new FormData();
-      body.append("answerSheet", file);
-    }
-  }
-  const result = await providerBackedApi(`/api/study/tests/${encodeURIComponent(sessionId)}/evaluate`, { method: "POST", body });
-  state = result.state || state;
-  studyWorkspaceMessage = result.message || (result.evaluated ? "Your result is ready." : "StudentOS could not evaluate this test right now. Your answers are safe. Please try again.");
-  studyWorkspaceLoadingId = null;
-  render();
-  setView("study");
+    state = result.state || state;
+    clearStudyTestOperationKey(sessionId, "evaluate");
+    studyWorkspaceMessage = result.message || "Your result is ready.";
+    studyWorkspaceLoadingId = null;
+    render();
+    setView("study");
+  });
 }
 
 function continueStudyAndEvaluate() {
@@ -5604,10 +5925,14 @@ async function refreshStudyTestSession(sessionId) {
   try {
     const result = await api(`/api/study/tests/${encodeURIComponent(sessionId)}`);
     state = result.state || state;
+    const authoritativeSession = result.testSession || studyTestSessionById(sessionId);
+    if (["submitted_pending_evaluation", "ready_for_evaluation", "evaluated"].includes(authoritativeSession?.status)) {
+      clearStudyTestDraft(sessionId);
+      clearStudyTestOperationKey(sessionId, "finish");
+    }
     renderStudyAndEvaluate();
-  } catch (error) {
-    studyWorkspaceMessage = error.message;
-    renderStudyAndEvaluate();
+  } catch {
+    setStudyTestSaveUi(sessionId, STUDY_TEST_SAVE_FAILURE_COPY, { retry: true });
   } finally {
     studyTestExpiryRefreshPending = false;
   }
@@ -6709,24 +7034,33 @@ function wireEvents() {
     }
     const finishStudyTestButton = event.target.closest("[data-study-test-finish]");
     if (finishStudyTestButton) {
-      withButtonLoading(finishStudyTestButton, "Saving...", () => finishStudyTest(finishStudyTestButton.dataset.studyTestFinish), {
-        timeoutTarget: els.studyEvaluateContent,
-        timeoutCopy: "Saving this test is taking longer than expected. Please try again.",
-      }).catch(async (error) => {
-        studyWorkspaceMessage = error.message;
-        if (/time is up|locked/i.test(error.message)) await refreshStudyTestSession(finishStudyTestButton.dataset.studyTestFinish);
-        else renderStudyAndEvaluate();
+      withButtonLoading(finishStudyTestButton, "Saving...", () => finishStudyTest(finishStudyTestButton.dataset.studyTestFinish)).catch(async (error) => {
+        if (isAuthoritativeStudyTestLockError(error)) await refreshStudyTestSession(finishStudyTestButton.dataset.studyTestFinish);
+        else showStudyTestFinishRecovery(finishStudyTestButton.dataset.studyTestFinish);
       });
+      return;
+    }
+    const retryStudyTestSaveButton = event.target.closest("[data-study-test-retry-save]");
+    if (retryStudyTestSaveButton) {
+      withButtonLoading(retryStudyTestSaveButton, "Retrying...", () => flushPendingStudyTestSave(retryStudyTestSaveButton.dataset.studyTestRetrySave, { retrying: true }))
+        .catch(async (error) => {
+          if (isAuthoritativeStudyTestLockError(error)) await refreshStudyTestSession(retryStudyTestSaveButton.dataset.studyTestRetrySave);
+        });
+      return;
+    }
+    const retryStudyTestFinishButton = event.target.closest("[data-study-test-retry-finish]");
+    if (retryStudyTestFinishButton) {
+      withButtonLoading(retryStudyTestFinishButton, "Retrying...", () => finishStudyTest(retryStudyTestFinishButton.dataset.studyTestRetryFinish))
+        .catch(async (error) => {
+          if (isAuthoritativeStudyTestLockError(error)) await refreshStudyTestSession(retryStudyTestFinishButton.dataset.studyTestRetryFinish);
+          else showStudyTestFinishRecovery(retryStudyTestFinishButton.dataset.studyTestRetryFinish);
+        });
       return;
     }
     const evaluateStudyTestButton = event.target.closest("[data-study-test-evaluate]");
     if (evaluateStudyTestButton) {
-      withButtonLoading(evaluateStudyTestButton, "Evaluating...", () => evaluateStudyTestAttempt(evaluateStudyTestButton.dataset.studyTestEvaluate), {
-        timeoutTarget: els.studyEvaluateContent,
-        timeoutCopy: "Evaluation is taking longer than expected. Your answers are safe; please try again.",
-      }).catch((error) => {
-        studyWorkspaceMessage = error.message;
-        renderStudyAndEvaluate();
+      withButtonLoading(evaluateStudyTestButton, "Evaluating...", () => evaluateStudyTestAttempt(evaluateStudyTestButton.dataset.studyTestEvaluate)).catch(() => {
+        showStudyTestEvaluationRecovery(evaluateStudyTestButton.dataset.studyTestEvaluate);
       });
       return;
     }

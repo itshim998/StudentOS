@@ -162,7 +162,7 @@ The report should show a routed shard label, masked disposable email, masked use
 
 ## Cloudflare / Azure Wiring QA
 
-1. Set Cloudflare Pages `STUDENTOS_PUBLIC_API_BASE_URL` to `https://studentos-api-dev.ashygrass-913d190e.centralindia.azurecontainerapps.io` or a dedicated backend API custom domain such as `https://studentos-api.sentiqlabs.com`, and use `npm run cloudflare:config` as the frontend build command.
+1. Set Cloudflare Pages `STUDENTOS_PUBLIC_API_BASE_URL` to `https://studentos-api-dev.ashygrass-913d190e.centralindia.azurecontainerapps.io` or a dedicated backend API custom domain such as `https://studentos-api.sentiqlabs.com`, and use `npm run cloudflare:build` as the frontend build command. Keep the build output directory set to `frontend`.
 2. Set Azure Container App `CORS_ORIGINS` to `https://studentos.sentiqlabs.com,https://studentos-39s.pages.dev,http://localhost:3101,http://localhost:3102,http://127.0.0.1:3101,http://127.0.0.1:3102`.
 3. Open `https://studentos.sentiqlabs.com` and verify API-backed UI sections load without same-origin fallback errors.
 4. Open `https://<azure-backend-fqdn>/api/health` and verify `ok: true`.
