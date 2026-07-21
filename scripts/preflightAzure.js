@@ -90,6 +90,7 @@ addCheck("package start exists", pkg.scripts?.start === "node backend/server.js"
 addCheck("package preflight exists", pkg.scripts?.preflight === "npm run preflight:azure && npm run preflight:production");
 addCheck("package preflight:azure exists", pkg.scripts?.["preflight:azure"] === "node scripts/preflightAzure.js");
 addCheck("package verify:azure-deployment exists", pkg.scripts?.["verify:azure-deployment"] === "node scripts/verifyAzureDeployment.js");
+addCheck("package repository syntax check exists", pkg.scripts?.["check:syntax"] === "node scripts/checkNodeSyntax.js");
 addCheck("package cloudflare:config exists", pkg.scripts?.["cloudflare:config"] === "node scripts/writeCloudflareFrontendConfig.js");
 addCheck("package verify:cloudflare-azure exists", pkg.scripts?.["verify:cloudflare-azure"] === "node scripts/verifyCloudflareAzureWiring.js");
 addCheck("server reads PORT", /process\.env\.PORT/.test(server));
@@ -175,6 +176,7 @@ addCheck("workflow is manual-only", workflow.includes("workflow_dispatch:") && !
 addCheck("workflow uses GHCR", workflow.includes("ghcr.io") && workflow.includes("docker/build-push-action"));
 addCheck("workflow selects Azure subscription", workflow.includes("AZURE_SUBSCRIPTION_ID") && workflow.includes("az account set"));
 addCheck("workflow passes existing ACA environment resource group", workflow.includes("AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP") && workflow.includes("useExistingEnvironment=true"));
+addCheck("workflow requires dedicated worker name", workflow.includes("AZURE_WORKER_CONTAINER_APP_NAME is required") && workflow.includes("workerContainerAppName=\"${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}\""));
 addCheck("workflow does not create a second Central India ACA environment", !workflow.includes("cae-studentos-dev") && workflow.includes("Validate existing ACA environment settings"));
 const buildWorkflowStart = workflow.indexOf("- name: Build and push image");
 const azureLoginStart = workflow.indexOf("- name: Azure login");
@@ -255,8 +257,8 @@ addCheck(
 );
 addCheck(
   "workflow emits redacted Azure CLI failure categories",
-  workflow.includes("run_redacted_az_step containerapp_secret_set") &&
-    workflow.includes("run_redacted_az_step containerapp_env_update") &&
+  workflow.includes('run_redacted_az_step "containerapp_secret_set_${app_name}"') &&
+    workflow.includes('run_redacted_az_step "containerapp_env_update_${app_name}"') &&
     workflow.includes("Raw CLI output was withheld to protect secret values.") &&
     !/cat\s+["']?\$?log_path/.test(workflow) &&
     !/echo[^\n]*\$value/.test(workflow),
@@ -315,13 +317,19 @@ const requiredCorsOrigins = [
 addCheck("Cloudflare production CORS origins configured", requiredCorsOrigins.every((origin) => bicep.includes(origin) && read("backend/config/saasConfig.js").includes(origin)));
 addCheck("Azure CORS does not use wildcard", !/CORS_ORIGINS[^\n]*\*/.test(bicep) && !/corsOrigins string = '\*/.test(bicep));
 addCheck("Container Apps scale to zero configured", bicep.includes("param minReplicas int = 0") && bicep.includes("param maxReplicas int = 1"));
+addCheck("Dedicated worker uses the API image without ingress", bicep.includes("resource workerContainerApp") && bicep.includes("name: 'studentos-worker'") && bicep.includes("image: image") && !bicep.slice(bicep.indexOf("resource workerContainerApp")).includes("ingress: {"));
+addCheck("Dedicated worker command and fixed scale configured", bicep.includes("'jobs:dev'") && bicep.slice(bicep.indexOf("resource workerContainerApp")).includes("minReplicas: 1") && bicep.slice(bicep.indexOf("resource workerContainerApp")).includes("maxReplicas: 1"));
+addCheck("Dedicated worker has constrained resources", bicep.slice(bicep.indexOf("resource workerContainerApp")).includes("cpu: json('0.25')") && bicep.slice(bicep.indexOf("resource workerContainerApp")).includes("memory: '0.5Gi'"));
 addCheck("Bicep disables backend frontend serving", bicep.includes("name: 'STUDENTOS_SERVE_FRONTEND'") && bicep.includes("value: 'false'"));
 addCheck("Bicep can reuse existing ACA environment", bicep.includes("param useExistingEnvironment bool = true") && bicep.includes("existingEnvironmentResourceGroup") && bicep.includes("resourceId(existingEnvironmentResourceGroup") && bicep.includes("if (!useExistingEnvironment)"));
 const psDeploy = read("infra/azure/deploy-containerapp.ps1");
 const shDeploy = read("infra/azure/deploy-containerapp.sh");
 addCheck("deploy scripts refuse unsafe replica settings", psDeploy.includes("MinReplicas=0") && psDeploy.includes("MaxReplicas=1") && shDeploy.includes("MIN_REPLICAS=0") && shDeploy.includes("MAX_REPLICAS=1"));
+addCheck("deploy scripts include the dedicated worker", psDeploy.includes("WorkerContainerAppName") && psDeploy.includes("min=1 max=1") && shDeploy.includes("WORKER_CONTAINER_APP_NAME") && shDeploy.includes("min=1 max=1"));
 addCheck("deploy scripts show safe final URL summary", psDeploy.includes("Safe deployment summary") && shDeploy.includes("Safe deployment summary"));
 addCheck("deploy scripts support existing ACA environment", psDeploy.includes("ExistingEnvironmentResourceGroup") && psDeploy.includes("useExistingEnvironment=$UseExistingEnvironment") && shDeploy.includes("EXISTING_ENVIRONMENT_RESOURCE_GROUP") && shDeploy.includes("useExistingEnvironment=\"$USE_EXISTING_ENVIRONMENT\""));
+addCheck("workflow validates actual worker topology before enable", workflow.includes("Validate dedicated worker resource") && workflow.includes("latestReadyRevisionName") && workflow.includes(".properties.configuration.ingress == null") && workflow.includes("Verify migration 002 before an enable request"));
+addCheck("workflow maps backend authority to both apps", workflow.includes('for app_name in "${{ secrets.AZURE_CONTAINER_APP_NAME }}" "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"') && workflow.includes("STUDENTOS_BACKGROUND_WORKERS_ENABLED: 'true'") && workflow.includes("STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: 'false'"));
 const verifier = read("scripts/verifyAzureDeployment.js");
 const cloudflareVerifier = read("scripts/verifyCloudflareAzureWiring.js");
 addCheck("verify script checks health and config", verifier.includes("/api/health") && verifier.includes("/api/config"));
@@ -335,8 +343,8 @@ const result = {
   ok: failed.length === 0,
   product: "StudentOS",
   target: "Azure Container Apps Consumption",
-  workflow: "Azure Container Apps - StudentOS API",
-  scale: { minReplicas: 0, maxReplicas: 1 },
+  workflow: "Azure Container Apps - StudentOS API and Worker",
+  scale: { api: { minReplicas: 0, maxReplicas: 1 }, worker: { minReplicas: 1, maxReplicas: 1 } },
   checkedAt: new Date().toISOString(),
   checks,
   failed: failed.map((check) => check.name),

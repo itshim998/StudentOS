@@ -254,9 +254,18 @@ export async function processBackgroundJob({
     job.lastError = sanitizeJobError(error);
     job.lockedAt = null;
     job.processedAt = nowIso();
-    job.status = job.attempts >= Number(job.maxAttempts || 3) ? "failed" : "queued";
+    const maxAttempts = Number(job.maxAttempts || 3);
+    const retryable = job.jobType === "recovery_analysis" ? error?.retryable === true : true;
+    const exhausted = retryable && Number(job.attempts || 0) >= maxAttempts;
+    job.status = retryable && !exhausted ? "queued" : "failed";
     job.updatedAt = nowIso();
-    return { ok: false, error: job.lastError, willRetry: job.status === "queued" };
+    return {
+      ok: false,
+      error: job.lastError,
+      retryable,
+      exhausted,
+      willRetry: job.status === "queued",
+    };
   }
 }
 

@@ -1,6 +1,7 @@
 ﻿param(
   [string]$ResourceGroup = "rg-studentos-dev",
   [string]$ContainerAppName = "studentos-api-dev",
+  [string]$WorkerContainerAppName = "studentos-worker-dev",
   [string]$EnvironmentName = "cae-sentiqgpt-prod",
   [string]$ExistingEnvironmentName = "cae-sentiqgpt-prod",
   [string]$ExistingEnvironmentResourceGroup = "rg-sentiqgpt-prod",
@@ -26,6 +27,7 @@ function Assert-NotBlank([string]$Name, [string]$Value) {
 
 Assert-NotBlank "ResourceGroup" $ResourceGroup
 Assert-NotBlank "ContainerAppName" $ContainerAppName
+Assert-NotBlank "WorkerContainerAppName" $WorkerContainerAppName
 Assert-NotBlank "EnvironmentName" $EnvironmentName
 Assert-NotBlank "Location" $Location
 Assert-NotBlank "Image" $Image
@@ -61,12 +63,13 @@ if ($UseExistingEnvironment) {
   Write-Host "Creating/updating ACA environment $EnvironmentName in StudentOS resource group $ResourceGroup"
 }
 
-Write-Host "Deploying StudentOS Container App $ContainerAppName with min=0 max=1"
+Write-Host "Deploying StudentOS API $ContainerAppName (min=0 max=1) and worker $WorkerContainerAppName (min=1 max=1)"
 az deployment group create `
   --resource-group $ResourceGroup `
   --template-file infra/azure/containerapp.bicep `
   --parameters location=$Location `
     containerAppName=$ContainerAppName `
+    workerContainerAppName=$WorkerContainerAppName `
     managedEnvironmentName=$EnvironmentName `
     useExistingEnvironment=$UseExistingEnvironmentValue `
     existingEnvironmentName=$ExistingEnvironmentName `
@@ -87,4 +90,10 @@ az containerapp show `
   --query "{name:name,fqdn:properties.configuration.ingress.fqdn,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas,latestRevision:properties.latestRevisionName}" `
   --output table
 
-Write-Host "Runtime Supabase/provider secrets must be configured as Container Apps secrets before production use."
+az containerapp show `
+  --resource-group $ResourceGroup `
+  --name $WorkerContainerAppName `
+  --query "{name:name,ingress:properties.configuration.ingress,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas,image:properties.template.containers[0].image,command:properties.template.containers[0].command,args:properties.template.containers[0].args,latestRevision:properties.latestRevisionName,runningStatus:properties.runningStatus}" `
+  --output table
+
+Write-Host "Map the same Supabase/provider secrets to both apps. Use 'az containerapp logs show --follow --name $WorkerContainerAppName --resource-group $ResourceGroup' for worker logs; restart by creating a new revision after checking stale job locks."

@@ -147,7 +147,7 @@ import {
 } from "./recovery/recoveryEngineService.js";
 import { RecoveryAnalyzeInputSchema, EmptyRecoveryMutationSchema } from "./recovery/recoverySchemas.js";
 import { RECOVERY_FAILURES, RecoveryError, assertRecoveryEnabled, recoveryErrorEnvelope } from "./recovery/recoveryErrors.js";
-import { recordAcademicEvent } from "./recovery/academicStateBuilder.js";
+import { ensureRecoveryCollections, recordAcademicEvent } from "./recovery/academicStateBuilder.js";
 import { markRecoveryTaskProgress } from "./recovery/recoveryPolicy.js";
 import {
   AI_ALLOWANCE_COPY,
@@ -658,6 +658,124 @@ async function readRecoveryBody(req, schema) {
   const parsed = schema.safeParse(await readJsonBody(req));
   if (parsed.success) return parsed.data;
   throw new RecoveryError(RECOVERY_FAILURES.INPUT_INVALID, "Recovery request input is invalid.", { correlationId: req.requestId });
+}
+
+const RECOVERY_DELTA_COLLECTIONS = Object.freeze([
+  "academicEvents",
+  "academicStateSnapshots",
+  "topicRecoveryStates",
+  "topicRecoveryStateHistory",
+  "recoveryRuns",
+  "recoveryPreviews",
+  "planVersions",
+]);
+
+function captureRecoveryBaseline(state) {
+  const baseline = {};
+  for (const key of ["recoveryUserStates", ...RECOVERY_DELTA_COLLECTIONS, "backgroundJobs"]) {
+    baseline[key] = new Map((state[key] || []).filter((item) => item?.id).map((item) => [item.id, JSON.stringify(item)]));
+  }
+  return baseline;
+}
+
+function recoveryChangesSince(state, baseline) {
+  const changes = {};
+  for (const key of RECOVERY_DELTA_COLLECTIONS) {
+    changes[key] = (state[key] || []).filter((item) => item?.id && baseline?.[key]?.get(item.id) !== JSON.stringify(item));
+  }
+  changes.backgroundJobs = (state.backgroundJobs || []).filter((item) => (
+    item?.id && item.jobType === "recovery_analysis" && item.status === "queued" && Number(item.attempts || 0) === 0
+    && baseline?.backgroundJobs?.get(item.id) !== JSON.stringify(item)
+  ));
+  const userState = ensureRecoveryCollections(state);
+  changes.userState = baseline?.recoveryUserStates?.get(userState.id) !== JSON.stringify(userState) ? userState : null;
+  return changes;
+}
+
+function copyPersistedRecoveryState(target, source) {
+  target.recoveryUserStates = source.recoveryUserStates;
+  for (const key of RECOVERY_DELTA_COLLECTIONS) target[key] = source[key];
+  const ordinaryJobs = (target.backgroundJobs || []).filter((job) => job.jobType !== "recovery_analysis");
+  target.backgroundJobs = [...ordinaryJobs, ...(source.backgroundJobs || []).filter((job) => job.jobType === "recovery_analysis")];
+}
+
+function rebuildRecoveryChangesOnLatest(latest, originalChanges) {
+  const userState = ensureRecoveryCollections(latest);
+  const academicEvents = [];
+  for (const event of originalChanges.academicEvents || []) {
+    const existing = latest.academicEvents.find((item) => item.idempotencyKey === event.idempotencyKey);
+    if (existing) continue;
+    latest.academicEvents.push(event);
+    academicEvents.push(event);
+    userState.academicRevision += 1;
+  }
+  const topicRecoveryStates = [];
+  for (const candidate of originalChanges.topicRecoveryStates || []) {
+    const index = latest.topicRecoveryStates.findIndex((item) => item.id === candidate.id);
+    if (index >= 0 && Number(latest.topicRecoveryStates[index].version || 0) >= Number(candidate.version || 0)) continue;
+    if (index >= 0) latest.topicRecoveryStates[index] = candidate;
+    else latest.topicRecoveryStates.push(candidate);
+    topicRecoveryStates.push(candidate);
+  }
+  const topicRecoveryStateHistory = [];
+  for (const history of originalChanges.topicRecoveryStateHistory || []) {
+    if (latest.topicRecoveryStateHistory.some((item) => item.id === history.id)) continue;
+    latest.topicRecoveryStateHistory.push(history);
+    topicRecoveryStateHistory.push(history);
+  }
+  const planVersions = [];
+  if ((originalChanges.planVersions || []).length) {
+    const source = originalChanges.planVersions.at(-1)?.source || "recovery_reconciled_change";
+    const before = latest.planVersions.length;
+    createCurrentPlanVersion(latest, { source });
+    planVersions.push(...latest.planVersions.slice(before));
+  }
+  const run = academicEvents.length ? queueAutomaticRecovery(latest, {
+    correlationId: originalChanges.recoveryRuns?.[0]?.correlationId || null,
+  }) : null;
+  const backgroundJob = run
+    ? latest.backgroundJobs.find((job) => job.jobType === "recovery_analysis" && job.payload?.runId === run.id && job.status === "queued")
+    : null;
+  userState.updatedAt = new Date().toISOString();
+  return {
+    userState: academicEvents.length || planVersions.length ? userState : null,
+    academicEvents,
+    topicRecoveryStates,
+    topicRecoveryStateHistory,
+    recoveryRuns: run ? [run] : [],
+    planVersions,
+    backgroundJobs: backgroundJob && Number(backgroundJob.attempts || 0) === 0 ? [backgroundJob] : [],
+  };
+}
+
+async function persistRecoveryAwareMutation({ repository, session, state, baseline, ordinarySave, correlationId }) {
+  await ordinarySave();
+  if (!baseline) return;
+  const changes = recoveryChangesSince(state, baseline);
+  try {
+    await repository.saveRecoveryChanges(session, state, changes);
+    return;
+  } catch (error) {
+    if (error?.code === RECOVERY_FAILURES.CONCURRENCY_CONFLICT) {
+      try {
+        const latest = await repository.loadState(session);
+        const retryChanges = rebuildRecoveryChangesOnLatest(latest, changes);
+        await repository.saveRecoveryChanges(session, latest, retryChanges);
+        copyPersistedRecoveryState(state, latest);
+        return;
+      } catch {
+        // The ordinary mutation is authoritative and already persisted. Recovery remains auxiliary.
+      }
+    }
+    const latest = await repository.loadState(session).catch(() => null);
+    if (latest) copyPersistedRecoveryState(state, latest);
+    console.warn(JSON.stringify({
+      event: "adaptive_recovery.hook_persistence_failed",
+      correlationId: String(correlationId || "").slice(0, 180),
+      retryable: true,
+      secretsPrinted: false,
+    }));
+  }
 }
 
 function getPublicAiStatus(config) {
@@ -2121,6 +2239,7 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
+    const recoveryBaseline = recoveryConfig.enabled ? captureRecoveryBaseline(state) : null;
     const exam = addManualExam(state, body);
     if (recoveryConfig.enabled) recordAcademicEvent(state, {
       eventType: "exam_date_changed",
@@ -2131,7 +2250,7 @@ async function handleApi(req, res, url) {
       payload: { previousDate: null, newDate: exam.examDate || null },
     });
     if (recoveryConfig.enabled) queueAutomaticRecovery(state, { correlationId: req.requestId });
-    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
+    await persistRecoveryAwareMutation({ repository, session, state, baseline: recoveryBaseline, ordinarySave: () => repository.saveOrdinaryState(session, state), correlationId: req.requestId });
     sendJson(res, 201, {
       exam,
       state: publicState(state, persistence),
@@ -2145,6 +2264,7 @@ async function handleApi(req, res, url) {
   if (manualExamPath && ["PATCH", "DELETE"].includes(req.method)) {
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
+    const recoveryBaseline = recoveryConfig.enabled ? captureRecoveryBaseline(state) : null;
     const examId = decodeURIComponent(manualExamPath[1]);
     const previousExam = state.exams.find((item) => item.id === examId);
     const previousDate = previousExam?.examDate || null;
@@ -2163,7 +2283,7 @@ async function handleApi(req, res, url) {
       });
       queueAutomaticRecovery(state, { correlationId: req.requestId });
     }
-    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
+    await persistRecoveryAwareMutation({ repository, session, state, baseline: recoveryBaseline, ordinarySave: () => repository.saveOrdinaryState(session, state), correlationId: req.requestId });
     sendJson(res, 200, {
       exam,
       state: publicState(state, persistence),
@@ -2268,6 +2388,7 @@ async function handleApi(req, res, url) {
       });
       return;
     }
+    const recoveryBaseline = recoveryConfig.enabled ? captureRecoveryBaseline(state) : null;
     const previousDailyPlan = state.studentProfile.dailyTodoPlan;
     if (recoveryConfig.enabled && previousDailyPlan?.date && previousDailyPlan.date !== result.plan?.date) {
       for (const item of (previousDailyPlan.items || []).filter((candidate) => !["done", "completed"].includes(candidate.study_status))) {
@@ -2285,7 +2406,7 @@ async function handleApi(req, res, url) {
     state.studentProfile.dailyTodoPlan = result.plan;
     markPlanningStateCurrent(state, result.plan);
     if (recoveryConfig.enabled) createCurrentPlanVersion(state, { source: "today_generation" });
-    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
+    await persistRecoveryAwareMutation({ repository, session, state, baseline: recoveryBaseline, ordinarySave: () => repository.saveOrdinaryState(session, state), correlationId: req.requestId });
     sendJson(res, 200, {
       generated: true,
       plan: result.plan,
@@ -2306,6 +2427,7 @@ async function handleApi(req, res, url) {
       error.status = 404;
       throw error;
     }
+    const recoveryBaseline = recoveryConfig.enabled ? captureRecoveryBaseline(state) : null;
     ensureTopicMasteryQueue(state, item);
     let completion = null;
     if (body.status === "done") completion = completeCurrentMasteryTarget(state, item);
@@ -2325,7 +2447,7 @@ async function handleApi(req, res, url) {
       }
       createCurrentPlanVersion(state, { source: "study_status_changed" });
     }
-    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
+    await persistRecoveryAwareMutation({ repository, session, state, baseline: recoveryBaseline, ordinarySave: () => repository.saveOrdinaryState(session, state), correlationId: req.requestId });
     sendJson(res, 200, {
       item,
       completion,
@@ -2798,6 +2920,7 @@ async function handleApi(req, res, url) {
       }
       const assessedTopicIds = new Set((testSession.testPaper?.questions || []).map((question) => question.topic_id || question.topicId).filter(Boolean));
       const priorEvidenceCount = (state.testResults || []).filter((testResult) => (testResult.topicEvidence || []).some((evidence) => assessedTopicIds.has(evidence.topicId))).length;
+      const recoveryBaseline = recoveryConfig.enabled ? captureRecoveryBaseline(state) : null;
       applyStudyTestEvaluation({ state, item, session: testSession, evaluation: result.evaluation, answerSheet });
       if (recoveryConfig.enabled) {
         const persistedResult = (state.testResults || []).find((testResult) => testResult.testSessionId === testSession.id);
@@ -2815,7 +2938,14 @@ async function handleApi(req, res, url) {
         });
         queueAutomaticRecovery(state, { correlationId: req.requestId });
       }
-      await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
+      await persistRecoveryAwareMutation({
+        repository,
+        session,
+        state,
+        baseline: recoveryBaseline,
+        ordinarySave: () => repository.saveOrdinaryState(session, state),
+        correlationId: req.requestId,
+      });
       sendJson(res, 200, {
         evaluated: true,
         testSession: publicTestSession(testSession),
@@ -2940,6 +3070,7 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
+    const recoveryBaseline = recoveryConfig.enabled ? captureRecoveryBaseline(state) : null;
     const previousSchedule = state.studentProfile?.preferences?.scheduleText || state.studentProfile?.preferences?.timetableText || "";
     const previousAcademicProfile = JSON.stringify({
       gradeBand: state.studentProfile?.gradeBand || null,
@@ -2969,7 +3100,7 @@ async function handleApi(req, res, url) {
       });
       queueAutomaticRecovery(state, { correlationId: req.requestId });
     }
-    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
+    await persistRecoveryAwareMutation({ repository, session, state, baseline: recoveryBaseline, ordinarySave: () => repository.saveOrdinaryState(session, state), correlationId: req.requestId });
     sendJson(res, 200, {
       onboarding,
       state: publicState(state, persistence),
@@ -2982,6 +3113,7 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
+    const recoveryBaseline = recoveryConfig.enabled ? captureRecoveryBaseline(state) : null;
     const course = addManualCourse(state, body);
     if (recoveryConfig.enabled) {
       recordAcademicEvent(state, {
@@ -2994,7 +3126,7 @@ async function handleApi(req, res, url) {
       });
       queueAutomaticRecovery(state, { correlationId: req.requestId });
     }
-    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
+    await persistRecoveryAwareMutation({ repository, session, state, baseline: recoveryBaseline, ordinarySave: () => repository.saveOrdinaryState(session, state), correlationId: req.requestId });
     sendJson(res, 201, {
       course,
       state: publicState(state, persistence),
@@ -3008,6 +3140,7 @@ async function handleApi(req, res, url) {
   if (manualCoursePath && ["PATCH", "DELETE"].includes(req.method)) {
     const { session, state, persistence } = await getStateContext(req);
     requireDashboardActive(state);
+    const recoveryBaseline = recoveryConfig.enabled ? captureRecoveryBaseline(state) : null;
     const courseId = decodeURIComponent(manualCoursePath[1]);
     const course = req.method === "PATCH"
       ? updateManualCourse(state, courseId, await readJsonBody(req))
@@ -3023,7 +3156,7 @@ async function handleApi(req, res, url) {
       });
       queueAutomaticRecovery(state, { correlationId: req.requestId });
     }
-    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
+    await persistRecoveryAwareMutation({ repository, session, state, baseline: recoveryBaseline, ordinarySave: () => repository.saveOrdinaryState(session, state), correlationId: req.requestId });
     sendJson(res, 200, {
       course,
       state: publicState(state, persistence),
@@ -3250,6 +3383,7 @@ async function handleApi(req, res, url) {
       return;
     }
     if (googleClassroomConfig.mode === "oauth") requireAccountSession(session);
+    const recoveryBaseline = recoveryConfig.enabled ? captureRecoveryBaseline(state) : null;
     const result = await syncGoogleClassroomIntoState({
       state,
       session,
@@ -3274,7 +3408,7 @@ async function handleApi(req, res, url) {
         queueAutomaticRecovery(state, { correlationId: req.requestId });
       }
     }
-    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
+    await persistRecoveryAwareMutation({ repository, session, state, baseline: recoveryBaseline, ordinarySave: () => repository.saveOrdinaryState(session, state), correlationId: req.requestId });
     sendJson(res, 200, {
       ...result,
       connector: publicClassroomConnector(result.connector),
@@ -3676,6 +3810,7 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const { session, state } = await getStateContext(req);
     requireDashboardActive(state);
+    const recoveryBaseline = recoveryConfig.enabled ? captureRecoveryBaseline(state) : null;
     const result = applyTestScore(state, body);
     markPlanningStateStale(state, "test_result_updated", { clearPlan: false });
     refreshAcademicRoadmap(state);
@@ -3688,7 +3823,7 @@ async function handleApi(req, res, url) {
       payload: { testResultId: result?.testResult?.id || result?.id || null },
     });
     if (recoveryConfig.enabled) queueAutomaticRecovery(state, { correlationId: req.requestId });
-    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
+    await persistRecoveryAwareMutation({ repository, session, state, baseline: recoveryBaseline, ordinarySave: () => repository.saveOrdinaryState(session, state), correlationId: req.requestId });
     sendJson(res, 200, result);
     return;
   }
@@ -3986,6 +4121,7 @@ async function handleApi(req, res, url) {
         },
         createdAt: new Date().toISOString(),
       });
+      const recoveryBaseline = recoveryConfig.enabled ? captureRecoveryBaseline(state) : null;
       if (recoveryConfig.enabled) {
         recordAcademicEvent(state, {
           eventType: assignment ? "assignment_deadline_changed" : "academic_context_updated",
@@ -4001,7 +4137,14 @@ async function handleApi(req, res, url) {
       }
 
       uploadStage = "source_persist";
-      await runUploadStage(req, uploadStage, () => recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveSourceIngestion(session, state), {
+      await runUploadStage(req, uploadStage, () => persistRecoveryAwareMutation({
+        repository,
+        session,
+        state,
+        baseline: recoveryBaseline,
+        ordinarySave: () => recoveryConfig.enabled ? repository.saveOrdinaryState(session, state) : repository.saveSourceIngestion(session, state),
+        correlationId: req.requestId,
+      }), {
         timeoutMs: SOURCE_UPLOAD_STAGE_TIMEOUT_MS,
       });
       sendJson(res, 200, {
@@ -4116,6 +4259,7 @@ async function handleApi(req, res, url) {
     if (assignmentIdsWithoutSource.length) {
       await repository.hardDeleteSourceArtifacts(session, { assignmentIds: assignmentIdsWithoutSource });
     }
+    const recoveryBaseline = recoveryConfig.enabled ? captureRecoveryBaseline(state) : null;
     applyAcademicContextDeletion(state, deletionPlan);
     if (recoveryConfig.enabled) {
       recordAcademicEvent(state, {
@@ -4128,7 +4272,7 @@ async function handleApi(req, res, url) {
       });
       queueAutomaticRecovery(state, { correlationId: req.requestId });
     }
-    await (recoveryConfig.enabled ? repository.saveRecoveryState(session, state) : repository.saveState(session, state));
+    await persistRecoveryAwareMutation({ repository, session, state, baseline: recoveryBaseline, ordinarySave: () => repository.saveOrdinaryState(session, state), correlationId: req.requestId });
     sendJson(res, 200, {
       deleted: true,
       hardDeleted: true,

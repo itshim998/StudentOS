@@ -4,13 +4,16 @@
 
 param(
   [string]$ResourceGroup = "rg-studentos-dev",
-  [string]$ContainerAppName = "studentos-api-dev"
+  [string]$ContainerAppName = "studentos-api-dev",
+  [string]$WorkerContainerAppName = "studentos-worker-dev"
 )
 
 $ErrorActionPreference = "Stop"
 
-# Non-secret runtime flags. These keep the first deployment low-risk and low-cost.
-az containerapp update --resource-group $ResourceGroup --name $ContainerAppName --set-env-vars `
+# The API and worker require the same backend authority/provider mappings.
+foreach ($appName in @($ContainerAppName, $WorkerContainerAppName)) {
+# Non-secret runtime flags. Recovery remains off while the dedicated worker topology is validated.
+az containerapp update --resource-group $ResourceGroup --name $appName --set-env-vars `
   NODE_ENV=production `
   PORT=3101 `
   STUDENTOS_PORT=3101 `
@@ -18,7 +21,7 @@ az containerapp update --resource-group $ResourceGroup --name $ContainerAppName 
   STUDENTOS_DEPLOYMENT=azure-container-apps `
   STUDENTOS_SERVE_FRONTEND=false `
   STUDENTOS_MODE=supabase `
-  STUDENTOS_BACKGROUND_WORKERS_ENABLED=false `
+  STUDENTOS_BACKGROUND_WORKERS_ENABLED=true `
   STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false `
   STUDENTOS_RECOVERY_PREVIEW_TTL_HOURS=24 `
   STUDENTOS_DEMO_SEED_ENABLED=false `
@@ -37,7 +40,7 @@ az containerapp update --resource-group $ResourceGroup --name $ContainerAppName 
   CORS_ORIGINS="https://studentos.sentiqlabs.com,https://studentos-39s.pages.dev,http://localhost:3101,http://localhost:3102,http://127.0.0.1:3101,http://127.0.0.1:3102"
 
 # Secret placeholders. Replace values locally or use Azure Portal secret UI.
-az containerapp secret set --resource-group $ResourceGroup --name $ContainerAppName --secrets `
+az containerapp secret set --resource-group $ResourceGroup --name $appName --secrets `
   studentos-supabase-url-1="<auth-project-url>" `
   studentos-supabase-anon-key-1="<auth-anon-key>" `
   studentos-supabase-service-role-key-1="<auth-service-role-key>" `
@@ -69,7 +72,7 @@ az containerapp secret set --resource-group $ResourceGroup --name $ContainerAppN
 
 # Map secrets to environment variables. Keep only the Groq lines whose secrets were configured; one key is enough.
 # Keep Google/Classroom disabled for first deploy unless redirect URI is configured.
-az containerapp update --resource-group $ResourceGroup --name $ContainerAppName --set-env-vars `
+az containerapp update --resource-group $ResourceGroup --name $appName --set-env-vars `
   STUDENTOS_SUPABASE_URL_1=secretref:studentos-supabase-url-1 `
   STUDENTOS_SUPABASE_ANON_KEY_1=secretref:studentos-supabase-anon-key-1 `
   STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1=secretref:studentos-supabase-service-role-key-1 `
@@ -94,3 +97,4 @@ az containerapp update --resource-group $ResourceGroup --name $ContainerAppName 
   GEMINI_API_KEY_4=secretref:gemini-api-key-4 `
   GEMINI_API_KEY_5=secretref:gemini-api-key-5 `
   POLLINATIONS_API_KEY=secretref:pollinations-api-key
+}

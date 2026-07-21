@@ -151,6 +151,8 @@ export async function executeAuthorizedAiOperation({
   workflow,
   responseMode = "text",
   fixedProviderOrder = null,
+  forceRoutedLifecycle = false,
+  storeFailedOutcome = true,
   run,
   isLogicalSuccess,
   outcomeForReplay = (result) => result,
@@ -162,7 +164,7 @@ export async function executeAuthorizedAiOperation({
     throw new Error("invalid_authorized_ai_operation");
   }
 
-  const routed = cycleEnabledForUser(config, userId);
+  const routed = forceRoutedLifecycle === true || cycleEnabledForUser(config, userId);
   if (!routed) {
     if (config?.routing?.shadow === true) {
       repository.getAiWeeklySuccessfulRequestCount(session, { periodKey: allowanceRequest.periodKey })
@@ -237,7 +239,7 @@ export async function executeAuthorizedAiOperation({
   }
 
   const success = isLogicalSuccess(result);
-  const replayOutcome = success ? outcomeForReplay(result) : result;
+  const replayOutcome = success ? outcomeForReplay(result) : storeFailedOutcome ? result : null;
   const settlement = await completeWithRetry({
     repository,
     session,

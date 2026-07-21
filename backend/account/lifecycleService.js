@@ -423,14 +423,20 @@ export function buildSafeExportPreview(state) {
         "id", "version", "academicRevision", "fingerprint", "triggeringEventIds", "state", "createdAt",
       ])),
       topicStates: (state.topicRecoveryStates || []).map((item) => pick(item, [
-        "id", "courseId", "topicId", "evidenceIds", "strength", "priorityScore", "priorityBand", "status", "reasons", "updatedAt",
+        "id", "courseId", "topicId", "evidenceIds", "evidenceStrength", "priority", "priorityBand", "status",
+        "reasonCode", "explanation", "version", "firstObservedAt", "latestObservedAt", "resolvedAt", "updatedAt",
       ])),
       topicStateHistory: (state.topicRecoveryStateHistory || []).map((item) => pick(item, [
-        "id", "topicRecoveryStateId", "courseId", "topicId", "fromStatus", "toStatus", "reason", "createdAt",
+        "id", "topicRecoveryStateId", "courseId", "topicId", "fromStatus", "toStatus", "evidenceIds", "priority",
+        "reasonCode", "version", "createdAt",
       ])),
-      runs: (state.recoveryRuns || []).map((item) => pick(item, [
-        "id", "status", "triggerEventIds", "previousSnapshotId", "currentSnapshotId", "previewId", "failureCode", "failureMessage", "failureRetryable", "providerAttempts", "correlationId", "createdAt", "updatedAt",
-      ])),
+      runs: (state.recoveryRuns || []).map((item) => ({
+        ...pick(item, [
+          "id", "status", "triggerEventIds", "previousSnapshotId", "currentSnapshotId", "previewId", "failureCode",
+          "failureMessage", "failureRetryable", "correlationId", "createdAt", "updatedAt", "retryExhaustedAt",
+        ]),
+        processingAttempts: Number(item.processingAttempt || 0),
+      })),
       previews: (state.recoveryPreviews || []).map((item) => pick(item, [
         "id", "runId", "status", "basePlanVersion", "basePlanId", "academicRevision", "proposedPlan", "backendDiff", "affectedRecords", "deferrals", "expiresAt", "appliedAt", "rejectedAt",
       ])),

@@ -40,9 +40,10 @@ const additionalShardMigrations = [
   "supabase/migrations/202607020001_studentos_task34_ai_allowance_permissions.sql",
   "supabase/migrations/202607130001_studentos_multi_provider_routing.sql",
   "supabase/migrations/202607190001_studentos_adaptive_recovery_engine.sql",
+  "supabase/migrations/202607190002_studentos_adaptive_recovery_hardening.sql",
 ];
 
-console.log("StudentOS migration plan through Adaptive Recovery Engine Build Week");
+console.log("StudentOS migration plan through Adaptive Recovery production-readiness hardening");
 for (const [index, step] of steps.entries()) {
   console.log(`${index + 1}. ${step.project}: ${step.migration}`);
 }

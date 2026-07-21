@@ -4,6 +4,9 @@ param location string = resourceGroup().location
 @description('StudentOS Azure Container App name.')
 param containerAppName string = 'studentos-api-dev'
 
+@description('StudentOS dedicated background worker Container App name.')
+param workerContainerAppName string = 'studentos-worker-dev'
+
 @description('Azure Container Apps managed environment name used only when creating a new environment.')
 param managedEnvironmentName string = 'cae-studentos-dev'
 
@@ -128,7 +131,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             }
             {
               name: 'STUDENTOS_BACKGROUND_WORKERS_ENABLED'
-              value: 'false'
+              value: 'true'
             }
             {
               name: 'STUDENTOS_ADAPTIVE_RECOVERY_ENABLED'
@@ -186,12 +189,126 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
+resource workerContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
+  name: workerContainerAppName
+  location: location
+  properties: {
+    managedEnvironmentId: managedEnvironmentId
+    configuration: {
+      activeRevisionsMode: 'Single'
+      secrets: hasRegistryCredential ? [
+        {
+          name: registrySecretName
+          value: registryPassword
+        }
+      ] : []
+      registries: hasRegistryCredential ? [
+        {
+          server: registryServer
+          username: registryUsername
+          passwordSecretRef: registrySecretName
+        }
+      ] : []
+    }
+    template: {
+      containers: [
+        {
+          name: 'studentos-worker'
+          image: image
+          command: [
+            'npm'
+          ]
+          args: [
+            'run'
+            'jobs:dev'
+          ]
+          env: [
+            {
+              name: 'NODE_ENV'
+              value: 'production'
+            }
+            {
+              name: 'STUDENTOS_ENV'
+              value: 'production'
+            }
+            {
+              name: 'STUDENTOS_DEPLOYMENT'
+              value: 'azure-container-apps'
+            }
+            {
+              name: 'STUDENTOS_MODE'
+              value: studentosMode
+            }
+            {
+              name: 'STUDENTOS_BACKGROUND_WORKERS_ENABLED'
+              value: 'true'
+            }
+            {
+              name: 'STUDENTOS_ADAPTIVE_RECOVERY_ENABLED'
+              value: 'false'
+            }
+            {
+              name: 'STUDENTOS_RECOVERY_PREVIEW_TTL_HOURS'
+              value: '24'
+            }
+            {
+              name: 'STUDENTOS_DEMO_SEED_ENABLED'
+              value: 'false'
+            }
+            {
+              name: 'STUDENTOS_GOOGLE_CLASSROOM_MODE'
+              value: 'disabled'
+            }
+            {
+              name: 'STUDENTOS_BILLING_PROVIDER'
+              value: 'none'
+            }
+            {
+              name: 'STUDENTOS_BILLING_LIVE_CHARGES_ENABLED'
+              value: 'false'
+            }
+            {
+              name: 'STUDENTOS_FINAL_ACCOUNT_DELETION_ENABLED'
+              value: 'false'
+            }
+            {
+              name: 'STUDENTOS_AUTH_ADMIN_DELETE_ENABLED'
+              value: 'false'
+            }
+            {
+              name: 'STUDENTOS_INTERNAL_OPS_ENABLED'
+              value: 'false'
+            }
+          ]
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+        }
+      ]
+      scale: {
+        minReplicas: 1
+        maxReplicas: 1
+        rules: []
+      }
+    }
+  }
+}
+
 output containerAppName string = containerApp.name
 output containerAppFqdn string = containerApp.properties.configuration.ingress.fqdn
+output workerContainerAppName string = workerContainerApp.name
+output workerCommand array = workerContainerApp.properties.template.containers[0].command
 output managedEnvironmentMode string = useExistingEnvironment ? 'existing' : 'created'
 output containerAppEnvironmentName string = useExistingEnvironment ? existingEnvironmentName : managedEnvironmentName
 output managedEnvironmentResourceGroup string = useExistingEnvironment ? existingEnvironmentResourceGroup : resourceGroup().name
 output scaleSummary object = {
-  minReplicas: minReplicas
-  maxReplicas: maxReplicas
+  api: {
+    minReplicas: minReplicas
+    maxReplicas: maxReplicas
+  }
+  worker: {
+    minReplicas: 1
+    maxReplicas: 1
+  }
 }

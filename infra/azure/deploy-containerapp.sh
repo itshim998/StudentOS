@@ -3,6 +3,7 @@ set -euo pipefail
 
 RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-rg-studentos-dev}"
 CONTAINER_APP_NAME="${AZURE_CONTAINER_APP_NAME:-studentos-api-dev}"
+WORKER_CONTAINER_APP_NAME="${AZURE_WORKER_CONTAINER_APP_NAME:-studentos-worker-dev}"
 ENVIRONMENT_NAME="${AZURE_CONTAINER_APP_ENVIRONMENT:-cae-sentiqgpt-prod}"
 USE_EXISTING_ENVIRONMENT="${AZURE_USE_EXISTING_CONTAINER_APP_ENVIRONMENT:-true}"
 EXISTING_ENVIRONMENT_NAME="${AZURE_CONTAINER_APP_ENVIRONMENT:-cae-sentiqgpt-prod}"
@@ -27,6 +28,7 @@ require_value() {
 
 require_value "AZURE_RESOURCE_GROUP" "$RESOURCE_GROUP"
 require_value "AZURE_CONTAINER_APP_NAME" "$CONTAINER_APP_NAME"
+require_value "AZURE_WORKER_CONTAINER_APP_NAME" "$WORKER_CONTAINER_APP_NAME"
 require_value "AZURE_CONTAINER_APP_ENVIRONMENT" "$ENVIRONMENT_NAME"
 require_value "AZURE_LOCATION" "$LOCATION"
 require_value "STUDENTOS_IMAGE" "$IMAGE"
@@ -68,12 +70,13 @@ else
   echo "Creating/updating ACA environment $ENVIRONMENT_NAME in StudentOS resource group $RESOURCE_GROUP"
 fi
 
-echo "Deploying StudentOS Container App $CONTAINER_APP_NAME with min=0 max=1"
+echo "Deploying StudentOS API $CONTAINER_APP_NAME (min=0 max=1) and worker $WORKER_CONTAINER_APP_NAME (min=1 max=1)"
 az deployment group create \
   --resource-group "$RESOURCE_GROUP" \
   --template-file infra/azure/containerapp.bicep \
   --parameters location="$LOCATION" \
     containerAppName="$CONTAINER_APP_NAME" \
+    workerContainerAppName="$WORKER_CONTAINER_APP_NAME" \
     managedEnvironmentName="$ENVIRONMENT_NAME" \
     useExistingEnvironment="$USE_EXISTING_ENVIRONMENT" \
     existingEnvironmentName="$EXISTING_ENVIRONMENT_NAME" \
@@ -94,4 +97,10 @@ az containerapp show \
   --query "{name:name,fqdn:properties.configuration.ingress.fqdn,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas,latestRevision:properties.latestRevisionName}" \
   --output table
 
-echo "Runtime Supabase/provider secrets must be configured as Container Apps secrets before production use."
+az containerapp show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$WORKER_CONTAINER_APP_NAME" \
+  --query "{name:name,ingress:properties.configuration.ingress,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas,image:properties.template.containers[0].image,command:properties.template.containers[0].command,args:properties.template.containers[0].args,latestRevision:properties.latestRevisionName,runningStatus:properties.runningStatus}" \
+  --output table
+
+echo "Map the same Supabase/provider secrets to both apps. Use 'az containerapp logs show --follow --name $WORKER_CONTAINER_APP_NAME --resource-group $RESOURCE_GROUP' for worker logs; restart by creating a new revision after checking stale job locks."

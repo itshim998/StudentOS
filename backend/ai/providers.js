@@ -483,6 +483,7 @@ export async function runProviderFallback({
   reasoningEffort,
   providerOrder = null,
   operationDeadline = null,
+  validateOutput = null,
   config = getAiProviderConfig(),
   fetchImpl = globalThis.fetch,
 }) {
@@ -495,6 +496,7 @@ export async function runProviderFallback({
   let configuredProviderCount = 0;
   const failures = [];
   const attempts = [];
+  let invalidOutputSeen = false;
   for (const provider of providers) {
     if (!provider.isConfigured()) continue;
     configuredProviderCount += 1;
@@ -505,8 +507,26 @@ export async function runProviderFallback({
     const startedAt = Date.now();
     try {
       const result = await provider.generate({ messages, responseMode, maxTokens, reasoningEffort, operationDeadline });
+      let validatedOutput = null;
+      if (typeof validateOutput === "function") {
+        try {
+          validatedOutput = await validateOutput(result, { provider: provider.code });
+        } catch {
+          invalidOutputSeen = true;
+          failures.push(`${provider.name}:invalid_output`);
+          attempts.push({ provider: provider.code, outcome: "invalid_output", latencyMs: Date.now() - startedAt });
+          continue;
+        }
+      }
       attempts.push({ provider: provider.code, outcome: "success", latencyMs: Date.now() - startedAt });
-      return { ...result, attempts, generationSucceeded: true, providerFailure: false };
+      return {
+        ...result,
+        ...(typeof validateOutput === "function" ? { validatedOutput } : {}),
+        attempts,
+        generationSucceeded: true,
+        providerFailure: false,
+        invalidOutputSeen,
+      };
     } catch (error) {
       lastError = error;
       const code = safeFailureCode(provider.name, error);
@@ -537,6 +557,7 @@ export async function runProviderFallback({
       attempts,
       generationSucceeded: false,
       providerFailure: true,
+      invalidOutputSeen,
     };
   }
   return {
@@ -548,6 +569,7 @@ export async function runProviderFallback({
     attempts,
     generationSucceeded: false,
     providerFailure: true,
+    invalidOutputSeen,
   };
 }
 

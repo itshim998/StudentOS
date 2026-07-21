@@ -5,11 +5,11 @@ This runbook keeps the first StudentOS backend deployment cheap and reversible.
 ## Cost Controls
 
 - Use Azure Container Apps Consumption.
-- Keep `minReplicas=0` for scale-to-zero.
-- Keep `maxReplicas=1` for the first deployment.
+- Keep the API at `minReplicas=0`, `maxReplicas=1` for scale-to-zero.
+- Keep the dedicated no-ingress worker at exactly one replica; this intentional always-on cost is required so queued recovery work does not depend on API traffic.
 - Use the smallest safe container size: `0.25` CPU and `0.5Gi` memory.
 - Use GHCR instead of Azure Container Registry to avoid ACR cost.
-- Do not run always-on background workers.
+- Do not add more worker replicas, a second worker service, or background processing inside the API app.
 - Do not add warmup pingers.
 - Do not add Azure SQL.
 - Do not duplicate Supabase Storage into Azure Storage.
@@ -83,8 +83,8 @@ az group delete --name rg-studentos-dev --yes
 
 ## Worker Cost Policy
 
-Do not run `jobs:dev`, `jobs:work`, `exports:dev`, or `exports:work` continuously in the web app. Use future Azure Container Apps Jobs for manual/scheduled processing after a separate review.
+Do not run `jobs:dev`, `jobs:work`, `exports:dev`, or `exports:work` continuously in the web/API app. The only approved continuously running process is the dedicated `studentos-worker` Container App at `0.25` CPU, `0.5Gi`, and fixed 1–1 scale. Export workers and any additional scheduled jobs still require separate review.
 
 ## No Cron or Warmup Policy
 
-Do not add cron, scheduler, uptime monitor, or warmup pinger for the first deployment. Keep background workers off in the web app. Use future Azure Container Apps Jobs only after a separate manual/scheduled job review.
+Do not add cron, scheduler, uptime monitor, or warmup pinger for the first deployment. Keep background processing out of the web app; the dedicated worker polls the durable queue. Additional Container Apps Jobs require a separate manual/scheduled job review.

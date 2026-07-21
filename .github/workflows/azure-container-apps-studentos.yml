@@ -1,4 +1,4 @@
-﻿name: Azure Container Apps - StudentOS API
+﻿name: Azure Container Apps - StudentOS API and Worker
 
 on:
   workflow_dispatch:
@@ -12,6 +12,11 @@ on:
         required: false
         default: centralindia
         type: string
+      enable_adaptive_recovery:
+        description: Enable recovery only after migration 002 and worker validation succeed.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -89,6 +94,10 @@ jobs:
             echo "AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP is required to reuse the existing ACA environment." >&2
             exit 1
           fi
+          if [ -z "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}" ]; then
+            echo "AZURE_WORKER_CONTAINER_APP_NAME is required for the dedicated worker topology." >&2
+            exit 1
+          fi
 
       - name: Validate backend runtime secrets
         shell: bash
@@ -115,8 +124,8 @@ jobs:
           GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
-          STUDENTOS_BACKGROUND_WORKERS_ENABLED: ${{ vars.STUDENTOS_BACKGROUND_WORKERS_ENABLED || 'false' }}
-          STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: ${{ vars.STUDENTOS_ADAPTIVE_RECOVERY_ENABLED || 'false' }}
+          STUDENTOS_BACKGROUND_WORKERS_ENABLED: 'true'
+          STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: 'false'
           STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ENABLED || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_SHADOW: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_SHADOW || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT || '0' }}
@@ -145,10 +154,6 @@ jobs:
             exit 1
           fi
           echo "Required backend runtime secret names are configured."
-          if [ "$STUDENTOS_ADAPTIVE_RECOVERY_ENABLED" = "true" ] && [ "$STUDENTOS_BACKGROUND_WORKERS_ENABLED" != "true" ]; then
-            echo "Adaptive recovery cannot be enabled until background worker deployment is confirmed." >&2
-            exit 1
-          fi
           node scripts/validateAzureAiProviderSecrets.js
 
       - name: Deploy Container App infrastructure
@@ -163,6 +168,7 @@ jobs:
               --parameters \
                 location="${{ inputs.location || secrets.AZURE_LOCATION }}" \
                 containerAppName="${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
+                workerContainerAppName="${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}" \
                 managedEnvironmentName="${{ secrets.AZURE_CONTAINER_APP_ENVIRONMENT }}" \
                 useExistingEnvironment=true \
                 existingEnvironmentName="${{ secrets.AZURE_CONTAINER_APP_ENVIRONMENT }}" \
@@ -201,8 +207,8 @@ jobs:
           GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
-          STUDENTOS_BACKGROUND_WORKERS_ENABLED: ${{ vars.STUDENTOS_BACKGROUND_WORKERS_ENABLED || 'false' }}
-          STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: ${{ vars.STUDENTOS_ADAPTIVE_RECOVERY_ENABLED || 'false' }}
+          STUDENTOS_BACKGROUND_WORKERS_ENABLED: 'true'
+          STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: 'false'
           STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ENABLED || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_SHADOW: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_SHADOW || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT || '0' }}
@@ -253,9 +259,12 @@ jobs:
             add_optional_provider_secret GEMINI_API_KEY_5 gemini-api-key-5
             add_optional_provider_secret POLLINATIONS_API_KEY pollinations-api-key
 
-            run_redacted_az_step containerapp_secret_set az containerapp secret set \
+            # run_redacted_az_step containerapp_secret_set is applied independently to both apps.
+            # run_redacted_az_step containerapp_env_update is applied independently to both apps.
+            for app_name in "${{ secrets.AZURE_CONTAINER_APP_NAME }}" "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"; do
+            run_redacted_az_step "containerapp_secret_set_${app_name}" az containerapp secret set \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-              --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
+              --name "$app_name" \
               --secrets \
                 studentos-supabase-url-1="$STUDENTOS_SUPABASE_URL_1" \
                 studentos-supabase-anon-key-1="$STUDENTOS_SUPABASE_ANON_KEY_1" \
@@ -270,9 +279,9 @@ jobs:
                 $optional_secret_args \
               --output none
 
-            run_redacted_az_step containerapp_env_update az containerapp update \
+            run_redacted_az_step "containerapp_env_update_${app_name}" az containerapp update \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-              --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
+              --name "$app_name" \
               --set-env-vars \
                 STUDENTOS_SUPABASE_URL_1=secretref:studentos-supabase-url-1 \
                 STUDENTOS_SUPABASE_ANON_KEY_1=secretref:studentos-supabase-anon-key-1 \
@@ -302,6 +311,83 @@ jobs:
                 STUDENTOS_AUTH_REDIRECT_URL=https://studentos.sentiqlabs.com/auth/complete \
                 $optional_env_args \
               --output none
+            done
+
+      - name: Validate dedicated worker resource
+        shell: bash
+        run: |
+          for attempt in $(seq 1 30); do
+            worker_json="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}" --output json)"
+            latest="$(jq -r '.properties.latestRevisionName // ""' <<<"$worker_json")"
+            ready="$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$worker_json")"
+            if [ -n "$latest" ] && [ "$latest" = "$ready" ]; then break; fi
+            if [ "$attempt" = "30" ]; then
+              echo "Dedicated worker did not reach a ready latest revision." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          jq -e --arg image "${{ steps.image.outputs.image }}" '
+            .properties.configuration.ingress == null and
+            .properties.template.scale.minReplicas == 1 and
+            .properties.template.scale.maxReplicas == 1 and
+            .properties.template.containers[0].image == $image and
+            .properties.template.containers[0].command == ["npm"] and
+            .properties.template.containers[0].args == ["run", "jobs:dev"] and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_BACKGROUND_WORKERS_ENABLED" and .value == "true")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_ADAPTIVE_RECOVERY_ENABLED" and .value == "false")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_URL_1" and .secretRef == "studentos-supabase-url-1")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_ANON_KEY_1" and .secretRef == "studentos-supabase-anon-key-1")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1" and .secretRef == "studentos-supabase-service-role-key-1")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_URL_2" and .secretRef == "studentos-supabase-url-2")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2" and .secretRef == "studentos-supabase-service-role-key-2")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_URL_3" and .secretRef == "studentos-supabase-url-3")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3" and .secretRef == "studentos-supabase-service-role-key-3")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_URL_4" and .secretRef == "studentos-supabase-url-4")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4" and .secretRef == "studentos-supabase-service-role-key-4")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_JWT_SECRET" and .secretRef == "studentos-supabase-jwt-secret")) and
+            (.properties.latestRevisionName == .properties.latestReadyRevisionName)
+          ' <<<"$worker_json" >/dev/null
+          api_json="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" --output json)"
+          api_secret_env="$(jq -c '[.properties.template.containers[0].env[] | select(.secretRef) | {name, secretRef}] | sort_by(.name)' <<<"$api_json")"
+          worker_secret_env="$(jq -c '[.properties.template.containers[0].env[] | select(.secretRef) | {name, secretRef}] | sort_by(.name)' <<<"$worker_json")"
+          api_secret_names="$(jq -c '[.properties.configuration.secrets[].name] | sort' <<<"$api_json")"
+          worker_secret_names="$(jq -c '[.properties.configuration.secrets[].name] | sort' <<<"$worker_json")"
+          if [ "$api_secret_env" != "$worker_secret_env" ] || [ "$api_secret_names" != "$worker_secret_names" ]; then
+            echo "API and worker backend/provider secret wiring differs." >&2
+            exit 1
+          fi
+          echo "Dedicated worker topology verified: image, command, no ingress, fixed replica, backend authority, recovery disabled, and ready revision."
+
+      - name: Verify migration 002 before an enable request
+        if: ${{ inputs.enable_adaptive_recovery }}
+        shell: bash
+        env:
+          STUDENTOS_MODE: supabase
+          STUDENTOS_SUPABASE_URL_1: ${{ secrets.STUDENTOS_SUPABASE_URL_1 }}
+          STUDENTOS_SUPABASE_ANON_KEY_1: ${{ secrets.STUDENTOS_SUPABASE_ANON_KEY_1 }}
+          STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1 }}
+          STUDENTOS_SUPABASE_URL_2: ${{ secrets.STUDENTOS_SUPABASE_URL_2 }}
+          STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2 }}
+          STUDENTOS_SUPABASE_URL_3: ${{ secrets.STUDENTOS_SUPABASE_URL_3 }}
+          STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3 }}
+          STUDENTOS_SUPABASE_URL_4: ${{ secrets.STUDENTOS_SUPABASE_URL_4 }}
+          STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4 }}
+          STUDENTOS_SUPABASE_JWT_SECRET: ${{ secrets.STUDENTOS_SUPABASE_JWT_SECRET }}
+        run: node scripts/verifyAdaptiveRecoverySchemaLive.js
+
+      - name: Enable recovery after topology and schema gates
+        if: ${{ inputs.enable_adaptive_recovery }}
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            for app_name in "${{ secrets.AZURE_CONTAINER_APP_NAME }}" "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"; do
+              az containerapp update \
+                --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+                --name "$app_name" \
+                --set-env-vars STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=true STUDENTOS_BACKGROUND_WORKERS_ENABLED=true \
+                --output none
+            done
 
       - name: Show safe deployment summary
         uses: azure/cli@v2
@@ -311,4 +397,9 @@ jobs:
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
               --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
               --query "{name:name, fqdn:properties.configuration.ingress.fqdn, min:properties.template.scale.minReplicas, max:properties.template.scale.maxReplicas, latestRevision:properties.latestRevisionName}" \
+              --output table
+            az containerapp show \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --name "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}" \
+              --query "{name:name, ingress:properties.configuration.ingress, min:properties.template.scale.minReplicas, max:properties.template.scale.maxReplicas, image:properties.template.containers[0].image, command:properties.template.containers[0].command, args:properties.template.containers[0].args, latestRevision:properties.latestRevisionName, readyRevision:properties.latestReadyRevisionName, runningStatus:properties.runningStatus}" \
               --output table

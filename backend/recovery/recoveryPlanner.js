@@ -19,6 +19,7 @@ function activityTitle(intent) {
 }
 
 function recoveryTask(intent) {
+  const duration = Math.max(20, Math.min(Number(intent.recommendedMinutes || 20), 60));
   return {
     id: `todo:${intent.id}`,
     recovery_intent_id: intent.id,
@@ -33,7 +34,8 @@ function recoveryTask(intent) {
     activityType: intent.activityType,
     priority: intent.priority >= 60 ? "high" : intent.priority >= 35 ? "medium" : "low",
     priority_score: intent.priority,
-    duration_minutes: intent.recommendedMinutes,
+    duration_minutes: duration,
+    task_origin: "recovery_generated",
     study_status: "not_started",
     study_completed_at: null,
   };
@@ -67,7 +69,9 @@ export function buildRecoveryPlanPreview(snapshot, intents, { now = new Date() }
     courseId: item.courseId,
     topicId: item.topicId,
     priority: item.priority,
-    duration_minutes: Math.max(20, Number(item.durationMinutes || 30)),
+    duration_minutes: Number(item.durationMinutes) > 0 ? Number(item.durationMinutes) : 30,
+    original_duration_minutes: Number(item.durationMinutes) > 0 ? Number(item.durationMinutes) : 30,
+    task_origin: "existing_unfinished",
     study_status: item.studyStatus || "not_started",
     reason: "This unfinished work is retained from the current plan.",
     reason_code: "UNFINISHED_WORK_RETAINED",
@@ -80,25 +84,32 @@ export function buildRecoveryPlanPreview(snapshot, intents, { now = new Date() }
   const deferred = [];
   for (const intent of [...activeIntents].sort((left, right) => right.priority - left.priority || left.id.localeCompare(right.id))) {
     const used = courseMinutes.get(intent.courseId) || 0;
-    if (representedCourses.size > 1 && used + intent.recommendedMinutes > courseLimit) {
+    const task = recoveryTask(intent);
+    if (representedCourses.size > 1 && used + minutes(task) > courseLimit) {
       deferred.push({ ...intent, reasonCode: "COURSE_FOCUS_LIMIT", explanation: "Deferred to prevent one course from consuming most available study time." });
       continue;
     }
-    recovery.push(recoveryTask(intent));
-    courseMinutes.set(intent.courseId, used + intent.recommendedMinutes);
+    recovery.push(task);
+    courseMinutes.set(intent.courseId, used + minutes(task));
   }
   const candidates = uniqueById([...unfinished, ...recovery]).sort((left, right) => Number(right.priority_score || (right.priority === "high" ? 60 : right.priority === "medium" ? 35 : 1)) - Number(left.priority_score || (left.priority === "high" ? 60 : left.priority === "medium" ? 35 : 1)));
   let remaining = capacity;
   const selected = [];
   for (const item of candidates) {
-    const duration = Math.max(20, Math.min(minutes(item) || 30, 60));
+    const duration = item.task_origin === "existing_unfinished"
+      ? (minutes(item) || 30)
+      : Math.max(20, Math.min(minutes(item) || 20, 60));
     if (duration > remaining) {
       deferred.push({
-        id: item.recovery_intent_id || item.id,
+        id: item.id,
+        recovery_intent_id: item.recovery_intent_id || null,
+        originalTaskId: item.task_origin === "existing_unfinished" ? item.id : null,
         topicId: item.topicId || null,
         courseId: item.courseId || null,
         title: item.title,
         recommendedMinutes: duration,
+        originalDurationMinutes: item.task_origin === "existing_unfinished" ? duration : null,
+        taskOrigin: item.task_origin,
         reasonCode: "INSUFFICIENT_AVAILABLE_TIME",
         explanation: "Retained for a later plan because the remaining availability is insufficient.",
       });
@@ -170,7 +181,7 @@ export function validateRecoveryPlan({ plan, basePlan, deferredWork = [], snapsh
     if (item.courseId && !courses.has(String(item.courseId))) throw new RecoveryError(RECOVERY_FAILURES.PLAN_INFEASIBLE, "The proposed plan references an unknown course.", { correlationId });
     if (item.topicId && !topics.has(String(item.topicId))) throw new RecoveryError(RECOVERY_FAILURES.PLAN_INFEASIBLE, "The proposed plan references an unknown topic.", { correlationId });
     if ((item.evidenceIds || []).some((id) => !evidence.has(String(id)))) throw new RecoveryError(RECOVERY_FAILURES.EVIDENCE_INVALID, "The proposed plan references unknown evidence.", { correlationId });
-    if (item.recovery_intent_id && (minutes(item) < 20 || minutes(item) > 60)) throw new RecoveryError(RECOVERY_FAILURES.PLAN_INFEASIBLE, "Recovery tasks must be between 20 and 60 minutes.", { correlationId });
+    if ((item.task_origin === "recovery_generated" || item.recovery_intent_id) && (minutes(item) < 20 || minutes(item) > 60)) throw new RecoveryError(RECOVERY_FAILURES.PLAN_INFEASIBLE, "Recovery tasks must be between 20 and 60 minutes.", { correlationId });
     if (item.study_status !== "done" && minutes(item) < 0) throw new RecoveryError(RECOVERY_FAILURES.PLAN_INFEASIBLE, "The proposed plan contains an invalid task duration.", { correlationId });
     if (item.study_status !== "done" && (snapshot?.state?.availability?.exactWindows || []).length &&
         !(snapshot.state.availability.exactWindows || []).some((window) => withinWindow(item, window))) {
@@ -196,9 +207,14 @@ export function validateRecoveryPlan({ plan, basePlan, deferredWork = [], snapsh
   }
   const deferredIds = new Set((deferredWork || []).flatMap((item) => [item.id, item.recovery_intent_id]).filter(Boolean));
   for (const unfinished of (basePlan?.items || []).filter((item) => !["done", "completed"].includes(item.studyStatus))) {
-    if (!items.some((item) => item.id === unfinished.id) && !deferredIds.has(unfinished.id)) {
+    const scheduled = items.find((item) => item.id === unfinished.id);
+    const deferred = (deferredWork || []).find((item) => item.id === unfinished.id || item.originalTaskId === unfinished.id);
+    if (!scheduled && !deferredIds.has(unfinished.id)) {
       throw new RecoveryError(RECOVERY_FAILURES.PLAN_INFEASIBLE, "Unfinished work must be scheduled or explicitly deferred.", { correlationId });
     }
+    const originalDuration = Number(unfinished.durationMinutes) > 0 ? Number(unfinished.durationMinutes) : 30;
+    if (scheduled && minutes(scheduled) !== originalDuration) throw new RecoveryError(RECOVERY_FAILURES.PLAN_INFEASIBLE, "Unfinished work must retain its complete duration.", { correlationId });
+    if (deferred && Number(deferred.originalDurationMinutes || deferred.recommendedMinutes) !== originalDuration) throw new RecoveryError(RECOVERY_FAILURES.PLAN_INFEASIBLE, "Deferred unfinished work must retain its complete duration.", { correlationId });
   }
   return true;
 }

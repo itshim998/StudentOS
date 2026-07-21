@@ -11,6 +11,7 @@ const REQUIRED_TABLES = [
   "recovery_previews",
   "plan_versions",
 ];
+const baseline001Only = process.argv.includes("--baseline-001");
 
 function safeError(error) {
   return String(error?.message || error || "Unknown error")
@@ -43,8 +44,21 @@ async function main() {
     if (!schemaResponse.ok) throw new Error(`Recovery OpenAPI schema check failed with ${schemaResponse.status}`);
     const openapi = await schemaResponse.json();
     const requiredRpcs = ["acquire_recovery_mutation_lease", "release_recovery_mutation_lease", "apply_recovery_preview"];
+    if (!baseline001Only) requiredRpcs.push("persist_recovery_changes", "recovery_permission_posture");
     for (const rpc of requiredRpcs) {
       if (!openapi?.paths?.[`/rpc/${rpc}`]) throw new Error(`Required recovery RPC is missing: ${rpc}`);
+    }
+    let permissionPosture = null;
+    if (!baseline001Only) {
+      permissionPosture = await shard.client.rpc("recovery_permission_posture", {});
+      const rows = Array.isArray(permissionPosture) ? permissionPosture : [];
+      if (rows.length !== REQUIRED_TABLES.length) throw new Error("Recovery permission posture did not cover every authority table");
+      for (const row of rows) {
+        if (row.authenticated_select || row.authenticated_insert || row.authenticated_update || row.authenticated_delete ||
+            !row.service_role_select || !row.service_role_insert || !row.service_role_update || !row.service_role_delete) {
+          throw new Error(`Recovery permission posture is unsafe for ${row.recovery_table}`);
+        }
+      }
     }
     shards.push({
       shard: shard.label,
@@ -52,11 +66,16 @@ async function main() {
       tables,
       recoveryJobTypeQueryVerified: true,
       serviceRoleRpcPathsVerified: requiredRpcs,
+      permissionHardeningVerified: !baseline001Only,
     });
   }
   console.log(JSON.stringify({
     ok: true,
-    migration: "202607190001_studentos_adaptive_recovery_engine.sql",
+    verificationMode: baseline001Only ? "migration_001_baseline_only" : "migration_002_hardened",
+    migration: baseline001Only
+      ? "202607190001_studentos_adaptive_recovery_engine.sql"
+      : "202607190002_studentos_adaptive_recovery_hardening.sql",
+    hardeningDeployed: !baseline001Only,
     shards,
     secretsPrinted: false,
   }, null, 2));

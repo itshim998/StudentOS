@@ -1,0 +1,58 @@
+name: StudentOS Validation
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studentos-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Print migration plan
+        run: npm run migration:plan
+
+      - name: Run recovery tests
+        run: npm run test:recovery
+
+      - name: Run recovery evaluation
+        run: npm run eval:recovery
+
+      - name: Check repository Node syntax
+        run: npm run check:syntax
+
+      - name: Run full test suite
+        run: npm test
+
+      - name: Run production preflight
+        run: npm run preflight:production
+
+      - name: Run Azure preflight
+        run: npm run preflight:azure
+
+      - name: Check patch whitespace
+        run: git diff --check

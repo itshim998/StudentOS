@@ -41,21 +41,20 @@ cae-sentiqgpt-prod
 
 Existing environment resource group: `rg-sentiqgpt-prod`. StudentOS still deploys as its own Container App in `rg-studentos-dev`; this does not share or modify SentIQ Chat / SentIQGPT app secrets or runtime state. No Azure SQL, Azure Storage, or Azure Container Registry is required for the first deployment.
 
-## 4. Container App
+## 4. Container Apps
 
-Default app:
+Default resources:
 
 ```text
 studentos-api-dev
+studentos-worker-dev
 ```
 
 Required scale settings:
 
-- `minReplicas=0`
-- `maxReplicas=1`
-- external HTTP ingress enabled
-- target port `3101`
-- smallest safe resources: `0.25` CPU and `0.5Gi` memory
+- API: `minReplicas=0`, `maxReplicas=1`, external HTTP ingress, target port `3101`
+- Worker: `minReplicas=1`, `maxReplicas=1`, no ingress, command `npm run jobs:dev`
+- Both: image built by this workflow; smallest safe resources `0.25` CPU and `0.5Gi` memory
 
 
 Backend-only image check before deployment:
@@ -72,7 +71,7 @@ Expected: `.dockerignore` contains `frontend/`; `Dockerfile` has no `COPY fronte
 Workflow name:
 
 ```text
-Azure Container Apps - StudentOS API
+Azure Container Apps - StudentOS API and Worker
 ```
 
 Workflow file:
@@ -91,6 +90,7 @@ Configure these without values in documentation or commits:
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_RESOURCE_GROUP`
 - `AZURE_CONTAINER_APP_NAME`
+- `AZURE_WORKER_CONTAINER_APP_NAME`
 - `AZURE_CONTAINER_APP_ENVIRONMENT`
 - `AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP`
 - `AZURE_LOCATION`
@@ -126,7 +126,7 @@ Do not make the repository public for this. Do not bake the token into the Docke
 
 Use `infra/azure/containerapp-secrets.example.ps1` as a placeholder-only guide.
 
-Runtime secrets and env vars belong in Azure Container Apps, not in the image and not in GitHub source.
+Runtime secrets and env vars belong in Azure Container Apps, not in the image and not in GitHub source. Map the same Supabase service-role and optional provider secrets to the API and worker. The deployed topology sets `STUDENTOS_BACKGROUND_WORKERS_ENABLED=true` and initially sets `STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false` on both.
 
 ## 9. Post-Deploy Health Checks
 
@@ -146,6 +146,15 @@ Expected checks:
 - config reports `aiProviders.configured: true`
 - no dangerous toggles are enabled
 - no secrets appear in responses
+- worker has no ingress, uses the expected image and `npm run jobs:dev`, stays at 1–1 replicas, has required service-role secret refs, and reports its latest revision ready
+
+Inspect worker logs when needed:
+
+```powershell
+az containerapp logs show --resource-group rg-studentos-dev --name studentos-worker-dev --follow
+```
+
+Do not enable recovery based only on an environment variable. Migration 002 must be applied to all data shards, `npm.cmd run verify:recovery-schema` must pass, and the actual worker checks above must succeed. The workflow always deploys recovery false before evaluating a future explicit enable request.
 
 ## 10. Cloudflare Frontend Wiring
 
@@ -196,6 +205,14 @@ Remove-Item Env:STUDENTOS_AZURE_API_URL
 
 ## 11. Rollback and Scale-to-Zero
 
+Disable recovery on both apps first. To stop queue processing during an incident, then scale the worker to zero; database stale-job lock recovery permits a later controlled restart without creating replacement runs/jobs:
+
+```powershell
+az containerapp update --resource-group rg-studentos-dev --name studentos-api-dev --set-env-vars STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false
+az containerapp update --resource-group rg-studentos-dev --name studentos-worker-dev --set-env-vars STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false
+az containerapp update --resource-group rg-studentos-dev --name studentos-worker-dev --min-replicas 0 --max-replicas 1
+```
+
 Scale to zero while keeping the app:
 
 ```powershell
@@ -208,10 +225,11 @@ Disable ingress in an incident:
 az containerapp ingress disable --resource-group rg-studentos-dev --name studentos-api-dev
 ```
 
-Delete the dev app:
+Delete the dev apps only when full removal is intended:
 
 ```powershell
 az containerapp delete --resource-group rg-studentos-dev --name studentos-api-dev --yes
+az containerapp delete --resource-group rg-studentos-dev --name studentos-worker-dev --yes
 ```
 
 ## 12. Emergency Credit Preservation

@@ -342,7 +342,7 @@ export async function runRecoveryEvaluationCases() {
     const prepared = await prepareQueuedRecovery({ providerConfig: { ...evaluationProviderConfig(), requestedMode: "auto" }, executeAiOperation: async (request) => {
       const result = await request.run({ providerExecutor: async () => {
         providerCalls += 1;
-        return { text: "{not valid json", providerCode: "groq", attempts: [{ provider: "groq", outcome: "success" }] };
+        return { providerFailure: true, invalidOutputSeen: true, attempts: [{ provider: "groq", outcome: "invalid_output" }] };
       } });
       return { blocked: false, busy: false, success: request.isLogicalSuccess(result), result };
     } });

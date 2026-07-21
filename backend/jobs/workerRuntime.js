@@ -19,7 +19,16 @@ function sessionForJob(config, job) {
   };
 }
 
-export async function processClaimedJob({ repository, config, listedJob }) {
+export async function processClaimedJob({
+  repository,
+  config,
+  listedJob,
+  recoveryProcessor = processRecoveryRun,
+  recoveryRuntimeConfig = getRecoveryConfig(),
+  aiProviderRuntimeConfig = getAiProviderConfig(),
+  recoveryFetchImpl = globalThis.fetch,
+  recoveryExecuteAiOperation,
+} = {}) {
   const session = sessionForJob(config, listedJob);
   const state = await repository.loadState(session);
   const job = (state.backgroundJobs || []).find((item) => item.id === listedJob.id) || listedJob;
@@ -45,17 +54,33 @@ export async function processClaimedJob({ repository, config, listedJob }) {
       path: material.storagePath,
     }),
     processRecovery: async ({ state: recoveryState, job: recoveryJob }) => {
-      const run = await processRecoveryRun({
+      const run = await recoveryProcessor({
         repository,
         session,
         state: recoveryState,
         runId: recoveryJob.payload?.runId || recoveryJob.sourceId,
-        config: getRecoveryConfig(),
-        providerConfig: getAiProviderConfig(),
+        config: recoveryRuntimeConfig,
+        providerConfig: aiProviderRuntimeConfig,
+        fetchImpl: recoveryFetchImpl,
+        executeAiOperation: recoveryExecuteAiOperation,
+        jobAttempt: recoveryJob.attempts,
       });
       return { recoveryRunId: run.id, recoveryStatus: run.status, previewId: run.previewId || null };
     },
   });
+  if (job.jobType === "recovery_analysis" && !result.ok && !result.willRetry) {
+    const runId = job.payload?.runId || job.sourceId;
+    const run = (state.recoveryRuns || []).find((item) => item.id === runId && item.userId === session.user.id);
+    if (run && result.exhausted) {
+      const timestamp = new Date().toISOString();
+      run.failureRetryable = false;
+      run.retryExhaustedAt = timestamp;
+      run.updatedAt = timestamp;
+      const latestAttempt = (run.attemptHistory || []).at(-1);
+      if (latestAttempt) latestAttempt.retryExhausted = true;
+      await repository.saveRecoveryChanges(session, state, { recoveryRuns: [run] });
+    }
+  }
   recordJobEvent(state, {
     job,
     eventType: result.ok ? "completed" : "failed",
@@ -63,6 +88,8 @@ export async function processClaimedJob({ repository, config, listedJob }) {
     message: result.ok ? "Background job completed." : "Background job failed or will retry.",
     metadata: {
       willRetry: result.willRetry === true,
+      retryable: result.retryable === true,
+      exhausted: result.exhausted === true,
       error: result.error,
     },
   });
@@ -75,6 +102,7 @@ export async function processClaimedJob({ repository, config, listedJob }) {
     attempts: job.attempts,
     ok: result.ok === true,
     willRetry: result.willRetry === true,
+    exhausted: result.exhausted === true,
   };
 }
 

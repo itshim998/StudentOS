@@ -17,7 +17,7 @@ import { parseRecoveryReasoningJson, RecoveryReasoningOutputSchema } from "./rec
 import { RECOVERY_FAILURES, RecoveryError, assertRecoveryEnabled } from "./recoveryErrors.js";
 
 const FIXED_RECOVERY_PROVIDER_ORDER = Object.freeze(["groq", "gemini", "pollinations"]);
-const ACTIVE_RUN_STATUSES = new Set(["queued", "building_state", "reasoning", "validating", "planning"]);
+const ACTIVE_RUN_STATUSES = new Set(["queued", "retrying", "building_state", "reasoning", "validating", "planning"]);
 
 function clean(value, limit = 300) {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, limit);
@@ -33,6 +33,46 @@ function transitionRun(run, status, now = new Date()) {
   run.statusHistory = run.statusHistory || [];
   if (run.statusHistory.at(-1)?.status !== status) run.statusHistory.push({ status, at: run.updatedAt });
   return run;
+}
+
+async function persistRecoveryChanges(repository, session, state, changes) {
+  return repository.saveRecoveryChanges(session, state, changes);
+}
+
+function recordRunFailureAttempt(run, now = new Date()) {
+  run.attemptHistory = run.attemptHistory || [];
+  if (run.attemptHistory.some((item) => item.attempt === run.processingAttempt)) return;
+  run.attemptHistory.push({
+    attempt: Number(run.processingAttempt || 1),
+    failedAt: now.toISOString(),
+    failureCode: run.failureCode,
+    retryable: run.failureRetryable === true,
+    providerAttempts: (run.providerAttempts || []).map((attempt) => ({
+      provider: clean(attempt.provider, 40),
+      outcome: clean(attempt.outcome, 40),
+      latencyMs: Math.max(0, Number(attempt.latencyMs || 0)),
+    })),
+  });
+}
+
+function beginRunAttempt(run, now = new Date(), attemptNumber = null) {
+  if (run.status === "failed") {
+    if (run.failureRetryable !== true) {
+      throw new RecoveryError(run.failureCode || RECOVERY_FAILURES.PROVIDER_FAILED, run.failureMessage || "Recovery analysis cannot be retried.", { retryable: false, correlationId: run.correlationId });
+    }
+    if (run.previewId) {
+      throw new RecoveryError(RECOVERY_FAILURES.CONCURRENCY_CONFLICT, "A failed recovery run cannot be retried after creating a preview.", { retryable: false, correlationId: run.correlationId });
+    }
+    transitionRun(run, "retrying", now);
+    run.retryStartedAt = now.toISOString();
+  }
+  run.processingAttempt = Math.max(Number(run.processingAttempt || 0) + 1, Number(attemptNumber || 0));
+  run.failureCode = null;
+  run.failureMessage = null;
+  run.failureRetryable = false;
+  run.providerRouting = null;
+  run.providerAttempts = [];
+  transitionRun(run, "building_state", now);
 }
 
 function deterministicReasoning(context) {
@@ -156,6 +196,8 @@ export async function queueRecoveryAnalysis({
     providerRouting: null,
     failureCode: null,
     failureRetryable: false,
+    processingAttempt: 0,
+    attemptHistory: [],
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     statusHistory: [{ status: "queued", at: now.toISOString() }],
@@ -172,7 +214,13 @@ export async function queueRecoveryAnalysis({
       maxAttempts: 3,
     }));
   }
-  await repository.saveRecoveryState(session, state);
+  const job = state.backgroundJobs.find((item) => item.jobType === "recovery_analysis" && item.payload?.runId === run.id);
+  await persistRecoveryChanges(repository, session, state, {
+    userState: true,
+    academicEvents: [eventResult.event],
+    recoveryRuns: [run],
+    backgroundJobs: job ? [job] : [],
+  });
   return { run, replayed: false };
 }
 
@@ -205,6 +253,8 @@ export function queueAutomaticRecovery(state, { correlationId = null, now = new 
     providerRouting: null,
     failureCode: null,
     failureRetryable: false,
+    processingAttempt: 0,
+    attemptHistory: [],
     createdAt: timestamp,
     updatedAt: timestamp,
     statusHistory: [{ status: "queued", at: timestamp }],
@@ -238,6 +288,8 @@ async function reasonAboutRecovery({ repository, session, state, run, snapshot, 
     workflow: "adaptive_recovery",
     responseMode: "json",
     fixedProviderOrder: FIXED_RECOVERY_PROVIDER_ORDER,
+    forceRoutedLifecycle: true,
+    storeFailedOutcome: false,
     requestFingerprint: fingerprintAiOperation({ workflow: "adaptive_recovery_reasoning", snapshot: snapshot.fingerprint }),
     fetchImpl,
     allowanceRequest: {
@@ -251,21 +303,17 @@ async function reasonAboutRecovery({ repository, session, state, run, snapshot, 
     },
     run: async ({ providerExecutor }) => {
       if (["mock", "bridge"].includes(providerConfig.requestedMode)) return { generationSucceeded: true, reasoning: deterministicReasoning(context), providerRouting: { primaryProvider: "deterministic_mock", finalProvider: "deterministic_mock", attempts: [] } };
-      latestProviderResult = await providerExecutor({ messages: buildRecoveryReasoningMessages(context), responseMode: "json" });
-      if (latestProviderResult.providerFailure || !latestProviderResult.text) return { generationSucceeded: false, providerRouting: { primaryProvider: "groq", finalProvider: null, attempts: latestProviderResult.attempts || [] } };
-      let reasoning;
-      try {
-        reasoning = parseRecoveryReasoningJson(latestProviderResult.text);
-      } catch {
-        const error = new RecoveryError(RECOVERY_FAILURES.OUTPUT_INVALID, "The recovery reasoning response was invalid.", { correlationId: run.correlationId });
-        error.providerRouting = {
-          primaryProvider: "groq",
-          finalProvider: latestProviderResult.providerCode || null,
-          modelUsed: clean(latestProviderResult.modelUsed, 120) || null,
-          attempts: (latestProviderResult.attempts || []).map((attempt) => ({ provider: attempt.provider, outcome: attempt.outcome, latencyMs: attempt.latencyMs })),
-        };
-        throw error;
-      }
+      latestProviderResult = await providerExecutor({
+        messages: buildRecoveryReasoningMessages(context),
+        responseMode: "json",
+        validateOutput: (providerResult) => parseRecoveryReasoningJson(providerResult.text),
+      });
+      if (latestProviderResult.providerFailure || !latestProviderResult.validatedOutput) return {
+        generationSucceeded: false,
+        invalidOutputSeen: latestProviderResult.invalidOutputSeen === true,
+        providerRouting: { primaryProvider: "groq", finalProvider: null, attempts: latestProviderResult.attempts || [] },
+      };
+      const reasoning = latestProviderResult.validatedOutput;
       return {
         generationSucceeded: true,
         reasoning,
@@ -286,6 +334,9 @@ async function reasonAboutRecovery({ repository, session, state, run, snapshot, 
   if (!execution.success || !execution.result?.reasoning) {
     run.providerRouting = execution.result?.providerRouting || null;
     run.providerAttempts = run.providerRouting?.attempts || [];
+    if (execution.result?.invalidOutputSeen === true) {
+      throw new RecoveryError(RECOVERY_FAILURES.OUTPUT_INVALID, "Recovery providers returned invalid reasoning output.", { correlationId: run.correlationId, retryable: false });
+    }
     throw new RecoveryError(RECOVERY_FAILURES.PROVIDER_FAILED, "Recovery reasoning providers were unavailable.", { correlationId: run.correlationId, retryable: true });
   }
   return execution.result;
@@ -302,15 +353,16 @@ export async function processRecoveryRun({
   logger = null,
   now = new Date(),
   executeAiOperation = executeAuthorizedAiOperation,
+  jobAttempt = null,
 } = {}) {
   assertRecoveryEnabled(config);
   ensureRecoveryCollections(state);
   const run = state.recoveryRuns.find((item) => item.id === runId && item.userId === session.user.id);
   if (!run) throw new RecoveryError(RECOVERY_FAILURES.UNAUTHORIZED, "Recovery run is not available for this account.");
-  if (!ACTIVE_RUN_STATUSES.has(run.status)) return run;
+  if (run.status !== "failed" && !ACTIVE_RUN_STATUSES.has(run.status)) return run;
   try {
-    transitionRun(run, "building_state", now);
-    await repository.saveRecoveryState(session, state);
+    beginRunAttempt(run, now, jobAttempt);
+    await persistRecoveryChanges(repository, session, state, { recoveryRuns: [run] });
     const events = state.academicEvents.filter((event) => event.userId === session.user.id && event.processingStatus === "ready" && !event.processedAt).slice(0, config.maxEventsPerRun);
     run.triggerEventIds = [...new Set([...run.triggerEventIds, ...events.map((event) => event.id)])];
     const previousSnapshot = [...state.academicStateSnapshots].filter((item) => item.userId === session.user.id).sort((left, right) => right.version - left.version)[0] || null;
@@ -320,33 +372,50 @@ export async function processRecoveryRun({
     if (conflicting) {
       transitionRun(run, "superseded", now);
       run.failureCode = RECOVERY_FAILURES.CONCURRENCY_CONFLICT;
-      await repository.saveRecoveryState(session, state);
+      await persistRecoveryChanges(repository, session, state, {
+        userState: built.reused ? null : true,
+        academicStateSnapshots: built.reused ? [] : [snapshot],
+        recoveryRuns: [run],
+      });
       return run;
     }
     run.previousSnapshotId = previousSnapshot?.id === snapshot.id ? null : previousSnapshot?.id || null;
     run.currentSnapshotId = snapshot.id;
     transitionRun(run, "reasoning", now);
-    await repository.saveRecoveryState(session, state);
+    await persistRecoveryChanges(repository, session, state, {
+      userState: built.reused ? null : true,
+      academicStateSnapshots: built.reused ? [] : [snapshot],
+      recoveryRuns: [run],
+    });
     const providerResult = await reasonAboutRecovery({ repository, session, state, run, snapshot, events, providerConfig, fetchImpl, logger, now, executeAiOperation });
     run.providerRouting = providerResult.providerRouting;
     run.providerAttempts = run.providerRouting?.attempts || [];
     transitionRun(run, "validating", now);
-    await repository.saveRecoveryState(session, state);
+    await persistRecoveryChanges(repository, session, state, { recoveryRuns: [run] });
     assertReasoningGrounded(providerResult.reasoning, snapshot, run.correlationId);
     const currentUserState = ensureRecoveryCollections(state);
     if (currentUserState.academicRevision !== snapshot.academicRevision) {
       transitionRun(run, "superseded", now);
-      await repository.saveRecoveryState(session, state);
+      await persistRecoveryChanges(repository, session, state, { recoveryRuns: [run] });
       return run;
     }
     const intents = buildRecoveryIntents(snapshot, providerResult.reasoning);
+    const historyOffset = state.topicRecoveryStateHistory.length;
     applyTopicRecoveryStates(state, intents, { now });
+    const topicRows = intents.map((intent) => state.topicRecoveryStates.find((item) => item.topicId === intent.topicId)).filter(Boolean);
+    const historyRows = state.topicRecoveryStateHistory.slice(historyOffset);
     transitionRun(run, "planning", now);
-    await repository.saveRecoveryState(session, state);
+    await persistRecoveryChanges(repository, session, state, {
+      topicRecoveryStates: topicRows,
+      topicRecoveryStateHistory: historyRows,
+      recoveryRuns: [run],
+    });
     const proposal = buildRecoveryPlanPreview(snapshot, intents, { now });
     validateRecoveryPlan({ ...proposal, snapshot, state, correlationId: run.correlationId });
     const diff = generatePlanDiff(proposal.basePlan, proposal.plan, proposal.deferredWork);
+    const planVersionOffset = state.planVersions.length;
     ensureBasePlanVersion(state, { now });
+    const newPlanVersions = state.planVersions.slice(planVersionOffset);
     const userState = ensureRecoveryCollections(state);
     const preview = {
       id: `recovery_preview_${randomUUID()}`,
@@ -387,7 +456,13 @@ export async function processRecoveryRun({
       event.processedAt = now.toISOString();
       event.processingStatus = "processed";
     }
-    await repository.saveRecoveryState(session, state);
+    await persistRecoveryChanges(repository, session, state, {
+      userState: newPlanVersions.length ? true : null,
+      academicEvents: events,
+      recoveryRuns: [run],
+      recoveryPreviews: [preview],
+      planVersions: newPlanVersions,
+    });
     return run;
   } catch (error) {
     if (error?.providerRouting) {
@@ -403,7 +478,7 @@ export async function processRecoveryRun({
         transitionRun(latestRun, "superseded", now);
         latestRun.failureCode = RECOVERY_FAILURES.CONCURRENCY_CONFLICT;
         latestRun.failureRetryable = false;
-        await repository.saveRecoveryState(session, latest);
+        await persistRecoveryChanges(repository, session, latest, { recoveryRuns: [latestRun] });
         Object.assign(state, latest);
         return latestRun;
       }
@@ -412,7 +487,8 @@ export async function processRecoveryRun({
     run.failureCode = error?.code || RECOVERY_FAILURES.PROVIDER_FAILED;
     run.failureRetryable = error?.retryable === true;
     run.failureMessage = error instanceof RecoveryError ? error.message : "Recovery analysis could not be completed.";
-    await repository.saveRecoveryState(session, state).catch(() => null);
+    recordRunFailureAttempt(run, now);
+    await persistRecoveryChanges(repository, session, state, { recoveryRuns: [run] }).catch(() => null);
     if (error instanceof RecoveryError) throw error;
     throw new RecoveryError(RECOVERY_FAILURES.PROVIDER_FAILED, "Recovery analysis could not be completed.", { correlationId: run.correlationId, retryable: true });
   }
@@ -487,7 +563,10 @@ export async function applyRecoveryPreview({ repository, session, state, preview
     preview.updatedAt = now.toISOString();
     const staleRun = state.recoveryRuns.find((item) => item.id === preview.runId);
     if (staleRun) transitionRun(staleRun, "superseded", now);
-    await repository.saveRecoveryState(session, state);
+    await persistRecoveryChanges(repository, session, state, {
+      recoveryRuns: staleRun ? [staleRun] : [],
+      recoveryPreviews: [preview],
+    });
     throw new RecoveryError(RECOVERY_FAILURES.PREVIEW_STALE, "The academic state or plan changed after this preview was created.", { correlationId });
   }
   const snapshot = state.academicStateSnapshots.find((item) => item.version === preview.proposedAcademicStateVersion && item.userId === session.user.id);
@@ -519,7 +598,10 @@ export async function rejectRecoveryPreview({ repository, session, state, previe
     preview.updatedAt = now.toISOString();
     const expiredRun = state.recoveryRuns.find((item) => item.id === preview.runId);
     if (expiredRun) transitionRun(expiredRun, "superseded", now);
-    await repository.saveRecoveryState(session, state);
+    await persistRecoveryChanges(repository, session, state, {
+      recoveryRuns: expiredRun ? [expiredRun] : [],
+      recoveryPreviews: [preview],
+    });
     throw new RecoveryError(RECOVERY_FAILURES.PREVIEW_STALE, "This recovery preview has expired.", { correlationId });
   }
   preview.status = "rejected";
@@ -528,7 +610,10 @@ export async function rejectRecoveryPreview({ repository, session, state, previe
   preview.updatedAt = now.toISOString();
   const run = state.recoveryRuns.find((item) => item.id === preview.runId);
   if (run) transitionRun(run, "rejected", now);
-  await repository.saveRecoveryState(session, state);
+  await persistRecoveryChanges(repository, session, state, {
+    recoveryRuns: run ? [run] : [],
+    recoveryPreviews: [preview],
+  });
   return { preview, replayed: false };
 }
 

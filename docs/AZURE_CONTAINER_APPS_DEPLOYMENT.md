@@ -2,16 +2,17 @@
 
 StudentOS backend is prepared for Azure Container Apps Consumption. This pass does not deploy automatically.
 
+Remediation status on 2026-07-19: the Azure workflow had not been run when remediation began, migration 001 had already been applied and verified on all three data shards, migration 002 remained pending, and Adaptive Recovery remained disabled. Do not treat the local Bicep/workflow definitions as evidence that the worker exists in Azure; the workflow's actual-resource checks must pass after deployment.
+
 ## Target Architecture
 
-- Backend: Azure Container Apps Consumption, API-only image
+- Backend: Azure Container Apps Consumption, one backend image shared by separate API and worker apps
 - Image registry: GHCR, to avoid Azure Container Registry cost
 - Database/Auth/Storage: existing Supabase projects and private buckets
 - Frontend: Cloudflare Pages, deployed separately from this backend image
-- Min replicas: 0
-- Max replicas: 1
-- Ingress: external HTTP ingress
-- Workers: not always-on in the web container
+- API scale: minimum 0, maximum 1; external HTTP ingress on port 3101
+- Worker scale: minimum 1, maximum 1; no ingress; `npm run jobs:dev`; `0.25` CPU and `0.5Gi` memory
+- Background execution is isolated from the web container, and queued work does not depend on API traffic
 - Warmup pinger: disabled
 - Azure SQL: not used
 - Azure Storage duplication: not used
@@ -49,14 +50,15 @@ Current environment boundary:
 - Existing ACA environment: `cae-sentiqgpt-prod`
 - Existing environment resource group: `rg-sentiqgpt-prod`
 - StudentOS Container App resource group: `rg-studentos-dev`
-- StudentOS Container App name: `studentos-api-dev`
+- StudentOS API Container App name: `studentos-api-dev`
+- StudentOS worker Container App name: `studentos-worker-dev` by default, supplied to the workflow as `AZURE_WORKER_CONTAINER_APP_NAME`
 - Region: `centralindia`
 
-This does not merge app secrets, runtime state, images, revisions, scaling, or traffic. StudentOS remains a separate Container App with its own runtime environment variables and secrets. Do not modify the SentIQ Chat / SentIQGPT app or its secrets when deploying StudentOS.
+This does not merge app secrets, runtime state, images, revisions, scaling, or traffic with SentIQ Chat / SentIQGPT. The StudentOS API and worker are separate resources, use the same image and backend secret set, and retain independent revisions/scaling. Do not modify the SentIQ Chat / SentIQGPT app or its secrets when deploying StudentOS.
 
 ## GitHub Actions Workflow
 
-Workflow name: `Azure Container Apps - StudentOS API`
+Workflow name: `Azure Container Apps - StudentOS API and Worker`
 
 The workflow is manual-only:
 
@@ -65,7 +67,7 @@ on:
   workflow_dispatch:
 ```
 
-It builds a Docker image, pushes it to GHCR, and deploys/updates the Container App with min replicas 0 and max replicas 1.
+It builds one Docker image, pushes it to GHCR, and deploys/updates both the API (0–1) and worker (1–1). It first configures recovery false on both, validates the actual worker resource and ready revision, and only accepts an explicit future `enable_adaptive_recovery` request after hardened live schema verification succeeds.
 
 ## Required GitHub Secrets
 
@@ -75,6 +77,7 @@ Do not commit values. Configure these in GitHub repository secrets or environmen
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_RESOURCE_GROUP`
 - `AZURE_CONTAINER_APP_NAME`
+- `AZURE_WORKER_CONTAINER_APP_NAME`
 - `AZURE_CONTAINER_APP_ENVIRONMENT`
 - `AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP`
 - `AZURE_LOCATION`
@@ -86,7 +89,7 @@ OIDC/federated identity can replace `AZURE_CREDENTIALS` later. If using OIDC, up
 
 ## Azure Runtime Environment Variables
 
-Configure these on the Container App as env vars or secret refs. Do not bake them into the image and do not pass them as Docker build args.
+Configure the backend authority and optional provider values identically on the API and worker as env vars or secret refs. Do not bake them into the image and do not pass them as Docker build args.
 
 Non-secret runtime values:
 
@@ -97,8 +100,8 @@ Non-secret runtime values:
 - `STUDENTOS_DEPLOYMENT=azure-container-apps`
 - `STUDENTOS_SERVE_FRONTEND=false`
 - `STUDENTOS_MODE=supabase`
-- `STUDENTOS_BACKGROUND_WORKERS_ENABLED=false`
-- `STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false` until the recovery migration, API, and worker have been validated on all data shards
+- `STUDENTOS_BACKGROUND_WORKERS_ENABLED=true` only in the deployed API-plus-dedicated-worker topology
+- `STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false` until migration 002, hardened live verification, API behavior, and the actual worker resource have been validated on all data shards
 - `STUDENTOS_RECOVERY_PREVIEW_TTL_HOURS=24`
 - `STUDENTOS_DEMO_SEED_ENABLED=false`
 - `STUDENTOS_GOOGLE_CLASSROOM_MODE=disabled`
@@ -184,6 +187,7 @@ $env:GHCR_PULL_TOKEN="<set in local shell only>"
 .\infra\azure\deploy-containerapp.ps1 `
   -ResourceGroup rg-studentos-dev `
   -ContainerAppName studentos-api-dev `
+  -WorkerContainerAppName studentos-worker-dev `
   -EnvironmentName cae-sentiqgpt-prod `
   -ExistingEnvironmentName cae-sentiqgpt-prod `
   -ExistingEnvironmentResourceGroup rg-sentiqgpt-prod `
@@ -199,6 +203,7 @@ Bash example:
 ```bash
 export AZURE_RESOURCE_GROUP=rg-studentos-dev
 export AZURE_CONTAINER_APP_NAME=studentos-api-dev
+export AZURE_WORKER_CONTAINER_APP_NAME=studentos-worker-dev
 export AZURE_CONTAINER_APP_ENVIRONMENT=cae-sentiqgpt-prod
 export AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP=rg-sentiqgpt-prod
 export AZURE_USE_EXISTING_CONTAINER_APP_ENVIRONMENT=true
@@ -218,9 +223,17 @@ unset GHCR_PULL_TOKEN
 
 ## Worker Strategy
 
-Do not run background workers in the web Container App for the first Azure deployment. The backend boots without a worker.
+The dedicated `studentos-worker` container uses the API image but overrides startup to `npm run jobs:dev`. It has no ingress and stays at exactly one replica. The API remains independently scale-to-zero. The workflow must confirm the worker image, `npm` command plus `run jobs:dev` args, absent ingress, 1–1 scale, required service-role secret refs, `STUDENTOS_BACKGROUND_WORKERS_ENABLED=true`, recovery false, and `latestRevisionName == latestReadyRevisionName` before the topology passes.
 
-Future option: Azure Container Apps Jobs for manual or scheduled jobs. Keep jobs disabled by default until reviewed.
+View worker logs without printing environment values:
+
+```powershell
+az containerapp logs show --resource-group rg-studentos-dev --name studentos-worker-dev --follow
+```
+
+For restart, inspect the failed job and logs first, then create a new worker revision or update/restart the app through the controlled deployment workflow. Database job claims recover stale `processing` locks after the configured lock timeout, so do not manually duplicate a queued recovery run or background job. A retry reuses its durable run/job and allowance request.
+
+Rollback disables `STUDENTOS_ADAPTIVE_RECOVERY_ENABLED` on both apps first and then stops recovery job processing if necessary. Keep additive recovery tables and immutable versions. Do not delete migration-002 audit/state records during operational rollback.
 
 ## CORS and Domains
 
@@ -253,16 +266,20 @@ Run before enabling the manual workflow:
 ```powershell
 npm.cmd run smoke:core
 npm.cmd run test:e2e
-npm.cmd run test:e2e:supabase
+npm.cmd run test:recovery
+npm.cmd run eval:recovery
+npm.cmd run migration:plan
 npm.cmd run preflight:production
 npm.cmd run preflight:azure
-node --check backend/server.js
-node --check frontend/scripts/app.js
+npm.cmd run check:syntax
+git diff --check
 ```
+
+The push/pull-request validation workflow runs these static/local gates plus the full test suite on Node 22 and installs Playwright Chromium. It does not deploy and does not run live Supabase verification. Migration 001 was already verified successfully; do not run the default hardened recovery verifier until migration 002 is applied to all data shards.
 
 ## First Deploy Checklist
 
-Use `docs/AZURE_FIRST_DEPLOY_CHECKLIST.md` before the first manual deployment. It covers subscription selection, GHCR pull credentials, runtime secret setup, post-deploy verification, rollback, scale-to-zero, and emergency credit preservation.
+Use `docs/AZURE_FIRST_DEPLOY_CHECKLIST.md` before the first manual deployment. It covers subscription selection, GHCR pull credentials, runtime secret setup, API scale-to-zero, the always-on worker cost, worker inspection/logs/restart, post-deploy verification, rollback, and emergency credit preservation.
 
 ## Post-Deploy Verification
 

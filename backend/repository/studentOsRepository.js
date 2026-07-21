@@ -57,6 +57,7 @@ const RECOVERY_COLLECTIONS = [
 
 const ALL_COLLECTIONS = [...COLLECTIONS, ...RECOVERY_COLLECTIONS];
 const RECOVERY_PERSISTENCE_VERSION = Symbol("recoveryPersistenceVersion");
+const RECOVERY_CHANGE_KEYS = Object.freeze(RECOVERY_COLLECTIONS.map(([key]) => key));
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -81,12 +82,52 @@ function markRecoveryPersistenceVersion(state, versions = recoveryVersions(state
   return state;
 }
 
+function recoveryRowsForChanges(state, changes = {}) {
+  const rows = {};
+  for (const key of RECOVERY_CHANGE_KEYS) {
+    const supplied = changes[key];
+    rows[key] = Array.isArray(supplied) ? supplied.filter((item) => item?.id) : [];
+  }
+  rows.backgroundJobs = Array.isArray(changes.backgroundJobs)
+    ? changes.backgroundJobs.filter((item) => item?.id && item.jobType === "recovery_analysis")
+    : [];
+  if (changes.userState === true) {
+    const userId = state.studentProfile?.id;
+    rows.recoveryUserStates = (state.recoveryUserStates || []).filter((item) => item.userId === userId);
+  } else if (changes.userState && typeof changes.userState === "object") {
+    rows.recoveryUserStates = [changes.userState];
+  }
+  return rows;
+}
+
+function allRecoveryRows(state) {
+  const changes = Object.fromEntries(RECOVERY_CHANGE_KEYS.map((key) => [key, state[key] || []]));
+  changes.backgroundJobs = (state.backgroundJobs || []).filter((job) => (
+    job.jobType === "recovery_analysis" && job.status === "queued" && Number(job.attempts || 0) === 0
+  ));
+  return changes;
+}
+
+function mergeRowsById(target = [], incoming = []) {
+  const merged = new Map(target.filter((item) => item?.id).map((item) => [item.id, clone(item)]));
+  for (const item of incoming.filter((entry) => entry?.id)) merged.set(item.id, clone(item));
+  return [...merged.values()];
+}
+
 function recoveryConcurrencyError(reason = "lease_held") {
   const error = new Error("Recovery state changed while this request was in progress.");
   error.status = 409;
   error.code = "RECOVERY_CONCURRENCY_CONFLICT";
   error.retryable = true;
   error.conflictReason = reason;
+  return error;
+}
+
+function recoveryUnauthorizedError() {
+  const error = new Error("Recovery changes are not owned by this account.");
+  error.status = 403;
+  error.code = "RECOVERY_UNAUTHORIZED";
+  error.retryable = false;
   return error;
 }
 
@@ -1036,7 +1077,23 @@ class MockStudentOsRepository {
     this.states.set(userId, ensureStateShape(clone(state)));
   }
 
+  async saveOrdinaryState(session, state) {
+    const userId = session?.user?.id || state.studentProfile.id;
+    const stored = ensureStateShape(clone(this.states.get(userId) || initialStateForUser(session?.user || { id: userId })));
+    const ordinary = ensureStateShape(clone(state));
+    for (const key of RECOVERY_CHANGE_KEYS) ordinary[key] = clone(stored[key] || []);
+    ordinary.backgroundJobs = [
+      ...(ordinary.backgroundJobs || []).filter((job) => job.jobType !== "recovery_analysis"),
+      ...(stored.backgroundJobs || []).filter((job) => job.jobType === "recovery_analysis"),
+    ];
+    this.states.set(userId, ordinary);
+  }
+
   async saveRecoveryState(session, state) {
+    return this.saveRecoveryChanges(session, state, allRecoveryRows(state));
+  }
+
+  async saveRecoveryChanges(session, state, changes = {}) {
     const userId = session?.user?.id || state.studentProfile.id;
     const stored = this.states.get(userId);
     const expected = state[RECOVERY_PERSISTENCE_VERSION];
@@ -1046,8 +1103,38 @@ class MockStudentOsRepository {
         throw recoveryConcurrencyError("version_changed");
       }
     }
-    await this.saveState(session, state);
-    markRecoveryPersistenceVersion(state);
+    const next = ensureStateShape(clone(stored || initialStateForUser(session?.user || { id: userId })));
+    const rows = recoveryRowsForChanges(state, changes);
+    const currentUserState = (next.recoveryUserStates || []).find((item) => item.userId === userId);
+    if (Date.parse(currentUserState?.mutationLeaseExpiresAt || 0) > Date.now()) throw recoveryConcurrencyError("lease_held");
+    for (const key of [...RECOVERY_CHANGE_KEYS, "backgroundJobs"]) {
+      if ((rows[key] || []).some((item) => item.userId !== userId)) throw recoveryUnauthorizedError();
+    }
+    const suppliedUserState = rows.recoveryUserStates[0] || null;
+    if (suppliedUserState) {
+      const nextAcademicRevision = Number(suppliedUserState.academicRevision || 0);
+      const nextPlanVersion = Number(suppliedUserState.planVersion || 0);
+      const current = recoveryVersions(next);
+      if (nextAcademicRevision < current.academicRevision || nextAcademicRevision > current.academicRevision + 1
+        || nextPlanVersion < current.planVersion || nextPlanVersion > current.planVersion + 1) {
+        throw recoveryConcurrencyError("invalid_version_transition");
+      }
+    }
+    for (const key of ["academicStateSnapshots", "topicRecoveryStateHistory", "planVersions"]) {
+      const existing = new Map((next[key] || []).map((item) => [item.id, item]));
+      for (const row of rows[key] || []) {
+        if (existing.has(row.id) && JSON.stringify(existing.get(row.id)) !== JSON.stringify(row)) {
+          throw recoveryConcurrencyError("immutable_row_changed");
+        }
+      }
+    }
+    const working = clone(next);
+    for (const key of RECOVERY_CHANGE_KEYS) {
+      working[key] = mergeRowsById(working[key] || [], rows[key]);
+    }
+    working.backgroundJobs = mergeRowsById(working.backgroundJobs || [], rows.backgroundJobs);
+    this.states.set(userId, ensureStateShape(working));
+    markRecoveryPersistenceVersion(state, recoveryVersions(working));
   }
 
   async applyRecoveryPreviewTransaction(session, request = {}) {
@@ -1553,10 +1640,10 @@ class MockStudentOsRepository {
 
   async saveBackgroundJobForUser(user, job, state = null) {
     const session = { authenticated: false, mode: "local_preview", user };
-    const target = state || await this.loadState(session);
+    const target = await this.loadState(session);
     const index = (target.backgroundJobs || []).findIndex((item) => item.id === job.id);
-    if (index >= 0) target.backgroundJobs[index] = job;
-    else target.backgroundJobs.push(job);
+    if (index >= 0) target.backgroundJobs[index] = clone(job);
+    else target.backgroundJobs.push(clone(job));
     await this.saveState(session, target);
   }
 
@@ -1709,32 +1796,47 @@ class SupabaseStudentOsRepository {
     }
   }
 
+  async saveOrdinaryState(session, state) {
+    return this.saveState(session, {
+      ...state,
+      backgroundJobs: (state.backgroundJobs || []).filter((job) => job.jobType !== "recovery_analysis"),
+    });
+  }
+
   async saveRecoveryState(session, state) {
+    return this.saveRecoveryChanges(session, state, allRecoveryRows(state));
+  }
+
+  async saveRecoveryChanges(session, state, changes = {}) {
     const route = this.route(session);
     const expected = state[RECOVERY_PERSISTENCE_VERSION] || recoveryVersions(state);
-    const leaseToken = `recovery_lease_${randomUUID()}`;
-    const rows = await route.client.rpc("acquire_recovery_mutation_lease", {
-      p_user_id: session.user.id,
-      p_lease_token: leaseToken,
-      p_expected_academic_revision: expected.academicRevision,
-      p_expected_plan_version: expected.planVersion,
-      p_lease_seconds: 30,
-    });
-    const lease = Array.isArray(rows) ? rows[0] : rows;
-    if (!lease?.acquired) throw recoveryConcurrencyError(lease?.conflict_reason || "lease_held");
+    const changed = recoveryRowsForChanges(state, changes);
+    const userState = changed.recoveryUserStates[0] || null;
+    let rows;
     try {
-      await this.saveState(session, state);
-      const recoveryKeys = RECOVERY_COLLECTIONS.map(([key]) => key);
-      await this.saveChangedCollections(session, state, recoveryKeys.filter((key) => key !== "recoveryUserStates"));
-      await this.saveChangedCollections(session, state, ["recoveryUserStates"]);
-      markRecoveryPersistenceVersion(state);
-    } catch (error) {
-      await route.client.rpc("release_recovery_mutation_lease", {
+      rows = await route.client.rpc("persist_recovery_changes", {
         p_user_id: session.user.id,
-        p_lease_token: leaseToken,
-      }).catch(() => null);
+        p_expected_academic_revision: expected.academicRevision,
+        p_expected_plan_version: expected.planVersion,
+        p_user_state: userState,
+        p_academic_events: changed.academicEvents,
+        p_academic_state_snapshots: changed.academicStateSnapshots,
+        p_topic_recovery_states: changed.topicRecoveryStates,
+        p_topic_recovery_state_history: changed.topicRecoveryStateHistory,
+        p_recovery_runs: changed.recoveryRuns,
+        p_recovery_previews: changed.recoveryPreviews,
+        p_plan_versions: changed.planVersions,
+        p_background_jobs: changed.backgroundJobs,
+      });
+    } catch (error) {
       throw normalizeRecoveryDatabaseError(error);
     }
+    const result = Array.isArray(rows) ? rows[0] : rows;
+    markRecoveryPersistenceVersion(state, {
+      academicRevision: Number(result?.academic_revision ?? userState?.academicRevision ?? expected.academicRevision),
+      planVersion: Number(result?.plan_version ?? userState?.planVersion ?? expected.planVersion),
+    });
+    return result || null;
   }
 
   async applyRecoveryPreviewTransaction(session, request = {}) {
@@ -2511,10 +2613,6 @@ class SupabaseStudentOsRepository {
 
   async saveBackgroundJobForUser(user, job, state = null) {
     const session = { authenticated: true, user };
-    if (state) {
-      await this.saveBackgroundJobs(session, state);
-      return;
-    }
     const route = routeUserToShard(user.id, this.shardClients);
     await route.client.upsert("background_jobs", rowForCollection("backgroundJobs", job, user.id), {
       onConflict: "id",
@@ -2583,10 +2681,22 @@ export class StudentOsRepository {
     return this.useSupabase(session) ? this.supabase.saveState(session, state) : this.mock.saveState(session, state);
   }
 
+  async saveOrdinaryState(session, state) {
+    return this.useSupabase(session)
+      ? this.supabase.saveOrdinaryState(session, state)
+      : this.mock.saveOrdinaryState(session, state);
+  }
+
   async saveRecoveryState(session, state) {
     return this.useSupabase(session)
       ? this.supabase.saveRecoveryState(session, state)
       : this.mock.saveRecoveryState(session, state);
+  }
+
+  async saveRecoveryChanges(session, state, changes) {
+    return this.useSupabase(session)
+      ? this.supabase.saveRecoveryChanges(session, state, changes)
+      : this.mock.saveRecoveryChanges(session, state, changes);
   }
 
   async applyRecoveryPreviewTransaction(session, request) {
