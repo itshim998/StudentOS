@@ -21,6 +21,10 @@
     "Local preview keeps account actions available without contacting live sign-in.",
   ]);
 
+  function setHidden(element, hidden) {
+    if (element && element.hidden !== hidden) element.hidden = hidden;
+  }
+
   function currentMode() {
     const hash = window.location.hash.toLowerCase();
     if (hash === "#signup") return "signup";
@@ -94,8 +98,8 @@
   function setFieldError(input, errorElement, message = "") {
     const active = Boolean(message);
     input.setAttribute("aria-invalid", active ? "true" : "false");
-    errorElement.textContent = message;
-    errorElement.hidden = !active;
+    if (errorElement.textContent !== message) errorElement.textContent = message;
+    setHidden(errorElement, !active);
   }
 
   function enhancePasswordField(passwordField, forgotButton) {
@@ -144,7 +148,9 @@
     if (title && title.textContent !== copy.title) title.textContent = copy.title;
     if (body && body.textContent !== copy.body) body.textContent = copy.body;
     if (passwordInput) passwordInput.autocomplete = mode === "signup" ? "new-password" : "current-password";
-    if (submitButton && !submitButton.classList.contains("is-loading")) submitButton.textContent = copy.action;
+    if (submitButton && !submitButton.classList.contains("is-loading") && submitButton.textContent !== copy.action) {
+      submitButton.textContent = copy.action;
+    }
 
     panel.querySelectorAll("[data-auth-mode]").forEach((button) => {
       const active = button.dataset.authMode === mode;
@@ -166,19 +172,23 @@
     const helpText = help.textContent.trim();
     const messageText = message.textContent.trim();
     const loading = /^(Signing in|Creating account)\.\.\.$/i.test(sessionText);
+    const sessionHidden = GENERIC_SESSION_MESSAGES.has(sessionText);
+    const helpHidden = GENERIC_HELP_MESSAGES.has(helpText);
+    const messageHidden = !messageText;
 
-    session.hidden = GENERIC_SESSION_MESSAGES.has(sessionText);
-    help.hidden = GENERIC_HELP_MESSAGES.has(helpText);
-    message.hidden = !messageText;
-    result.hidden = session.hidden && help.hidden && message.hidden;
+    setHidden(session, sessionHidden);
+    setHidden(help, helpHidden);
+    setHidden(message, messageHidden);
+    setHidden(result, sessionHidden && helpHidden && messageHidden);
     result.dataset.state = loading ? "loading" : /invalid|couldn|failed|unavailable|expired|too many/i.test(`${sessionText} ${messageText}`) ? "error" : "notice";
 
     submitButton.classList.toggle("is-loading", loading);
     submitButton.disabled = loading;
     submitButton.setAttribute("aria-busy", loading ? "true" : "false");
-    submitButton.textContent = loading
+    const buttonText = loading
       ? (currentMode() === "signup" ? "Creating account..." : "Signing in...")
       : (currentMode() === "signup" ? SIGNUP_COPY.action : SIGNIN_COPY.action);
+    if (submitButton.textContent !== buttonText) submitButton.textContent = buttonText;
   }
 
   function wireKeyboardTabs(panel) {
@@ -222,14 +232,19 @@
 
     brand.innerHTML = createBrandMarkup();
     const logo = brand.querySelector(".auth-logo-image");
-    logo?.addEventListener("load", () => logo.closest(".auth-logo-frame")?.classList.add("has-image"), { once: true });
-    logo?.addEventListener("error", () => logo.closest(".auth-logo-frame")?.classList.add("image-failed"), { once: true });
+    const logoFrame = logo?.closest(".auth-logo-frame");
+    logo?.addEventListener("load", () => logoFrame?.classList.add("has-image"), { once: true });
+    logo?.addEventListener("error", () => logoFrame?.classList.add("image-failed"), { once: true });
+    if (logo?.complete) {
+      logoFrame?.classList.add(logo.naturalWidth ? "has-image" : "image-failed");
+    }
 
     const heading = panel.querySelector(".auth-panel-heading");
     const tabs = createModeTabs();
     heading?.before(tabs);
     wireKeyboardTabs(panel);
 
+    form.noValidate = true;
     emailInput.required = true;
     emailInput.inputMode = "email";
     emailInput.autocapitalize = "none";
@@ -281,8 +296,10 @@
       if (passwordError) setFieldError(passwordInput, passwordError, "");
     });
 
+    let observerFrame = 0;
     const observer = new MutationObserver(() => {
-      window.requestAnimationFrame(() => {
+      window.cancelAnimationFrame(observerFrame);
+      observerFrame = window.requestAnimationFrame(() => {
         updateModePresentation(panel, submitButton, passwordInput);
         updateStatusPresentation(panel, submitButton);
       });
