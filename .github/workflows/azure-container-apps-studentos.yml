@@ -99,9 +99,27 @@ jobs:
             exit 1
           fi
 
+      - name: Confirm Router V2 production traffic is disabled before live gates
+        if: ${{ vars.STUDENTOS_AI_ROUTER_V2_ENABLED == 'true' }}
+        shell: bash
+        run: |
+          for app_name in "${{ secrets.AZURE_CONTAINER_APP_NAME }}" "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"; do
+            if ! az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "$app_name" --output none 2>/dev/null; then
+              continue
+            fi
+            enabled="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "$app_name" --query "properties.template.containers[0].env[?name=='STUDENTOS_AI_ROUTER_V2_ENABLED'].value | [0]" --output tsv)"
+            rollout="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "$app_name" --query "properties.template.containers[0].env[?name=='STUDENTOS_AI_ROUTER_V2_ROLLOUT_PERCENT'].value | [0]" --output tsv)"
+            if [ "$enabled" = "true" ] || { [ -n "$rollout" ] && [ "$rollout" != "0" ]; }; then
+              echo "Router V2 production traffic must be disabled on both applications before live pre-enable gates run." >&2
+              exit 1
+            fi
+          done
+          echo "Router V2 production traffic is disabled while live pre-enable gates run."
+
       - name: Validate backend runtime secrets
         shell: bash
         env:
+          STUDENTOS_MODE: supabase
           STUDENTOS_SUPABASE_URL_1: ${{ secrets.STUDENTOS_SUPABASE_URL_1 }}
           STUDENTOS_SUPABASE_ANON_KEY_1: ${{ secrets.STUDENTOS_SUPABASE_ANON_KEY_1 }}
           STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1 }}
@@ -167,6 +185,7 @@ jobs:
           if [ "$STUDENTOS_AI_ROUTER_V2_ENABLED" = "true" ]; then
             node scripts/verifyAiRouterV2Config.js --live-registries
             node scripts/verifyAiRouterV2Migrations.js --live
+            STUDENTOS_AI_ROUTER_V2_LIVE_TEST=true npm run test:router-v2-db
           else
             node scripts/verifyAiRouterV2Config.js
             node scripts/verifyAiRouterV2Migrations.js

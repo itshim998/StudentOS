@@ -2,10 +2,16 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { getAiProviderConfig, getSafeAiProviderStatus } from "./ai/providerConfig.js";
 import { executeAuthorizedAiOperation, fingerprintAiOperation, isRouterV2EnabledForUser } from "./ai/authorizedAiExecutionService.js";
-import { cooldownForProviderFailure, createRouterV2Session, PRIMARY_KEY_RING, runProviderRouterV2 } from "./ai/providerRouterV2.js";
+import { classifyRouterAttemptFailure, cooldownForProviderFailure, createRouterV2Session, PRIMARY_KEY_RING, runProviderRouterV2 } from "./ai/providerRouterV2.js";
 import { AiRouterV2Coordinator, createMockRouterV2Store } from "./ai/routerV2State.js";
 import { StudentOsRepository } from "./repository/studentOsRepository.js";
 import { redactSecrets } from "./observability/logger.js";
+import {
+  AI_ROUTER_V2_CENTRAL_SCHEMA_VERSION,
+  AI_ROUTER_V2_SHARD_SCHEMA_VERSION,
+  verifyAiRouterV2Migrations,
+} from "../scripts/verifyAiRouterV2Migrations.js";
+import { runAiRouterV2DatabaseConcurrencyTest } from "../scripts/testAiRouterV2DatabaseConcurrency.js";
 
 function providerEnv(overrides = {}) {
   return {
@@ -129,15 +135,40 @@ assert.deepEqual(concurrentClaims.map((claim) => claim.ordinal).sort((a, b) => a
 const restartStore = createMockRouterV2Store();
 const beforeRestart = new AiRouterV2Coordinator({ store: restartStore });
 await beforeRestart.claimPrimary({ operationId: "restart-before", leaseMs: 10_000, nowMs: 1_000 });
-await beforeRestart.claimSlot({ operationId: "restart-before", providerCode: "groq", slotNumber: 1, credentialFingerprint: "fp-g1", nowMs: 1_000 });
-await beforeRestart.recordFailure({ operationId: "restart-before", providerCode: "groq", slotNumber: 1, statusClass: "rate_limited", cooldownMs: 60_000, nowMs: 1_000 });
+const restartFailureClaim = await beforeRestart.claimSlot({ operationId: "restart-before", providerCode: "groq", slotNumber: 1, credentialFingerprint: "fp-g1", nowMs: 1_000 });
+await beforeRestart.recordFailure({ operationId: "restart-before", providerCode: "groq", slotNumber: 1, claimToken: restartFailureClaim.claimToken, statusClass: "rate_limited", cooldownMs: 60_000, nowMs: 1_000 });
 const afterRestart = new AiRouterV2Coordinator({ store: restartStore });
+await afterRestart.claimPrimary({ operationId: "restart-after", leaseMs: 200_000, nowMs: 2_000 });
 assert.equal((await afterRestart.claimSlot({ operationId: "restart-after", providerCode: "groq", slotNumber: 1, credentialFingerprint: "fp-g1", nowMs: 2_000 })).eligible, false);
 assert.equal((await afterRestart.claimSlot({ operationId: "restart-after", providerCode: "groq", slotNumber: 2, credentialFingerprint: "fp-g2", nowMs: 2_000 })).eligible, true);
-assert.equal((await afterRestart.claimSlot({ operationId: "restart-after", providerCode: "gemini", slotNumber: 1, credentialFingerprint: "fp-m1", nowMs: 2_000 })).eligible, true);
+const disableClaim = await afterRestart.claimSlot({ operationId: "restart-after", providerCode: "gemini", slotNumber: 1, credentialFingerprint: "fp-m1", nowMs: 2_000 });
+assert.equal(disableClaim.eligible, true);
 assert.equal((await afterRestart.claimSlot({ operationId: "restart-after", providerCode: "nvidia", slotNumber: 1, credentialFingerprint: "fp-n1", nowMs: 2_000 })).eligible, true);
-await afterRestart.recordFailure({ operationId: "restart-after", providerCode: "gemini", slotNumber: 1, statusClass: "credential_rejected", disable: true, nowMs: 2_000 });
+await afterRestart.recordFailure({ operationId: "restart-after", providerCode: "gemini", slotNumber: 1, claimToken: disableClaim.claimToken, statusClass: "credential_rejected", disable: true, nowMs: 2_000 });
+await afterRestart.claimPrimary({ operationId: "later", leaseMs: 200_000, nowMs: 100_000 });
 assert.equal((await afterRestart.claimSlot({ operationId: "later", providerCode: "gemini", slotNumber: 1, credentialFingerprint: "fp-m1", nowMs: 100_000 })).healthState, "disabled");
+
+const casStore = createMockRouterV2Store();
+const casCoordinator = new AiRouterV2Coordinator({ store: casStore });
+for (const operationId of ["cas-setup", "cas-stale-a", "cas-current-b", "cas-stale-success-a", "cas-cooldown-b"]) {
+  await casCoordinator.claimPrimary({ operationId, leaseMs: 100_000, nowMs: 1_000 });
+}
+const setupClaim = await casCoordinator.claimSlot({ operationId: "cas-setup", providerCode: "groq", slotNumber: 1, credentialFingerprint: "cas-fp-g1", leaseMs: 1_000, nowMs: 2_000 });
+await casCoordinator.recordFailure({ operationId: "cas-setup", providerCode: "groq", slotNumber: 1, claimToken: setupClaim.claimToken, statusClass: "rate_limited", cooldownMs: 1_000, nowMs: 2_000 });
+const staleFailureClaim = await casCoordinator.claimSlot({ operationId: "cas-stale-a", providerCode: "groq", slotNumber: 1, credentialFingerprint: "cas-fp-g1", leaseMs: 1_000, nowMs: 4_000 });
+const currentSuccessClaim = await casCoordinator.claimSlot({ operationId: "cas-current-b", providerCode: "groq", slotNumber: 1, credentialFingerprint: "cas-fp-g1", leaseMs: 1_000, nowMs: 6_000 });
+assert.equal((await casCoordinator.recordSuccess({ operationId: "cas-current-b", providerCode: "groq", slotNumber: 1, claimToken: currentSuccessClaim.claimToken, nowMs: 6_500 })).applied, true);
+const staleFailureResult = await casCoordinator.recordFailure({ operationId: "cas-stale-a", providerCode: "groq", slotNumber: 1, claimToken: staleFailureClaim.claimToken, statusClass: "transient_failure", cooldownMs: 60_000, nowMs: 6_600 });
+assert.equal(staleFailureResult.applied, false);
+assert.equal(casStore.slots.get("groq:1").healthState, "healthy", "stale failure must not overwrite a newer success");
+
+const staleSuccessClaim = await casCoordinator.claimSlot({ operationId: "cas-stale-success-a", providerCode: "groq", slotNumber: 2, credentialFingerprint: "cas-fp-g2", leaseMs: 1_000, nowMs: 10_000 });
+const currentCooldownClaim = await casCoordinator.claimSlot({ operationId: "cas-cooldown-b", providerCode: "groq", slotNumber: 2, credentialFingerprint: "cas-fp-g2", leaseMs: 1_000, nowMs: 12_000 });
+assert.equal((await casCoordinator.recordFailure({ operationId: "cas-cooldown-b", providerCode: "groq", slotNumber: 2, claimToken: currentCooldownClaim.claimToken, statusClass: "rate_limited", cooldownMs: 60_000, nowMs: 12_500 })).applied, true);
+const staleSuccessResult = await casCoordinator.recordSuccess({ operationId: "cas-stale-success-a", providerCode: "groq", slotNumber: 2, claimToken: staleSuccessClaim.claimToken, nowMs: 12_600 });
+assert.equal(staleSuccessResult.applied, false);
+assert.equal(casStore.slots.get("groq:2").healthState, "cooling", "stale success must not clear a newer cooldown");
+assert.equal(casStore.observabilityEvents.filter((event) => event.eventType === "stale_slot_result").length, 2);
 
 const retryError = Object.assign(new Error("rate limit"), { status: 429, retryAfterMs: 12_345 });
 assert.equal(cooldownForProviderFailure(retryError, { failureCount: 4, providerConfig: config.groq, random: () => 0 }), 12_345);
@@ -145,6 +176,18 @@ const transientCooldown = cooldownForProviderFailure(Object.assign(new Error("te
 assert.ok(transientCooldown >= 9_000 && transientCooldown <= 11_000);
 const exponentialCooldown = cooldownForProviderFailure(Object.assign(new Error("limit"), { status: 429 }), { failureCount: 4, providerConfig: config.groq, random: () => 0.5 });
 assert.equal(exponentialCooldown, 3_600_000);
+const configuredRateLimitBase = cooldownForProviderFailure(Object.assign(new Error("limit"), { status: 429 }), { failureCount: 0, providerConfig: { rateLimitCooldownMs: 240_000 }, random: () => 0 });
+assert.equal(configuredRateLimitBase, 240_000);
+const repeatedRateLimit = cooldownForProviderFailure(Object.assign(new Error("limit"), { status: 429 }), { failureCount: 1, providerConfig: { rateLimitCooldownMs: 240_000 }, random: () => 0.5 });
+assert.equal(repeatedRateLimit, 480_000);
+const providerSpecificRateLimit = cooldownForProviderFailure(Object.assign(new Error("limit"), { status: 429 }), { failureCount: 0, providerConfig: { rateLimitCooldownMs: 75_000 }, random: () => 0 });
+assert.equal(providerSpecificRateLimit, 75_000);
+assert.equal(cooldownForProviderFailure(Object.assign(new Error("limit"), { status: 429, retryAfterMs: 9_000_000 }), { providerConfig: config.groq }), 3_600_000);
+const malformedCooldownInputs = cooldownForProviderFailure(Object.assign(new Error("limit"), { status: 429 }), { failureCount: Number.NaN, providerConfig: { rateLimitCooldownMs: Number.NaN }, random: () => Number.NaN });
+assert.equal(Number.isFinite(malformedCooldownInputs), true);
+assert.ok(malformedCooldownInputs >= 1_000 && malformedCooldownInputs <= 3_600_000);
+assert.deepEqual(classifyRouterAttemptFailure(Object.assign(new Error("unsupported payload"), { status: 422 })), { category: "request_specific", outcome: "request_incompatible", mutatesHealth: false });
+assert.equal(classifyRouterAttemptFailure(Object.assign(new Error("temporary"), { status: 503 })).category, "availability");
 
 const sequenceCalls = [];
 const sequenceRepo = repositoryWithCoordinator(new AiRouterV2Coordinator());
@@ -215,21 +258,32 @@ const pollResult = await directRouterOperation({
 assert.equal(pollResult.providerCode, "pollinations");
 assert.equal(pollCalls.at(-1), "P1");
 assert.deepEqual(pollCalls.filter((slot) => slot.startsWith("N")), ["N1", "N2", "N3"]);
+assert.equal(pollRepo.getSafeAiRouterState().pollinationsFallbackActive, true, "capacity exhaustion must activate final-resort mode");
 
 const pollStateStore = createMockRouterV2Store();
 const pollState = new AiRouterV2Coordinator({ store: pollStateStore });
-await pollState.enterPollinations({ operationId: "poll-enter", fallbackMaxMs: 3_600_000, probeIntervalMs: 300_000, nowMs: 1_000 });
+await pollState.claimPrimary({ operationId: "poll-enter", leaseMs: 1_000_000, nowMs: 1_000 });
+const initialPollDecision = await pollState.getPollinationsDecision({ operationId: "poll-enter", probeIntervalMs: 300_000, nowMs: 1_000 });
+await pollState.enterPollinations({ operationId: "poll-enter", fallbackMaxMs: 3_600_000, probeIntervalMs: 300_000, expectedStateVersion: initialPollDecision.stateVersion, nowMs: 1_000 });
+await pollState.claimPrimary({ operationId: "too-early", leaseMs: 1_000_000, nowMs: 200_000 });
 assert.equal((await pollState.getPollinationsDecision({ operationId: "too-early", probeIntervalMs: 300_000, nowMs: 200_000 })).probe, false);
-assert.equal((await pollState.getPollinationsDecision({ operationId: "probe-due", probeIntervalMs: 300_000, nowMs: 301_001 })).probe, true);
-await pollState.leavePollinations({ operationId: "probe-due" });
+await pollState.claimPrimary({ operationId: "probe-due", leaseMs: 1_000_000, nowMs: 301_001 });
+const duePollDecision = await pollState.getPollinationsDecision({ operationId: "probe-due", probeIntervalMs: 300_000, nowMs: 301_001 });
+assert.equal(duePollDecision.probe, true);
+await pollState.leavePollinations({ operationId: "probe-due", probeToken: duePollDecision.probeToken, nowMs: 301_001 });
+await pollState.claimPrimary({ operationId: "recovered", leaseMs: 1_000_000, nowMs: 302_000 });
 assert.equal((await pollState.getPollinationsDecision({ operationId: "recovered", probeIntervalMs: 300_000, nowMs: 302_000 })).active, false);
-await pollState.enterPollinations({ operationId: "poll-expire", fallbackMaxMs: 3_600_000, probeIntervalMs: 300_000, nowMs: 1_000 });
+await pollState.claimPrimary({ operationId: "poll-expire", leaseMs: 4_000_000, nowMs: 1_000 });
+const expiryPollDecision = await pollState.getPollinationsDecision({ operationId: "poll-expire", probeIntervalMs: 300_000, nowMs: 1_000 });
+await pollState.enterPollinations({ operationId: "poll-expire", fallbackMaxMs: 3_600_000, probeIntervalMs: 300_000, expectedStateVersion: expiryPollDecision.stateVersion, nowMs: 1_000 });
+await pollState.claimPrimary({ operationId: "after-hour", leaseMs: 1_000_000, nowMs: 3_601_001 });
 assert.equal((await pollState.getPollinationsDecision({ operationId: "after-hour", probeIntervalMs: 300_000, nowMs: 3_601_001 })).active, false);
 
 const structuredConfig = getAiProviderConfig(providerEnv({ NVIDIA_STRUCTURED_MODEL: "" }));
 const structuredCalls = [];
+const structuredRepo = repositoryWithCoordinator(new AiRouterV2Coordinator());
 const structuredResult = await directRouterOperation({
-  repository: repositoryWithCoordinator(new AiRouterV2Coordinator()),
+  repository: structuredRepo,
   config: structuredConfig,
   operationId: "structured-skip-kimi",
   responseMode: "json",
@@ -244,6 +298,8 @@ const structuredResult = await directRouterOperation({
 assert.equal(structuredResult.providerCode, "pollinations");
 assert.equal(structuredCalls.some((slot) => slot.startsWith("N")), false);
 assert.equal(structuredResult.attempts.some((attempt) => attempt.provider === "nvidia" && attempt.skipReason === "structured_model_not_configured"), true);
+assert.equal(structuredResult.attempts.find((attempt) => attempt.provider === "nvidia")?.category, "ineligible_capability");
+assert.equal(structuredRepo.getSafeAiRouterState().pollinationsFallbackActive, true, "structured-ineligible NVIDIA must not prevent mode entry after genuine primary capacity exhaustion");
 
 const malformedCalls = [];
 const malformedResult = await directRouterOperation({
@@ -274,6 +330,47 @@ assert.equal(compatibilityResult.providerFailure, true);
 assert.equal(compatibilityRepo.getSafeAiRouterState().slots.every((slot) => slot.healthState === "healthy"), true);
 assert.equal(compatibilityRepo.getSafeAiRouterState().pollinationsFallbackActive, false, "an unavailable Pollinations provider must not activate final-resort mode");
 
+const requestSpecificCalls = [];
+const requestSpecificRepo = repositoryWithCoordinator(new AiRouterV2Coordinator());
+const requestSpecificResult = await directRouterOperation({
+  repository: requestSpecificRepo,
+  config,
+  operationId: "request-specific-pollinations",
+  fetchImpl: async (url, options) => {
+    const slot = calledSlot(url, options);
+    requestSpecificCalls.push(slot);
+    return slot === "P1" ? successResponse(url) : jsonResponse({ error: { message: "unsupported request payload" } }, 422);
+  },
+});
+assert.equal(requestSpecificResult.providerCode, "pollinations");
+assert.equal(requestSpecificRepo.getSafeAiRouterState().pollinationsFallbackActive, false, "request incompatibility must not activate global Pollinations mode");
+const nextOrdinaryCalls = [];
+const nextOrdinaryResult = await directRouterOperation({
+  repository: requestSpecificRepo,
+  config,
+  operationId: "ordinary-after-request-specific",
+  fetchImpl: async (url, options) => {
+    nextOrdinaryCalls.push(calledSlot(url, options));
+    return successResponse(url);
+  },
+});
+assert.equal(nextOrdinaryResult.generationSucceeded, true);
+assert.equal(nextOrdinaryCalls[0], "G2", "request-specific Pollinations use must not globally bypass the next primary ring slot");
+
+const invalidJsonRepo = repositoryWithCoordinator(new AiRouterV2Coordinator());
+const invalidJsonResult = await directRouterOperation({
+  repository: invalidJsonRepo,
+  config: structuredConfig,
+  operationId: "all-upstream-invalid-json",
+  responseMode: "json",
+  validateOutput: (result) => JSON.parse(result.text),
+  fetchImpl: async (url, options) => calledSlot(url, options) === "P1"
+    ? jsonResponse({ choices: [{ message: { content: "{\"ok\":true}" }, finish_reason: "stop" }] })
+    : jsonResponse({ choices: [{ message: { content: "not-json" }, finish_reason: "stop" }] }),
+});
+assert.equal(invalidJsonResult.providerCode, "pollinations");
+assert.equal(invalidJsonRepo.getSafeAiRouterState().pollinationsFallbackActive, false, "invalid structured output must not activate global Pollinations mode");
+
 const retryRepo = repositoryWithCoordinator(new AiRouterV2Coordinator());
 const retryResult = await directRouterOperation({
   repository: retryRepo,
@@ -289,8 +386,9 @@ assert.equal(retrySlot.healthState, "cooling");
 assert.ok(Date.parse(retrySlot.cooldownUntil) - Date.now() > 115_000);
 
 const policyCalls = [];
+const policyRepo = repositoryWithCoordinator(new AiRouterV2Coordinator());
 const policyResult = await directRouterOperation({
-  repository: repositoryWithCoordinator(new AiRouterV2Coordinator()),
+  repository: policyRepo,
   config,
   operationId: "policy-stop",
   fetchImpl: async (url, options) => {
@@ -300,6 +398,7 @@ const policyResult = await directRouterOperation({
 });
 assert.equal(policyResult.policyBlocked, true);
 assert.deepEqual(policyCalls, ["G1"]);
+assert.equal(policyRepo.getSafeAiRouterState().pollinationsFallbackActive, false, "policy rejection must never activate Pollinations mode");
 
 const allowanceStore = createMockRouterV2Store();
 const allowanceRepo = repositoryWithCoordinator(new AiRouterV2Coordinator({ store: allowanceStore }));
@@ -335,6 +434,30 @@ await assert.rejects(() => executeAuthorizedAiOperation({
 }), /cancelled/);
 assert.equal(allowanceRepo.mock.aiUsageLedger.find((entry) => entry.requestId === "router-v2-cancel").status, "refunded");
 assert.equal([...allowanceStore.operations.values()].every((operation) => operation.completed), true);
+
+const malformedClaimStore = createMockRouterV2Store();
+const malformedClaimCoordinator = new AiRouterV2Coordinator({ store: malformedClaimStore });
+const malformedClaimRepo = repositoryWithCoordinator(malformedClaimCoordinator);
+const realMalformedClaim = malformedClaimRepo.claimAiRouterPrimary.bind(malformedClaimRepo);
+malformedClaimRepo.claimAiRouterPrimary = async (request) => {
+  await realMalformedClaim(request);
+  return { ordinal: 0, slotOrdinal: null, leaseExpiresAt: null };
+};
+await assert.rejects(() => executeAuthorizedAiOperation({
+  repository: malformedClaimRepo,
+  session,
+  config,
+  workflow: "router_v2_malformed_claim",
+  requestFingerprint: fingerprintAiOperation({ workflow: "router_v2_malformed_claim" }),
+  allowanceRequest: { planTier: "plus", periodKey, allowance: 220, actionType: "general_ask", creditCost: 1, requestId: "router-v2-malformed-claim" },
+  run: async () => ({ generationSucceeded: true }),
+  isLogicalSuccess: (result) => result?.generationSucceeded === true,
+}), (error) => error?.code === "ai_router_v2_primary_claim_failed" && error?.status === 503);
+const malformedLedgerEntry = malformedClaimRepo.mock.aiUsageLedger.find((entry) => entry.requestId === "router-v2-malformed-claim");
+assert.equal(malformedLedgerEntry.status, "refunded");
+assert.equal(malformedLedgerEntry.routingStatus, "failed");
+assert.equal(malformedLedgerEntry.routingLeaseExpiresAt, null);
+assert.equal([...malformedClaimStore.operations.values()].every((operation) => operation.completed), true, "malformed primary response cleanup must complete partial router claims");
 
 const propagatedCancelStore = createMockRouterV2Store();
 const propagatedCancelRepo = repositoryWithCoordinator(new AiRouterV2Coordinator({ store: propagatedCancelStore }));
@@ -380,8 +503,74 @@ assert.equal(JSON.stringify(redacted).includes("AIza"), false);
 
 const centralMigration = await readFile(new URL("../supabase/migrations/202607210001_studentos_ai_router_v2_central.sql", import.meta.url), "utf8");
 const shardMigration = await readFile(new URL("../supabase/migrations/202607210002_studentos_ai_router_v2_shards.sql", import.meta.url), "utf8");
+const centralRemediationMigration = await readFile(new URL("../supabase/migrations/202607220001_studentos_ai_router_v2_remediation_central.sql", import.meta.url), "utf8");
+const shardRemediationMigration = await readFile(new URL("../supabase/migrations/202607220002_studentos_ai_router_v2_remediation_shards.sql", import.meta.url), "utf8");
 for (const marker of ["claim_ai_router_primary", "claim_ai_router_nvidia", "claim_ai_router_slot", "record_ai_router_failure", "claim_ai_router_pollinations_probe", "pg_advisory_xact_lock", "service_role"]) assert.match(centralMigration, new RegExp(marker, "i"));
 assert.match(shardMigration, /'nvidia'/i);
 assert.doesNotMatch(centralMigration, /grant execute[^;]+to authenticated/is);
+for (const marker of ["claim_token", "health_version", "stale_slot_result", "p_expected_state_version", "ai_router_v2_test_runs", "verify_ai_router_v2_schema"]) assert.match(centralRemediationMigration, new RegExp(marker, "i"));
+assert.match(shardRemediationMigration, /verify_ai_router_v2_shard_schema/i);
+assert.doesNotMatch(centralRemediationMigration, /grant execute[^;]+to authenticated/is);
+
+const migrationVerifierEnv = {
+  STUDENTOS_MODE: "supabase",
+  STUDENTOS_SUPABASE_URL_1: "https://project-1.invalid",
+  STUDENTOS_SUPABASE_ANON_KEY_1: "anon-placeholder",
+  STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1: "service-placeholder-1",
+  STUDENTOS_SUPABASE_URL_2: "https://project-2.invalid",
+  STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2: "service-placeholder-2",
+  STUDENTOS_SUPABASE_URL_3: "https://project-3.invalid",
+  STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3: "service-placeholder-3",
+  STUDENTOS_SUPABASE_URL_4: "https://project-4.invalid",
+  STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4: "service-placeholder-4",
+};
+const liveVerifierFactory = (supabaseConfig) => ({
+  routerClient: {
+    isConfigured: () => true,
+    rpc: async () => [{
+      schema_version: AI_ROUTER_V2_CENTRAL_SCHEMA_VERSION,
+      target: "project_1_auth_shared",
+      capabilities: ["global_primary_ring", "central_slot_health", "claim_token_cas", "stale_result_observability", "pollinations_transition_cas", "isolated_database_concurrency_test", "service_role_only"],
+    }],
+  },
+  shardClients: supabaseConfig.shards.map((shard) => ({
+    ...shard,
+    client: {
+      isConfigured: () => true,
+      rpc: async () => [{
+        schema_version: AI_ROUTER_V2_SHARD_SCHEMA_VERSION,
+        target: "data_shard",
+        capabilities: ["routed_usage_ledger", "idempotent_settlement", "nvidia_settlement", "service_role_only"],
+        settlement_providers: ["groq", "gemini", "nvidia", "pollinations"],
+      }],
+    },
+  })),
+});
+const conclusiveLiveVerification = await verifyAiRouterV2Migrations({ liveRequested: true, env: migrationVerifierEnv, clientFactory: liveVerifierFactory });
+assert.equal(conclusiveLiveVerification.ok, true);
+assert.equal(conclusiveLiveVerification.live.checked, true);
+assert.equal(conclusiveLiveVerification.live.shardCount, 3);
+assert.equal(conclusiveLiveVerification.live.sourceOnlyFallback, false);
+const wrongModeVerification = await verifyAiRouterV2Migrations({ liveRequested: true, env: { ...migrationVerifierEnv, STUDENTOS_MODE: "mock" }, clientFactory: liveVerifierFactory });
+assert.equal(wrongModeVerification.ok, false);
+assert.equal(wrongModeVerification.live.checked, false);
+assert.equal(wrongModeVerification.live.reason, "live_requires_studentos_mode_supabase");
+const partialShardVerification = await verifyAiRouterV2Migrations({
+  liveRequested: true,
+  env: migrationVerifierEnv,
+  clientFactory: (supabaseConfig) => {
+    const clients = liveVerifierFactory(supabaseConfig);
+    clients.shardClients.pop();
+    return clients;
+  },
+});
+assert.equal(partialShardVerification.ok, false);
+assert.equal(partialShardVerification.live.checked, false);
+assert.equal(partialShardVerification.live.reason, "project_2_4_service_role_clients_unavailable");
+assert.equal((await runAiRouterV2DatabaseConcurrencyTest({ env: {} })).status, "NOT RUN");
+await assert.rejects(
+  () => runAiRouterV2DatabaseConcurrencyTest({ env: { STUDENTOS_AI_ROUTER_V2_LIVE_TEST: "true", STUDENTOS_MODE: "supabase" } }),
+  /project_1_service_role_configuration_missing/,
+);
 
 console.log("PASS | Provider Router V2 global key ring, shared health, fallback, settlement, security, and migration tests passed");

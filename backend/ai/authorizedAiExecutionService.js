@@ -50,6 +50,27 @@ function globalRouterOperationId(userId, requestId) {
   return `router:${digest}`;
 }
 
+function validPrimaryClaim(claim) {
+  const ordinal = Number(claim?.ordinal);
+  const slotOrdinal = Number(claim?.slotOrdinal);
+  const leaseExpiresAt = Date.parse(claim?.leaseExpiresAt || "");
+  return Number.isSafeInteger(ordinal)
+    && ordinal > 0
+    && Number.isInteger(slotOrdinal)
+    && slotOrdinal >= 1
+    && slotOrdinal <= PRIMARY_KEY_RING.length
+    && ((ordinal - 1) % PRIMARY_KEY_RING.length) + 1 === slotOrdinal
+    && Number.isFinite(leaseExpiresAt)
+    && leaseExpiresAt > Date.now();
+}
+
+function safePrimaryClaimError() {
+  const error = new Error("AI routing is temporarily unavailable. Please retry this action.");
+  error.status = 503;
+  error.code = "ai_router_v2_primary_claim_failed";
+  return error;
+}
+
 export function getAiOperationId({ idempotencyKey, requestId } = {}) {
   const supplied = String(idempotencyKey || "").trim();
   if (!supplied) return String(requestId || "").trim();
@@ -229,6 +250,7 @@ export async function executeAuthorizedAiOperation({
         operationId: routerOperationId,
         leaseMs: config.routing.leaseMs,
       });
+      if (!validPrimaryClaim(routerClaim)) throw safePrimaryClaimError();
     } catch (error) {
       await completeWithRetry({
         repository,
@@ -243,9 +265,14 @@ export async function executeAuthorizedAiOperation({
           outcome: null,
         },
       }).catch(() => null);
-      throw error;
+      await repository.completeAiRouterOperation({ operationId: routerOperationId }).catch(() => null);
+      logger?.warn?.("ai_router_v2.primary_claim_failed", {
+        operationCorrelationHash: createHash("sha256").update(routerOperationId).digest("hex").slice(0, 24),
+        status: Number(error?.status || 500),
+        malformedResponse: error?.code === "ai_router_v2_primary_claim_failed",
+      });
+      throw safePrimaryClaimError();
     }
-    if (!routerClaim?.ordinal || !routerClaim?.slotOrdinal) throw new Error("ai_router_v2_primary_claim_failed");
     routerSession = createRouterV2Session({ primarySlotOrdinal: routerClaim.slotOrdinal });
   }
   const ordinal = routerV2

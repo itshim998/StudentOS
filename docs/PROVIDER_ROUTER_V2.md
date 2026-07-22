@@ -27,9 +27,9 @@ One logical operation retains one allowance reservation and one final settlement
 
 ## Per-account health
 
-Each Groq, Gemini, and NVIDIA slot persists its own `healthy`, `cooling`, `half_open`, or `disabled` state. The database stores only a SHA-256 credential fingerprint so a changed key resets that slot safely; raw credentials are never persisted.
+Each Groq, Gemini, and NVIDIA slot persists its own `healthy`, `cooling`, `half_open`, or `disabled` state. The database stores only a SHA-256 credential fingerprint so a changed key resets that slot safely; raw credentials are never persisted. Every eligible attempt also receives an opaque claim token and health version. Success or failure is applied only while that operation still owns the matching, unexpired claim. A stale result is ignored and recorded with a one-way operation correlation hash, so it cannot clear a newer cooldown, reinstate a failed slot, or disable a newly reconfigured credential.
 
-- `429`: provider `Retry-After`, reset headers, and Gemini `RetryInfo.retryDelay` are honored. Without reset metadata, cooldown follows roughly 1 minute, 2 minutes, 5 minutes, 15 minutes, then at most 1 hour, with jitter.
+- `429`: valid provider `Retry-After`, reset headers, and Gemini `RetryInfo.retryDelay` take precedence and are bounded to one hour. Without reset metadata, the provider's `*_429_COOLDOWN_MS` is the minimum/base delay, repeated failures double that base, bounded jitter is applied without dropping below the configured base, and the final delay is capped at one hour.
 - `401`/`403`: only that slot is disabled until its credential fingerprint changes or an operator invokes the service-role-only `reset_ai_router_slot` RPC.
 - timeout, `408`, `500`, `502`, `503`, `504`: only that slot receives a short jittered cooldown.
 - `400`/`422` capability or payload incompatibility: the combination is skipped without cooling the credential.
@@ -41,12 +41,12 @@ An expired cooldown becomes `half_open`. Only one operation can hold its half-op
 
 Apply migrations in this exact scope:
 
-- Project 1 AUTH/shared only: `supabase/migrations/202607210001_studentos_ai_router_v2_central.sql`. This creates the singleton cursors, per-slot health, idempotent operation claims, Pollinations mode state, and service-role-only transactional RPCs. Do not apply it to data shards.
-- Projects 2, 3, and 4 only: `supabase/migrations/202607210002_studentos_ai_router_v2_shards.sql`. This additively permits `nvidia` in routing ledger constraints and settlement validation. Do not apply it to Project 1.
+- Project 1 AUTH/shared only: apply `supabase/migrations/202607210001_studentos_ai_router_v2_central.sql`, then `supabase/migrations/202607220001_studentos_ai_router_v2_remediation_central.sql`. The remediation adds claim-token CAS, stale-result telemetry, transition ownership, a schema-capability RPC, and isolated live-test rows. Do not apply either migration to data shards.
+- Projects 2, 3, and 4 only: apply `supabase/migrations/202607210002_studentos_ai_router_v2_shards.sql`, then `supabase/migrations/202607220002_studentos_ai_router_v2_remediation_shards.sql` to every shard. The remediation adds a service-role-only capability RPC that verifies routed settlement and explicit `nvidia` support. Do not apply either shard migration to Project 1.
 
 The API and worker must both receive Project 1's `STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1`; the central scheduler is unavailable when that backend-only authority is missing. Global scheduler tables are not duplicated on data shards.
 
-Verify migration sources locally with `npm run verify:ai-router-migrations`. After applying migrations and loading backend service-role variables, use `node scripts/verifyAiRouterV2Migrations.js --live` for read-only table checks.
+Verify migration sources locally with `npm run verify:ai-router-migrations`. After applying migrations, set `STUDENTOS_MODE=supabase` and load Project 1 plus all three shard service-role variables before running `node scripts/verifyAiRouterV2Migrations.js --live`. The live command fails closed unless the central version/capabilities and all three shard version/provider capabilities are conclusively returned; it never substitutes source checks for a requested live check.
 
 ## Configuration
 
@@ -108,7 +108,7 @@ Official references:
 
 ## Pollinations final-resort mode
 
-Entering final-resort mode records an expiry no later than one hour and a probe due after five minutes. Operations may continue directly to Pollinations between probes, but the due probe tries the earliest eligible upstream primary slot and then NVIDIA where the operation capability allows it. Any upstream success clears final-resort mode immediately. The one-hour boundary is not a blind lock: recovery is checked every five minutes, and expiry forces normal upstream evaluation again.
+Entering final-resort mode records an expiry no later than one hour and a probe due after five minutes. Entry occurs only after every upstream slot eligible for that request failed for availability/capacity reasons. Invalid output, schema failure, request/model incompatibility, unsupported capability, or a safety decision can never activate the global mode. Operations may continue directly to Pollinations between probes, but the due probe tries the earliest eligible upstream primary slot and then NVIDIA where the operation capability allows it. Only the operation holding the matching recovery-probe token can clear final-resort mode after upstream success; expiry is the other clearing path. Versioned transitions prevent unrelated concurrent operations from entering or leaving the mode with stale state.
 
 ## Validation
 
@@ -117,6 +117,7 @@ Local checks do not call live providers unless explicitly enabled:
 ```text
 npm run check:syntax
 npm run test:router-v2
+npm run test:router-v2-db
 npm test
 npm run test:recovery
 npm run eval:recovery
@@ -129,6 +130,8 @@ npm run preflight:production
 Registry verification is read-only: `npm run verify:ai-router-registries`.
 
 Live credential verification is disabled by default. Set `STUDENTOS_AI_LIVE_VERIFY=true` only in a backend shell, then run `npm run verify:ai`. The verifier uses an eight-token prompt, tests each configured numbered credential separately, never prints credentials, and classifies invalid-key, quota/rate-limit, model/payload, policy, and transport failures.
+
+The real Project 1 concurrency test is also disabled by default. With Router V2 production traffic still disabled, set `STUDENTOS_MODE=supabase` and `STUDENTOS_AI_ROUTER_V2_LIVE_TEST=true`, then run `npm run test:router-v2-db`. It creates two independent service-role clients, issues 48 simultaneous claims against isolated database test rows, verifies contiguous unique ordinals and both stale-writer directions, completes all test operations, and deletes the isolated run. Without the explicit flag it reports `NOT RUN`; with the flag but without Project 1 service-role configuration it fails.
 
 ## Azure deployment and rollout
 
@@ -144,8 +147,8 @@ Use GitHub environment variables for `STUDENTOS_AI_ROUTER_V2_ENABLED`, `STUDENTO
 
 Roll out in stages:
 
-1. Apply both migrations to their documented targets. Deploy with V2 `false` and rollout `0`; verify the legacy path and migration checks.
-2. In development, set V2 `true`, rollout `100`, and enable NVIDIA only after all three keys are mapped. Run deterministic, registry, migration, and opt-in live checks.
+1. Apply all four baseline/remediation migrations to their documented targets. Deploy with V2 `false` and rollout `0`; verify the legacy path and migration checks.
+2. In development, keep production V2 traffic disabled while running deterministic, registry, fail-closed live migration, and opt-in database concurrency checks. Then set V2 `true`, rollout `100`, and enable NVIDIA only after all three keys are mapped.
 3. In production, set V2 `true` and rollout `10`. The assignment is a stable SHA-256 bucket of user ID. Monitor status classes, per-slot cooldowns, fallback level, final provider, and allowance settlements without logging content or raw responses.
 4. Raise rollout to `100` only after the canary has healthy cursor progression, no elevated invalid-output rate, and correct one-operation-one-charge settlement.
 

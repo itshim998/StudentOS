@@ -92,6 +92,7 @@ addCheck("package preflight exists", pkg.scripts?.preflight === "npm run preflig
 addCheck("package preflight:azure exists", pkg.scripts?.["preflight:azure"] === "node scripts/preflightAzure.js");
 addCheck("package verify:azure-deployment exists", pkg.scripts?.["verify:azure-deployment"] === "node scripts/verifyAzureDeployment.js");
 addCheck("package repository syntax check exists", pkg.scripts?.["check:syntax"] === "node scripts/checkNodeSyntax.js");
+addCheck("package Router V2 database concurrency test exists", pkg.scripts?.["test:router-v2-db"] === "node scripts/testAiRouterV2DatabaseConcurrency.js");
 addCheck("package cloudflare:config exists", pkg.scripts?.["cloudflare:config"] === "node scripts/writeCloudflareFrontendConfig.js");
 addCheck("package cloudflare:build vendors and verifies KaTeX", pkg.scripts?.["cloudflare:build"] === "node scripts/vendorKatex.js && node scripts/writeCloudflareFrontendConfig.js && node scripts/verifyCloudflareBuild.js");
 addCheck("package verify:cloudflare-azure exists", pkg.scripts?.["verify:cloudflare-azure"] === "node scripts/verifyCloudflareAzureWiring.js");
@@ -216,6 +217,8 @@ const requiredAzureSecretRefs = [
 ];
 addCheck("workflow validates Supabase backend secrets", requiredAzureSupabaseSecrets.every((name) => workflow.includes(`${name}: \${{ secrets.${name} }}`)) && workflow.includes("Missing required Azure backend secret"));
 addCheck("workflow maps Supabase backend secrets to ACA secret refs", includesAll(workflow, requiredAzureSecretRefs));
+addCheck("Router V2 live migration verification is forced into Supabase mode", workflow.includes("STUDENTOS_MODE: supabase") && workflow.includes("verifyAiRouterV2Migrations.js --live"));
+addCheck("Router V2 database concurrency is a disabled-traffic pre-enable gate", workflow.includes("Confirm Router V2 production traffic is disabled before live gates") && workflow.includes("STUDENTOS_AI_ROUTER_V2_LIVE_TEST=true npm run test:router-v2-db"));
 addCheck(
   "workflow validates either legacy or numbered Groq secrets",
   AZURE_GROQ_SECRET_NAMES.every((name) => workflow.includes(`${name}: \${{ secrets.${name} }}`)) &&

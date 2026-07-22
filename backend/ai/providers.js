@@ -219,7 +219,7 @@ function providerFailure(providerName, lastError, prefix) {
   failure.status = lastError?.status || null;
   failure.providerCode = lastError?.providerCode || null;
   failure.policyBlocked = Boolean(lastError?.policyBlocked);
-  failure.retryAfterMs = lastError?.retryAfterMs || null;
+  failure.retryAfterMs = lastError?.retryAfterMs ?? null;
   failure.provider = providerName;
   failure.name = lastError?.name || failure.name;
   return failure;

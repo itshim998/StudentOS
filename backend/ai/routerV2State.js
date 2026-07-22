@@ -1,3 +1,5 @@
+import { createHash, randomUUID } from "node:crypto";
+
 const PRIMARY_RING_SIZE = 11;
 const NVIDIA_RING_SIZE = 3;
 
@@ -21,11 +23,14 @@ export function createMockRouterV2Store() {
     nvidiaCursor: 0,
     operations: new Map(),
     slots: new Map(),
+    observabilityEvents: [],
     pollinations: {
       activeUntil: null,
       nextProbeAt: null,
       probeOperationId: null,
       probeLeaseExpiresAt: null,
+      probeToken: null,
+      version: 0,
     },
   };
 }
@@ -46,6 +51,10 @@ function slotRecord(store, providerCode, slotNumber) {
       credentialFingerprint: null,
       halfOpenOperationId: null,
       halfOpenLeaseExpiresAt: null,
+      claimOperationId: null,
+      claimLeaseExpiresAt: null,
+      claimToken: null,
+      healthVersion: 0,
       lastStatusClass: null,
     });
   }
@@ -61,7 +70,33 @@ function mappedSlot(row = {}) {
     cooldownUntil: row.cooldown_until || null,
     failureCount: Number(row.failure_count || 0),
     skipReason: row.skip_reason || null,
+    claimToken: row.claim_token || null,
+    claimLeaseExpiresAt: row.claim_lease_expires_at || null,
+    healthVersion: Number(row.health_version || 0),
   };
+}
+
+function mappedMutation(row = {}) {
+  return {
+    applied: row.applied === true,
+    stale: row.stale === true,
+    healthVersion: Number(row.health_version || 0),
+  };
+}
+
+function operationCorrelationHash(operationId) {
+  return createHash("sha256").update(String(operationId || "unknown")).digest("hex").slice(0, 24);
+}
+
+function recordMockStaleEvent(store, { operationId, providerCode, slotNumber, outcome }) {
+  store.observabilityEvents.push({
+    eventType: "stale_slot_result",
+    operationCorrelationHash: operationCorrelationHash(operationId),
+    providerCode,
+    slotNumber,
+    outcome,
+    applied: false,
+  });
 }
 
 export class AiRouterV2Coordinator {
@@ -145,6 +180,10 @@ export class AiRouterV2Coordinator {
       });
       return mappedSlot(rows?.[0] || {});
     }
+    const operation = this.store.operations.get(operationId);
+    if (!operation || operation.completed || timestampMs(operation.leaseExpiresAt) <= nowMs) {
+      throw new Error("ai_router_operation_lease_missing");
+    }
     const slot = slotRecord(this.store, providerCode, slotNumber);
     if (slot.credentialFingerprint !== credentialFingerprint) {
       Object.assign(slot, {
@@ -154,6 +193,10 @@ export class AiRouterV2Coordinator {
         credentialFingerprint,
         halfOpenOperationId: null,
         halfOpenLeaseExpiresAt: null,
+        claimOperationId: null,
+        claimLeaseExpiresAt: null,
+        claimToken: null,
+        healthVersion: slot.healthVersion + 1,
         lastStatusClass: null,
       });
     }
@@ -163,57 +206,87 @@ export class AiRouterV2Coordinator {
       slot.healthState = "half_open";
     }
     if (slot.healthState === "half_open") {
-      const held = timestampMs(slot.halfOpenLeaseExpiresAt) > nowMs && slot.halfOpenOperationId !== operationId;
+      const held = timestampMs(slot.claimLeaseExpiresAt) > nowMs && slot.claimOperationId !== operationId;
       if (held) return { ...clone(slot), eligible: false, skipReason: "half_open_lease_held" };
       slot.halfOpenOperationId = operationId;
       slot.halfOpenLeaseExpiresAt = nowIso(nowMs + Math.max(1_000, Number(leaseMs || 30_000)));
     }
+    slot.healthVersion += 1;
+    slot.claimOperationId = operationId;
+    slot.claimLeaseExpiresAt = nowIso(nowMs + Math.max(1_000, Number(leaseMs || 30_000)));
+    slot.claimToken = randomUUID();
     return { ...clone(slot), eligible: true, skipReason: null };
   }
 
-  async recordSuccess({ operationId, providerCode, slotNumber, nowMs = Date.now() } = {}) {
+  async recordSuccess({ operationId, providerCode, slotNumber, claimToken, nowMs = Date.now() } = {}) {
     this.assertCentralReady();
     if (this.usesCentralState()) {
-      await this.centralClient.rpc("record_ai_router_success", {
+      const rows = await this.centralClient.rpc("record_ai_router_success", {
         p_operation_id: operationId,
         p_provider_code: providerCode,
         p_slot_number: slotNumber,
+        p_claim_token: claimToken,
       });
-      return;
+      return mappedMutation(rows?.[0] || rows || {});
     }
     const slot = slotRecord(this.store, providerCode, slotNumber);
+    const applied = slot.claimOperationId === operationId
+      && slot.claimToken === claimToken
+      && timestampMs(slot.claimLeaseExpiresAt) > nowMs;
+    if (!applied) {
+      recordMockStaleEvent(this.store, { operationId, providerCode, slotNumber, outcome: "success" });
+      return { applied: false, stale: true, healthVersion: slot.healthVersion };
+    }
     Object.assign(slot, {
       healthState: "healthy",
       cooldownUntil: null,
       failureCount: 0,
       halfOpenOperationId: null,
       halfOpenLeaseExpiresAt: null,
+      claimOperationId: null,
+      claimLeaseExpiresAt: null,
+      claimToken: null,
+      healthVersion: slot.healthVersion + 1,
       lastStatusClass: "success",
       lastSuccessAt: nowIso(nowMs),
     });
+    return { applied: true, stale: false, healthVersion: slot.healthVersion };
   }
 
-  async recordFailure({ operationId, providerCode, slotNumber, statusClass, cooldownMs = 0, disable = false, nowMs = Date.now() } = {}) {
+  async recordFailure({ operationId, providerCode, slotNumber, claimToken, statusClass, cooldownMs = 0, disable = false, nowMs = Date.now() } = {}) {
     this.assertCentralReady();
     if (this.usesCentralState()) {
-      await this.centralClient.rpc("record_ai_router_failure", {
+      const rows = await this.centralClient.rpc("record_ai_router_failure", {
         p_operation_id: operationId,
         p_provider_code: providerCode,
         p_slot_number: slotNumber,
+        p_claim_token: claimToken,
         p_status_class: statusClass,
         p_cooldown_ms: Math.max(0, Math.floor(cooldownMs)),
         p_disable: disable === true,
       });
-      return;
+      return mappedMutation(rows?.[0] || rows || {});
     }
     const slot = slotRecord(this.store, providerCode, slotNumber);
+    const applied = slot.claimOperationId === operationId
+      && slot.claimToken === claimToken
+      && timestampMs(slot.claimLeaseExpiresAt) > nowMs;
+    if (!applied) {
+      recordMockStaleEvent(this.store, { operationId, providerCode, slotNumber, outcome: disable ? "credential_rejected" : statusClass });
+      return { applied: false, stale: true, healthVersion: slot.healthVersion };
+    }
     slot.failureCount += 1;
     slot.healthState = disable ? "disabled" : "cooling";
     slot.cooldownUntil = disable ? null : nowIso(nowMs + Math.max(1, Number(cooldownMs || 1)));
     slot.halfOpenOperationId = null;
     slot.halfOpenLeaseExpiresAt = null;
+    slot.claimOperationId = null;
+    slot.claimLeaseExpiresAt = null;
+    slot.claimToken = null;
+    slot.healthVersion += 1;
     slot.lastStatusClass = statusClass;
     slot.lastFailureAt = nowIso(nowMs);
+    return { applied: true, stale: false, healthVersion: slot.healthVersion };
   }
 
   async getPollinationsDecision({ operationId, probeIntervalMs, nowMs = Date.now() } = {}) {
@@ -229,50 +302,76 @@ export class AiRouterV2Coordinator {
         probe: row.probe_claimed === true,
         activeUntil: row.fallback_active_until || null,
         nextProbeAt: row.next_probe_at || null,
+        probeToken: row.probe_token || null,
+        stateVersion: Number(row.state_version || 0),
       };
+    }
+    const operation = this.store.operations.get(operationId);
+    if (!operation || operation.completed || timestampMs(operation.leaseExpiresAt) <= nowMs) {
+      throw new Error("ai_router_operation_lease_missing");
     }
     const state = this.store.pollinations;
     if (!state.activeUntil || timestampMs(state.activeUntil) <= nowMs) {
-      Object.assign(state, { activeUntil: null, nextProbeAt: null, probeOperationId: null, probeLeaseExpiresAt: null });
-      return { active: false, probe: true, activeUntil: null, nextProbeAt: null };
+      const changed = Boolean(state.activeUntil || state.nextProbeAt || state.probeOperationId || state.probeToken);
+      Object.assign(state, { activeUntil: null, nextProbeAt: null, probeOperationId: null, probeLeaseExpiresAt: null, probeToken: null });
+      if (changed) state.version += 1;
+      return { active: false, probe: true, activeUntil: null, nextProbeAt: null, probeToken: null, stateVersion: state.version };
     }
     if (timestampMs(state.nextProbeAt) > nowMs) {
-      return { active: true, probe: false, activeUntil: state.activeUntil, nextProbeAt: state.nextProbeAt };
+      return { active: true, probe: false, activeUntil: state.activeUntil, nextProbeAt: state.nextProbeAt, probeToken: null, stateVersion: state.version };
     }
     const held = timestampMs(state.probeLeaseExpiresAt) > nowMs && state.probeOperationId !== operationId;
-    if (held) return { active: true, probe: false, activeUntil: state.activeUntil, nextProbeAt: state.nextProbeAt };
+    if (held) return { active: true, probe: false, activeUntil: state.activeUntil, nextProbeAt: state.nextProbeAt, probeToken: null, stateVersion: state.version };
     state.probeOperationId = operationId;
     state.probeLeaseExpiresAt = nowIso(nowMs + Math.min(60_000, Math.max(5_000, Number(probeIntervalMs || 300_000) / 2)));
+    state.probeToken = randomUUID();
     state.nextProbeAt = nowIso(nowMs + Math.max(1_000, Number(probeIntervalMs || 300_000)));
-    return { active: true, probe: true, activeUntil: state.activeUntil, nextProbeAt: state.nextProbeAt };
+    state.version += 1;
+    return { active: true, probe: true, activeUntil: state.activeUntil, nextProbeAt: state.nextProbeAt, probeToken: state.probeToken, stateVersion: state.version };
   }
 
-  async enterPollinations({ operationId, fallbackMaxMs, probeIntervalMs, nowMs = Date.now() } = {}) {
+  async enterPollinations({ operationId, fallbackMaxMs, probeIntervalMs, expectedStateVersion, nowMs = Date.now() } = {}) {
     this.assertCentralReady();
     if (this.usesCentralState()) {
-      await this.centralClient.rpc("enter_ai_router_pollinations_mode", {
+      const rows = await this.centralClient.rpc("enter_ai_router_pollinations_mode", {
         p_operation_id: operationId,
         p_fallback_max_ms: fallbackMaxMs,
         p_probe_interval_ms: probeIntervalMs,
+        p_expected_state_version: expectedStateVersion,
       });
-      return;
+      return rows?.[0] || rows || { applied: false };
+    }
+    const operation = this.store.operations.get(operationId);
+    if (!operation || operation.completed || timestampMs(operation.leaseExpiresAt) <= nowMs) {
+      return { applied: false, stale: true, stateVersion: this.store.pollinations.version };
     }
     const state = this.store.pollinations;
-    if (!state.activeUntil || timestampMs(state.activeUntil) <= nowMs) {
-      state.activeUntil = nowIso(nowMs + Math.max(1_000, Number(fallbackMaxMs || 3_600_000)));
-      state.nextProbeAt = nowIso(nowMs + Math.max(1_000, Number(probeIntervalMs || 300_000)));
+    if (Number(expectedStateVersion) !== state.version) {
+      return { applied: false, stale: true, stateVersion: state.version };
     }
+    state.activeUntil = nowIso(nowMs + Math.max(1_000, Number(fallbackMaxMs || 3_600_000)));
+    state.nextProbeAt = nowIso(nowMs + Math.max(1_000, Number(probeIntervalMs || 300_000)));
     state.probeOperationId = null;
     state.probeLeaseExpiresAt = null;
+    state.probeToken = null;
+    state.version += 1;
+    return { applied: true, stale: false, stateVersion: state.version };
   }
 
-  async leavePollinations({ operationId } = {}) {
+  async leavePollinations({ operationId, probeToken, nowMs = Date.now() } = {}) {
     this.assertCentralReady();
     if (this.usesCentralState()) {
-      await this.centralClient.rpc("leave_ai_router_pollinations_mode", { p_operation_id: operationId });
-      return;
+      const rows = await this.centralClient.rpc("leave_ai_router_pollinations_mode", { p_operation_id: operationId, p_probe_token: probeToken });
+      return rows?.[0] || rows || { applied: false };
     }
-    Object.assign(this.store.pollinations, { activeUntil: null, nextProbeAt: null, probeOperationId: null, probeLeaseExpiresAt: null });
+    const state = this.store.pollinations;
+    if (state.probeOperationId !== operationId || state.probeToken !== probeToken || timestampMs(state.probeLeaseExpiresAt) <= nowMs) {
+      this.store.observabilityEvents.push({ eventType: "stale_pollinations_transition", operationCorrelationHash: operationCorrelationHash(operationId), outcome: "upstream_recovery", applied: false });
+      return { applied: false, stale: true, stateVersion: state.version };
+    }
+    Object.assign(state, { activeUntil: null, nextProbeAt: null, probeOperationId: null, probeLeaseExpiresAt: null, probeToken: null });
+    state.version += 1;
+    return { applied: true, stale: false, stateVersion: state.version };
   }
 
   async completeOperation({ operationId } = {}) {
@@ -284,14 +383,20 @@ export class AiRouterV2Coordinator {
     const operation = this.store.operations.get(operationId);
     if (operation) operation.completed = true;
     for (const slot of this.store.slots.values()) {
-      if (slot.halfOpenOperationId !== operationId) continue;
+      if (slot.claimOperationId !== operationId) continue;
       slot.halfOpenOperationId = null;
       slot.halfOpenLeaseExpiresAt = null;
+      slot.claimOperationId = null;
+      slot.claimLeaseExpiresAt = null;
+      slot.claimToken = null;
+      slot.healthVersion += 1;
       if (slot.healthState === "half_open") slot.healthState = "cooling";
     }
     if (this.store.pollinations.probeOperationId === operationId) {
       this.store.pollinations.probeOperationId = null;
       this.store.pollinations.probeLeaseExpiresAt = null;
+      this.store.pollinations.probeToken = null;
+      this.store.pollinations.version += 1;
     }
   }
 
@@ -308,6 +413,7 @@ export class AiRouterV2Coordinator {
         failureCount: slot.failureCount,
       })),
       pollinationsFallbackActive: this.usesCentralState() ? null : timestampMs(this.store.pollinations.activeUntil) > Date.now(),
+      staleResultCount: this.usesCentralState() ? null : this.store.observabilityEvents.filter((event) => event.eventType.startsWith("stale_")).length,
       secretsExposed: false,
     };
   }

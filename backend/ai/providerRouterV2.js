@@ -23,7 +23,8 @@ export const PRIMARY_KEY_RING = Object.freeze([
 ]);
 
 export const NVIDIA_KEY_RING = Object.freeze([1, 2, 3]);
-const RATE_LIMIT_SEQUENCE_MS = Object.freeze([60_000, 120_000, 300_000, 900_000, 3_600_000]);
+const MAX_PROVIDER_COOLDOWN_MS = 3_600_000;
+const LEGACY_RATE_LIMIT_BACKOFF_MS = Object.freeze([60_000, 120_000, 300_000, 900_000, MAX_PROVIDER_COOLDOWN_MS]);
 
 function credentialFingerprint(keyRecord) {
   return createHash("sha256").update(String(keyRecord?.value || "")).digest("hex");
@@ -39,18 +40,52 @@ function configuredKey(config, providerCode, slotNumber) {
 }
 
 function jitter(milliseconds, random) {
-  const factor = 0.9 + (Math.max(0, Math.min(1, Number(random?.() ?? Math.random()))) * 0.2);
+  const sampled = Number(random?.() ?? Math.random());
+  const normalized = Number.isFinite(sampled) ? Math.max(0, Math.min(1, sampled)) : 0.5;
+  const factor = 0.9 + (normalized * 0.2);
   return Math.max(1, Math.round(milliseconds * factor));
 }
 
 export function cooldownForProviderFailure(error, { failureCount = 0, providerConfig = {}, random = Math.random } = {}) {
   const status = Number(error?.status || 0);
   if (status === 429) {
-    if (Number.isFinite(Number(error?.retryAfterMs)) && Number(error.retryAfterMs) >= 0) return Math.ceil(Number(error.retryAfterMs));
-    const base = RATE_LIMIT_SEQUENCE_MS[Math.min(Math.max(0, Number(failureCount || 0)), RATE_LIMIT_SEQUENCE_MS.length - 1)];
-    return jitter(base, random);
+    if (Number.isFinite(Number(error?.retryAfterMs)) && Number(error.retryAfterMs) >= 0) {
+      return Math.min(MAX_PROVIDER_COOLDOWN_MS, Math.ceil(Number(error.retryAfterMs)));
+    }
+    const rawConfiguredBase = Number(providerConfig.rateLimitCooldownMs);
+    const configuredBase = Math.min(MAX_PROVIDER_COOLDOWN_MS, Math.max(1_000, Number.isFinite(rawConfiguredBase) ? rawConfiguredBase : 60_000));
+    const rawFailureCount = Number(failureCount);
+    const exponent = Math.min(20, Math.max(0, Math.floor(Number.isFinite(rawFailureCount) ? rawFailureCount : 0)));
+    const legacyBackoff = LEGACY_RATE_LIMIT_BACKOFF_MS[Math.min(exponent, LEGACY_RATE_LIMIT_BACKOFF_MS.length - 1)];
+    const boundedBackoff = Math.min(MAX_PROVIDER_COOLDOWN_MS, Math.max(legacyBackoff, configuredBase * (2 ** exponent)));
+    return Math.min(MAX_PROVIDER_COOLDOWN_MS, Math.max(configuredBase, jitter(boundedBackoff, random)));
   }
-  return jitter(Math.min(60_000, Math.max(1_000, Number(providerConfig.keyCooldownMs || 30_000))), random);
+  const rawKeyCooldown = Number(providerConfig.keyCooldownMs);
+  const keyCooldown = Math.min(60_000, Math.max(1_000, Number.isFinite(rawKeyCooldown) ? rawKeyCooldown : 30_000));
+  return jitter(keyCooldown, random);
+}
+
+export function classifyRouterAttemptFailure(error) {
+  if (error?.policyBlocked) return { category: "policy", outcome: "policy_blocked", mutatesHealth: false };
+  if (isRequestCompatibilityError(error)) return { category: "request_specific", outcome: "request_incompatible", mutatesHealth: false };
+  const status = Number(error?.status || 0);
+  const message = String(error?.message || "");
+  if (/empty_response|invalid[_ -]?output|malformed/i.test(message)) {
+    return { category: "request_specific", outcome: "invalid_output", mutatesHealth: false };
+  }
+  if (error?.capabilitySkipped || /unsupported|capabilit/i.test(message)) {
+    return { category: "request_specific", outcome: "unsupported_capability", mutatesHealth: false };
+  }
+  if ([401, 403].includes(status)) return { category: "availability", outcome: "credential_rejected", mutatesHealth: true };
+  if (status === 429) return { category: "availability", outcome: "rate_limited", mutatesHealth: true };
+  if (status === 408 || status >= 500) return { category: "availability", outcome: "transient_failure", mutatesHealth: true };
+  if (error?.name === "AbortError" || /timed?\s*out|timeout/i.test(message)) {
+    return { category: "availability", outcome: "provider_timeout", mutatesHealth: true };
+  }
+  if (error?.name === "TypeError" || /fetch|network|socket|transport|econn|temporar(?:y|ily)[_ -]?unavailable/i.test(message)) {
+    return { category: "availability", outcome: "transport_failure", mutatesHealth: true };
+  }
+  return { category: "request_specific", outcome: providerStatusClass(error), mutatesHealth: false };
 }
 
 function abortError() {
@@ -63,17 +98,19 @@ function deadlineReached(operationDeadline) {
   return Boolean(operationDeadline && Date.now() >= operationDeadline);
 }
 
-function safeAttempt({ providerCode, slotNumber = null, attemptNumber, fallbackLevel, outcome, latencyMs = 0, cooldownMs = null, skipReason = null, model = null }) {
+function safeAttempt({ providerCode, slotNumber = null, attemptNumber, fallbackLevel, outcome, category = null, latencyMs = 0, cooldownMs = null, skipReason = null, model = null, casApplied = null }) {
   return {
     provider: providerCode,
     slotNumber,
     attemptNumber,
     fallbackLevel,
     outcome,
+    ...(category ? { category } : {}),
     latencyMs,
     ...(cooldownMs ? { cooldownMs } : {}),
     ...(skipReason ? { skipReason } : {}),
     ...(model ? { model } : {}),
+    ...(typeof casApplied === "boolean" ? { casApplied } : {}),
   };
 }
 
@@ -131,6 +168,8 @@ export async function runProviderRouterV2({
   const attempts = routerSession.attempts ||= [];
   const failures = routerSession.failures ||= [];
   let invalidOutputSeen = routerSession.invalidOutputSeen === true;
+  const upstreamOutcomes = { availabilityFailures: 0, requestSpecificFailures: 0 };
+  const operationCorrelationHash = createHash("sha256").update(String(operationId)).digest("hex").slice(0, 24);
   const pollDecision = await scheduler.getAiRouterPollinationsDecision({
     operationId,
     probeIntervalMs: config.pollinations.upstreamProbeIntervalMs,
@@ -152,7 +191,7 @@ export async function runProviderRouterV2({
     const keyRecord = configuredKey(config, providerCode, slotNumber);
     if (config.routing?.providers?.[providerCode] === false || providerConfig?.enabled === false || !keyRecord) {
       const skipReason = !keyRecord ? "credential_slot_not_configured" : "provider_disabled";
-      attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: "skipped", skipReason, model }));
+      attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: "skipped", category: "ineligible_configuration", skipReason, model }));
       failures.push(`${providerCode}_${slotNumber}:${skipReason}`);
       return null;
     }
@@ -164,7 +203,8 @@ export async function runProviderRouterV2({
       leaseMs: Math.min(Number(providerConfig.timeoutMs || 45_000), Math.max(1_000, Number(config.routing.operationTimeoutMs || 120_000))),
     });
     if (!claim.eligible) {
-      attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: "skipped", skipReason: claim.skipReason || claim.healthState, model }));
+      upstreamOutcomes.availabilityFailures += 1;
+      attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: "skipped", category: "availability", skipReason: claim.skipReason || claim.healthState, model }));
       failures.push(`${providerCode}_${slotNumber}:${claim.skipReason || claim.healthState}`);
       return null;
     }
@@ -189,18 +229,22 @@ export async function runProviderRouterV2({
         } catch {
           invalidOutputSeen = true;
           routerSession.invalidOutputSeen = true;
+          upstreamOutcomes.requestSpecificFailures += 1;
           const latencyMs = Date.now() - startedAt;
-          attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: "invalid_output", latencyMs, model: result.modelUsed || model }));
+          attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: "invalid_output", category: "request_specific", latencyMs, model: result.modelUsed || model }));
           failures.push(`${providerCode}_${slotNumber}:invalid_output`);
-          logger?.warn?.("ai_router_v2.attempt", { operationId, providerCode, slotNumber, attemptNumber, fallbackLevel, latencyMs, statusClass: "invalid_output" });
+          logger?.warn?.("ai_router_v2.attempt", { operationCorrelationHash, providerCode, slotNumber, attemptNumber, fallbackLevel, latencyMs, attemptCategory: "request_specific", statusClass: "invalid_output" });
           return null;
         }
       }
-      await scheduler.recordAiRouterSuccess({ operationId, providerCode, slotNumber });
-      if (pollDecision.active) await scheduler.leaveAiRouterPollinations({ operationId });
+      const healthResult = await scheduler.recordAiRouterSuccess({ operationId, providerCode, slotNumber, claimToken: claim.claimToken });
+      if (pollDecision.active && pollDecision.probe) {
+        const transition = await scheduler.leaveAiRouterPollinations({ operationId, probeToken: pollDecision.probeToken });
+        if (transition?.applied === false) logger?.warn?.("ai_router_v2.pollinations_transition_stale", { operationCorrelationHash, transition: "leave", applied: false });
+      }
       const latencyMs = Date.now() - startedAt;
-      attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: "success", latencyMs, model: result.modelUsed || model }));
-      logger?.info?.("ai_router_v2.attempt", { operationId, providerCode, slotNumber, attemptNumber, fallbackLevel, latencyMs, statusClass: "success", model: result.modelUsed || model });
+      attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: "success", category: "success", latencyMs, model: result.modelUsed || model, casApplied: healthResult?.applied !== false }));
+      logger?.info?.("ai_router_v2.attempt", { operationCorrelationHash, providerCode, slotNumber, attemptNumber, fallbackLevel, latencyMs, attemptCategory: "success", statusClass: "success", casApplied: healthResult?.applied !== false, model: result.modelUsed || model });
       return {
         ...result,
         ...(typeof validateOutput === "function" ? { validatedOutput } : {}),
@@ -211,10 +255,10 @@ export async function runProviderRouterV2({
       };
     } catch (error) {
       if (signal?.aborted) throw abortError();
-      const statusClass = providerStatusClass(error);
+      const classification = classifyRouterAttemptFailure(error);
       const latencyMs = Date.now() - startedAt;
-      if (error?.policyBlocked) {
-        attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: "policy_blocked", latencyMs, model }));
+      if (classification.category === "policy") {
+        attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: "policy_blocked", category: "policy", latencyMs, model }));
         return {
           provider: "none",
           providerCode: null,
@@ -228,17 +272,23 @@ export async function runProviderRouterV2({
           invalidOutputSeen,
         };
       }
-      if (isRequestCompatibilityError(error)) {
-        attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: "request_incompatible", latencyMs, model }));
-        failures.push(`${providerCode}_${slotNumber}:request_incompatible`);
+      if (classification.category === "request_specific") {
+        upstreamOutcomes.requestSpecificFailures += 1;
+        if (classification.outcome === "invalid_output") {
+          invalidOutputSeen = true;
+          routerSession.invalidOutputSeen = true;
+        }
+        attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: classification.outcome, category: "request_specific", latencyMs, model }));
+        failures.push(`${providerCode}_${slotNumber}:${classification.outcome}`);
         return null;
       }
+      upstreamOutcomes.availabilityFailures += 1;
       const disable = [401, 403].includes(Number(error?.status || 0));
       const cooldownMs = disable ? 0 : cooldownForProviderFailure(error, { failureCount: claim.failureCount, providerConfig, random });
-      await scheduler.recordAiRouterFailure({ operationId, providerCode, slotNumber, statusClass, cooldownMs, disable });
-      attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: statusClass, latencyMs, cooldownMs, model }));
-      failures.push(`${providerCode}_${slotNumber}:${statusClass}`);
-      logger?.warn?.("ai_router_v2.attempt", { operationId, providerCode, slotNumber, attemptNumber, fallbackLevel, latencyMs, statusClass, cooldownMs });
+      const healthResult = await scheduler.recordAiRouterFailure({ operationId, providerCode, slotNumber, claimToken: claim.claimToken, statusClass: classification.outcome, cooldownMs, disable });
+      attempts.push(safeAttempt({ providerCode, slotNumber, attemptNumber, fallbackLevel, outcome: classification.outcome, category: "availability", latencyMs, cooldownMs, model, casApplied: healthResult?.applied !== false }));
+      failures.push(`${providerCode}_${slotNumber}:${classification.outcome}`);
+      logger?.warn?.("ai_router_v2.attempt", { operationCorrelationHash, providerCode, slotNumber, attemptNumber, fallbackLevel, latencyMs, attemptCategory: "availability", statusClass: classification.outcome, cooldownMs, casApplied: healthResult?.applied !== false });
       return null;
     }
   };
@@ -253,7 +303,7 @@ export async function runProviderRouterV2({
     if (config.routing?.providers?.nvidia !== false && config.nvidia.enabled !== false && config.nvidia.configured) {
       if (responseMode === "json" && !config.nvidia.structuredModel) {
         routerSession.attemptNumber += 1;
-        attempts.push(safeAttempt({ providerCode: "nvidia", attemptNumber: routerSession.attemptNumber, fallbackLevel: "nvidia", outcome: "skipped", skipReason: "structured_model_not_configured" }));
+        attempts.push(safeAttempt({ providerCode: "nvidia", attemptNumber: routerSession.attemptNumber, fallbackLevel: "nvidia", outcome: "skipped", category: "ineligible_capability", skipReason: "structured_model_not_configured" }));
         failures.push("nvidia:structured_model_not_configured");
       } else {
         const nvidiaClaim = await scheduler.claimAiRouterNvidia({ operationId });
@@ -296,24 +346,27 @@ export async function runProviderRouterV2({
       } catch {
         invalidOutputSeen = true;
         routerSession.invalidOutputSeen = true;
-        if (pollDecision.active) await scheduler.leaveAiRouterPollinations({ operationId });
-        attempts.push(safeAttempt({ providerCode: "pollinations", attemptNumber: pollAttemptNumber, fallbackLevel: "final_resort", outcome: "invalid_output", latencyMs: Date.now() - pollStartedAt, model: result.modelUsed }));
+        attempts.push(safeAttempt({ providerCode: "pollinations", attemptNumber: pollAttemptNumber, fallbackLevel: "final_resort", outcome: "invalid_output", category: "request_specific", latencyMs: Date.now() - pollStartedAt, model: result.modelUsed }));
         failures.push("pollinations:invalid_output");
         return resultFailure({ failures, attempts, invalidOutputSeen });
       }
     }
-    await scheduler.enterAiRouterPollinations({
-      operationId,
-      fallbackMaxMs: config.pollinations.fallbackMaxMs,
-      probeIntervalMs: config.pollinations.upstreamProbeIntervalMs,
-    });
-    attempts.push(safeAttempt({ providerCode: "pollinations", attemptNumber: pollAttemptNumber, fallbackLevel: "final_resort", outcome: "success", latencyMs: Date.now() - pollStartedAt, model: result.modelUsed }));
+    const availabilityExhausted = upstreamOutcomes.availabilityFailures > 0 && upstreamOutcomes.requestSpecificFailures === 0;
+    if (!pollDecision.active && availabilityExhausted) {
+      const transition = await scheduler.enterAiRouterPollinations({
+        operationId,
+        fallbackMaxMs: config.pollinations.fallbackMaxMs,
+        probeIntervalMs: config.pollinations.upstreamProbeIntervalMs,
+        expectedStateVersion: pollDecision.stateVersion,
+      });
+      if (transition?.applied === false) logger?.warn?.("ai_router_v2.pollinations_transition_stale", { operationCorrelationHash, transition: "enter", applied: false });
+    }
+    attempts.push(safeAttempt({ providerCode: "pollinations", attemptNumber: pollAttemptNumber, fallbackLevel: "final_resort", outcome: "success", category: "final_fallback", latencyMs: Date.now() - pollStartedAt, model: result.modelUsed }));
     return { ...result, ...(typeof validateOutput === "function" ? { validatedOutput } : {}), attempts, generationSucceeded: true, providerFailure: false, invalidOutputSeen };
   } catch (error) {
     if (signal?.aborted) throw abortError();
-    if (pollDecision.active) await scheduler.leaveAiRouterPollinations({ operationId });
     const statusClass = providerStatusClass(error);
-    attempts.push(safeAttempt({ providerCode: "pollinations", attemptNumber: pollAttemptNumber, fallbackLevel: "final_resort", outcome: statusClass, latencyMs: Date.now() - pollStartedAt }));
+    attempts.push(safeAttempt({ providerCode: "pollinations", attemptNumber: pollAttemptNumber, fallbackLevel: "final_resort", outcome: statusClass, category: error?.policyBlocked ? "policy" : "final_fallback", latencyMs: Date.now() - pollStartedAt }));
     failures.push(`pollinations:${statusClass}`);
     if (error?.policyBlocked) {
       return { ...resultFailure({ failures, attempts, invalidOutputSeen }), policyBlocked: true };

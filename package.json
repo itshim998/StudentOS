@@ -59,6 +59,7 @@
     "test:phase2-4a": "node backend/testPhase24ASyllabusMasteryQueue.js",
     "test:multi-provider": "node backend/testMultiProviderRouting.js",
     "test:router-v2": "node backend/testProviderRouterV2.js",
+    "test:router-v2-db": "node scripts/testAiRouterV2DatabaseConcurrency.js",
     "test:recovery": "node backend/testAdaptiveRecoveryEngine.js && node backend/testAdaptiveRecoveryRemediation.js",
     "check:syntax": "node scripts/checkNodeSyntax.js",
     "eval:recovery": "node scripts/runRecoveryEvaluation.js",
