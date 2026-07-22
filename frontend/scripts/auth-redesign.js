@@ -50,11 +50,9 @@
         </span>
         <span class="auth-brand-name">
           <strong>StudentOS</strong>
-          <small>Academic operating layer</small>
         </span>
       </div>
       <div class="auth-hero-copy auth-hero-copy-v2">
-        <p class="eyebrow">Your private academic workspace</p>
         <h2>Know what to study next.</h2>
         <p class="auth-hero-lead">StudentOS brings your schedule, course material, and academic progress into one clear workspace.</p>
       </div>
@@ -63,7 +61,6 @@
         <p><span aria-hidden="true">02</span>Course context that stays with you</p>
         <p><span aria-hidden="true">03</span>Recovery built around what you actually struggle with</p>
       </div>
-      <p class="auth-privacy-note"><span aria-hidden="true"></span>Your academic workspace stays private to your account.</p>
     `;
   }
 
@@ -265,11 +262,6 @@
       footer.setAttribute("aria-hidden", "true");
     }
     if (signupButton) signupButton.tabIndex = -1;
-
-    const trust = document.createElement("p");
-    trust.className = "auth-form-trust";
-    trust.innerHTML = `<span aria-hidden="true"></span>Secure access to your private StudentOS workspace.`;
-    panel.append(trust);
 
     form.addEventListener("submit", (event) => {
       const email = emailInput.value.trim();
