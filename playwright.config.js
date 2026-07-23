@@ -6,7 +6,10 @@ export default defineConfig({
   expect: { timeout: 8_000 },
   fullyParallel: false,
   workers: 1,
-  reporter: [["list"]],
+  reporter: [
+    ["list"],
+    ["json", { outputFile: "test-results/playwright-results.json" }],
+  ],
   use: {
     ...devices["Desktop Chrome"],
     headless: true,
