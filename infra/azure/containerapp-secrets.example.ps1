@@ -35,6 +35,15 @@ az containerapp update --resource-group $ResourceGroup --name $appName --set-env
   STUDENTOS_AI_PROVIDER_CYCLE_ENABLED=false `
   STUDENTOS_AI_PROVIDER_CYCLE_SHADOW=false `
   STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT=0 `
+  STUDENTOS_AI_ROUTER_V2_ENABLED=false `
+  STUDENTOS_AI_ROUTER_V2_ROLLOUT_PERCENT=0 `
+  STUDENTOS_AI_NVIDIA_ENABLED=false `
+  NVIDIA_OPENAI_ENDPOINT=https://integrate.api.nvidia.com/v1/chat/completions `
+  NVIDIA_TEXT_MODEL=moonshotai/kimi-k2.6 `
+  NVIDIA_STRUCTURED_MODEL="" `
+  POLLINATIONS_TEXT_MODEL=gpt-oss `
+  POLLINATIONS_FALLBACK_MAX_MS=3600000 `
+  POLLINATIONS_UPSTREAM_PROBE_INTERVAL_MS=300000 `
   STUDENTOS_QUOTA_ENFORCEMENT=false `
   STUDENTOS_RATE_LIMIT_ENABLED=true `
   CORS_ORIGINS="https://studentos.sentiqlabs.com,https://studentos-39s.pages.dev,http://localhost:3101,http://localhost:3102,http://127.0.0.1:3101,http://127.0.0.1:3102"
@@ -64,6 +73,10 @@ az containerapp secret set --resource-group $ResourceGroup --name $appName --sec
   gemini-api-key-3="<gemini-key-3>" `
   gemini-api-key-4="<gemini-key-4>" `
   gemini-api-key-5="<gemini-key-5>" `
+  gemini-api-key-6="<gemini-key-6>" `
+  nvidia-api-key-1="<nvidia-key-1>" `
+  nvidia-api-key-2="<nvidia-key-2>" `
+  nvidia-api-key-3="<nvidia-key-3>" `
   pollinations-api-key="<optional-pollinations-key>" `
   google-client-id="<later-google-client-id>" `
   google-client-secret="<later-google-client-secret>" `
@@ -96,5 +109,9 @@ az containerapp update --resource-group $ResourceGroup --name $appName --set-env
   GEMINI_API_KEY_3=secretref:gemini-api-key-3 `
   GEMINI_API_KEY_4=secretref:gemini-api-key-4 `
   GEMINI_API_KEY_5=secretref:gemini-api-key-5 `
+  GEMINI_API_KEY_6=secretref:gemini-api-key-6 `
+  NVIDIA_API_KEY_1=secretref:nvidia-api-key-1 `
+  NVIDIA_API_KEY_2=secretref:nvidia-api-key-2 `
+  NVIDIA_API_KEY_3=secretref:nvidia-api-key-3 `
   POLLINATIONS_API_KEY=secretref:pollinations-api-key
 }

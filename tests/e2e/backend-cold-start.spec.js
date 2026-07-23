@@ -101,8 +101,10 @@ test("shows the calm boot screen while the backend is waking, then reveals sign-
   await expect(bootScreen.locator(".studentos-backend-boot-dots span")).toHaveCount(8);
   await expect(page.locator("#public-auth-shell")).toBeHidden();
 
-  await expect(page.locator("#public-auth-shell")).toBeVisible({ timeout: 6000 });
-  await expect(page.getByRole("heading", { name: "Sign in to StudentOS" })).toBeVisible();
+  const authShell = page.locator("#public-auth-shell");
+  await expect(authShell).toBeVisible({ timeout: 6000 });
+  await expect(authShell).toHaveAttribute("data-auth-redesign-ready", "true");
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   await expect(bootScreen).toHaveCount(0, { timeout: 3000 });
 });
 
@@ -110,8 +112,10 @@ test("does not show the boot screen when the backend responds promptly", async (
   await page.route("**/api/config", (route) => fulfillPublicAuthConfig(route));
 
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-  await expect(page.locator("#public-auth-shell")).toBeVisible({ timeout: 3000 });
-  await expect(page.getByRole("heading", { name: "Sign in to StudentOS" })).toBeVisible();
+  const authShell = page.locator("#public-auth-shell");
+  await expect(authShell).toBeVisible({ timeout: 3000 });
+  await expect(authShell).toHaveAttribute("data-auth-redesign-ready", "true");
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   await page.waitForTimeout(700);
   await expect(page.locator("#studentos-backend-boot")).toHaveCount(0);
 });

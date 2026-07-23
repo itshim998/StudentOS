@@ -41,14 +41,23 @@ const additionalShardMigrations = [
   "supabase/migrations/202607130001_studentos_multi_provider_routing.sql",
   "supabase/migrations/202607190001_studentos_adaptive_recovery_engine.sql",
   "supabase/migrations/202607190002_studentos_adaptive_recovery_hardening.sql",
+  "supabase/migrations/202607210002_studentos_ai_router_v2_shards.sql",
 ];
 
-console.log("StudentOS migration plan through Adaptive Recovery production-readiness hardening");
+const additionalAuthMigrations = [
+  "supabase/migrations/202607210001_studentos_ai_router_v2_central.sql",
+];
+
+console.log("StudentOS migration plan through Provider Router V2");
 for (const [index, step] of steps.entries()) {
   console.log(`${index + 1}. ${step.project}: ${step.migration}`);
 }
 console.log("Additional shard migrations to run identically on Projects 2, 3, and 4:");
 for (const migration of additionalShardMigrations) {
+  console.log(`- ${migration}`);
+}
+console.log("Additional shared migrations to run on Project 1 AUTH only:");
+for (const migration of additionalAuthMigrations) {
   console.log(`- ${migration}`);
 }
 console.log("No migrations are run by this script.");

@@ -438,12 +438,13 @@ export async function generateDailyTodoPlan({
     config: providerConfig,
     fetchImpl,
     responseMode: "json",
+    validateOutput: (providerResult) => parseProviderJson(providerResult?.text),
   });
   if (result.providerFailure || !result.text) {
     return { generationSucceeded: false, retryable: true, plan: null, input };
   }
   try {
-    const normalized = normalizeDailyTodoPlan(parseProviderJson(result.text), input, { now });
+    const normalized = normalizeDailyTodoPlan(result.validatedOutput || parseProviderJson(result.text), input, { now });
     return {
       generationSucceeded: true,
       plan: ensureDailyTodoStudyState(isGroundedDailyTodoPlan(normalized, input) ? normalized : buildDeterministicDailyTodoPlan(input, { now })),

@@ -20,10 +20,13 @@ async function main() {
   const repository = new StudentOsRepository({
     config,
     shardClients: clients.shardClients,
+    routerClient: clients.routerClient,
   });
   let stopping = false;
+  const operationAbortController = new AbortController();
   const stop = () => {
     stopping = true;
+    operationAbortController.abort(new Error("worker_stopping"));
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
@@ -37,6 +40,7 @@ async function main() {
       lockTimeoutSeconds,
       maxLoops,
       shouldStop: () => stopping,
+      signal: operationAbortController.signal,
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -47,6 +51,7 @@ async function main() {
     config,
     limit,
     lockTimeoutSeconds,
+    signal: operationAbortController.signal,
   });
   console.log(JSON.stringify(result, null, 2));
 }

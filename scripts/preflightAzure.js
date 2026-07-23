@@ -10,6 +10,7 @@ import {
 import {
   AZURE_GEMINI_SECRET_MAPPINGS,
   AZURE_GEMINI_SECRET_NAMES,
+  AZURE_NVIDIA_SECRET_MAPPINGS,
   validateAzureAiProviderSecrets,
 } from "./validateAzureAiProviderSecrets.js";
 
@@ -91,6 +92,7 @@ addCheck("package preflight exists", pkg.scripts?.preflight === "npm run preflig
 addCheck("package preflight:azure exists", pkg.scripts?.["preflight:azure"] === "node scripts/preflightAzure.js");
 addCheck("package verify:azure-deployment exists", pkg.scripts?.["verify:azure-deployment"] === "node scripts/verifyAzureDeployment.js");
 addCheck("package repository syntax check exists", pkg.scripts?.["check:syntax"] === "node scripts/checkNodeSyntax.js");
+addCheck("package Router V2 database concurrency test exists", pkg.scripts?.["test:router-v2-db"] === "node scripts/testAiRouterV2DatabaseConcurrency.js");
 addCheck("package cloudflare:config exists", pkg.scripts?.["cloudflare:config"] === "node scripts/writeCloudflareFrontendConfig.js");
 addCheck("package cloudflare:build vendors and verifies KaTeX", pkg.scripts?.["cloudflare:build"] === "node scripts/vendorKatex.js && node scripts/writeCloudflareFrontendConfig.js && node scripts/verifyCloudflareBuild.js");
 addCheck("package verify:cloudflare-azure exists", pkg.scripts?.["verify:cloudflare-azure"] === "node scripts/verifyCloudflareAzureWiring.js");
@@ -125,6 +127,7 @@ const frontendSecretMarkers = [
   /GOOGLE_CLIENT_SECRET/i,
   /GROQ_API_KEY/i,
   /GEMINI_API_KEY/i,
+  /NVIDIA_API_KEY/i,
   /POLLINATIONS_API_KEY/i,
   /AZURE_CREDENTIALS/i,
   /TOKEN_ENCRYPTION_SECRET/i,
@@ -155,6 +158,8 @@ const dangerousDefaults = [
   ["STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_AI_PROVIDER_CYCLE_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT=0", envExample, envTemplate],
+  ["STUDENTOS_AI_ROUTER_V2_ENABLED=false", envExample, envTemplate],
+  ["STUDENTOS_AI_ROUTER_V2_ROLLOUT_PERCENT=0", envExample, envTemplate],
 ];
 for (const [line, ...texts] of dangerousDefaults) {
   addCheck(`dangerous default ${line}`, texts.every((text) => text.includes(line)));
@@ -185,7 +190,7 @@ const azureLoginStart = workflow.indexOf("- name: Azure login");
 const buildWorkflowBlock = buildWorkflowStart >= 0 && azureLoginStart > buildWorkflowStart
   ? workflow.slice(buildWorkflowStart, azureLoginStart)
   : workflow;
-addCheck("workflow does not use secret build args", !/build-args:|--build-arg|STUDENTOS_SUPABASE_SERVICE_ROLE_KEY|GOOGLE_CLIENT_SECRET|GROQ_API_KEY|GEMINI_API_KEY|POLLINATIONS_API_KEY/.test(buildWorkflowBlock));
+addCheck("workflow does not use secret build args", !/build-args:|--build-arg|STUDENTOS_SUPABASE_SERVICE_ROLE_KEY|GOOGLE_CLIENT_SECRET|GROQ_API_KEY|GEMINI_API_KEY|NVIDIA_API_KEY|POLLINATIONS_API_KEY/.test(buildWorkflowBlock));
 const requiredAzureSupabaseSecrets = [
   "STUDENTOS_SUPABASE_URL_1",
   "STUDENTOS_SUPABASE_ANON_KEY_1",
@@ -212,6 +217,8 @@ const requiredAzureSecretRefs = [
 ];
 addCheck("workflow validates Supabase backend secrets", requiredAzureSupabaseSecrets.every((name) => workflow.includes(`${name}: \${{ secrets.${name} }}`)) && workflow.includes("Missing required Azure backend secret"));
 addCheck("workflow maps Supabase backend secrets to ACA secret refs", includesAll(workflow, requiredAzureSecretRefs));
+addCheck("Router V2 live migration verification is forced into Supabase mode", workflow.includes("STUDENTOS_MODE: supabase") && workflow.includes("verifyAiRouterV2Migrations.js --live"));
+addCheck("Router V2 database concurrency is a disabled-traffic pre-enable gate", workflow.includes("Confirm Router V2 production traffic is disabled before live gates") && workflow.includes("STUDENTOS_AI_ROUTER_V2_LIVE_TEST=true npm run test:router-v2-db"));
 addCheck(
   "workflow validates either legacy or numbered Groq secrets",
   AZURE_GROQ_SECRET_NAMES.every((name) => workflow.includes(`${name}: \${{ secrets.${name} }}`)) &&
@@ -221,6 +228,7 @@ addCheck(
 const optionalAzureAiSecrets = [
   ...AZURE_GROQ_SECRET_MAPPINGS.map((item) => [item.envName, item.secretName]),
   ...AZURE_GEMINI_SECRET_MAPPINGS.map((item) => [item.envName, item.secretName]),
+  ...AZURE_NVIDIA_SECRET_MAPPINGS.map((item) => [item.envName, item.secretName]),
   ["POLLINATIONS_API_KEY", "pollinations-api-key"],
 ];
 addCheck(
@@ -239,12 +247,12 @@ addCheck(
 addCheck(
   "Gemini runtime env names map to ACA-safe secret refs",
   AZURE_GEMINI_SECRET_MAPPINGS.every(({ envName, secretName }) =>
-    /^GEMINI_API_KEY(?:_[1-5])?$/.test(envName) &&
+    /^GEMINI_API_KEY(?:_[1-6])?$/.test(envName) &&
       isAzureContainerAppSafeSecretName(secretName) &&
       !/[A-Z_]/.test(secretName)),
 );
 addCheck(
-  "workflow accepts legacy and all five Gemini secrets",
+  "workflow accepts legacy and all six Gemini secrets",
   AZURE_GEMINI_SECRET_NAMES.every((name) => workflow.includes(`${name}: \${{ secrets.${name} }}`)),
 );
 addCheck(
@@ -252,6 +260,18 @@ addCheck(
   ["GROQ", "GEMINI", "POLLINATIONS"].every((provider) =>
     workflow.includes(`STUDENTOS_AI_${provider}_ENABLED: \${{ vars.STUDENTOS_AI_${provider}_ENABLED || 'true' }}`) &&
     workflow.includes(`STUDENTOS_AI_${provider}_ENABLED="$STUDENTOS_AI_${provider}_ENABLED"`)),
+);
+addCheck(
+  "workflow exposes NVIDIA fallback kill switch disabled by default",
+  workflow.includes("STUDENTOS_AI_NVIDIA_ENABLED: ${{ vars.STUDENTOS_AI_NVIDIA_ENABLED || 'false' }}")
+    && workflow.includes('STUDENTOS_AI_NVIDIA_ENABLED="$STUDENTOS_AI_NVIDIA_ENABLED"'),
+);
+addCheck(
+  "NVIDIA runtime env names map to ACA-safe secret refs",
+  AZURE_NVIDIA_SECRET_MAPPINGS.every(({ envName, secretName }) =>
+    /^NVIDIA_API_KEY(?:_[1-3])?$/.test(envName)
+      && isAzureContainerAppSafeSecretName(secretName)
+      && !/[A-Z_]/.test(secretName)),
 );
 addCheck(
   "workflow tolerates empty optional provider secrets",
@@ -295,7 +315,23 @@ const incompleteCycleProviderValidation = validateAzureAiProviderSecrets({
   GEMINI_API_KEY_2: "duplicate-gemini-slot",
   POLLINATIONS_API_KEY: "pollinations-slot-1",
 });
+const routerV2ProviderValidation = validateAzureAiProviderSecrets({
+  STUDENTOS_AI_ROUTER_V2_ENABLED: "true",
+  STUDENTOS_AI_NVIDIA_ENABLED: "true",
+  ...Object.fromEntries(Array.from({ length: 5 }, (_, index) => [`GROQ_API_KEY_${index + 1}`, `v2-groq-${index + 1}`])),
+  ...Object.fromEntries(Array.from({ length: 6 }, (_, index) => [`GEMINI_API_KEY_${index + 1}`, `v2-gemini-${index + 1}`])),
+  ...Object.fromEntries(Array.from({ length: 3 }, (_, index) => [`NVIDIA_API_KEY_${index + 1}`, `v2-nvidia-${index + 1}`])),
+  POLLINATIONS_API_KEY: "v2-pollinations-1",
+});
+const incompleteRouterV2ProviderValidation = validateAzureAiProviderSecrets({
+  STUDENTOS_AI_ROUTER_V2_ENABLED: "true",
+  GROQ_API_KEY_1: "v2-duplicate",
+  GROQ_API_KEY_2: "v2-duplicate",
+  GEMINI_API_KEY_1: "v2-gemini-1",
+  POLLINATIONS_API_KEY: "v2-pollinations-1",
+});
 addCheck("Azure cyclic provider validation requires five distinct Gemini slots", cycleProviderValidation.ok && !incompleteCycleProviderValidation.ok);
+addCheck("Azure Router V2 validation requires exact distinct key rings", routerV2ProviderValidation.ok && !incompleteRouterV2ProviderValidation.ok);
 addCheck("Azure cyclic provider validation requires Pollinations authentication", !validateAzureAiProviderSecrets({
   STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: "true",
   GROQ_API_KEY_1: "groq-slot-1",
@@ -315,7 +351,7 @@ const singleAutoProviderValidation = validateAzureAiProviderSecrets({
   GROQ_API_KEY_1: "groq-slot-1",
 });
 addCheck("Azure auto provider validation requires redundant provider families", redundantAutoProviderValidation.ok && !singleAutoProviderValidation.ok && singleAutoProviderValidation.errorCode === "provider_redundancy_required");
-addCheck("Azure provider validation never returns secret values", !JSON.stringify([cycleProviderValidation, incompleteCycleProviderValidation]).includes("slot-"));
+addCheck("Azure provider validation never returns secret values", !JSON.stringify([cycleProviderValidation, incompleteCycleProviderValidation, routerV2ProviderValidation, incompleteRouterV2ProviderValidation]).includes("v2-groq"));
 addCheck("workflow configures production storage buckets", workflow.includes("STUDENTOS_STORAGE_BUCKET=studentos-source-materials") && workflow.includes("STUDENTOS_EXPORT_STORAGE_BUCKET=studentos-data-exports"));
 const runtimeConfigText = `${read("frontend/runtime-config.js")}\n${read("scripts/writeCloudflareFrontendConfig.js")}`;
 addCheck("frontend runtime config remains public-only", !/STUDENTOS_SUPABASE|SUPABASE_SERVICE_ROLE|SERVICE_ROLE_KEY|JWT_SECRET/i.test(runtimeConfigText));

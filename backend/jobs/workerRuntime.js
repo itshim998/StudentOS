@@ -28,6 +28,7 @@ export async function processClaimedJob({
   aiProviderRuntimeConfig = getAiProviderConfig(),
   recoveryFetchImpl = globalThis.fetch,
   recoveryExecuteAiOperation,
+  signal = null,
 } = {}) {
   const session = sessionForJob(config, listedJob);
   const state = await repository.loadState(session);
@@ -64,6 +65,7 @@ export async function processClaimedJob({
         fetchImpl: recoveryFetchImpl,
         executeAiOperation: recoveryExecuteAiOperation,
         jobAttempt: recoveryJob.attempts,
+        signal,
       });
       return { recoveryRunId: run.id, recoveryStatus: run.status, previewId: run.previewId || null };
     },
@@ -112,15 +114,16 @@ export async function runWorkerOnce({
   limit = 25,
   lockTimeoutSeconds = 600,
   workerId = `worker_${process.pid}_${Date.now()}`,
+  signal = null,
 } = {}) {
   const processed = [];
-  while (processed.length < limit) {
+  while (processed.length < limit && !signal?.aborted) {
     const listedJob = await repository.claimNextBackgroundJob({
       workerId,
       lockTimeoutSeconds,
     });
     if (!listedJob) break;
-    processed.push(await processClaimedJob({ repository, config, listedJob }));
+    processed.push(await processClaimedJob({ repository, config, listedJob, signal }));
   }
   return {
     ok: true,
@@ -145,6 +148,7 @@ export async function runWorkerDaemon({
   maxLoops = Infinity,
   shouldStop = () => false,
   logger = console,
+  signal = null,
 } = {}) {
   let loops = 0;
   const runs = [];
@@ -155,6 +159,7 @@ export async function runWorkerDaemon({
       limit,
       lockTimeoutSeconds,
       workerId,
+      signal,
     });
     runs.push(run);
     logger.log(JSON.stringify({

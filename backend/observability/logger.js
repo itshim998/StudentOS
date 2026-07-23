@@ -5,13 +5,15 @@ const SECRET_PATTERNS = [
   /([?&]key=)[^&\s]+/gi,
   /AIza[A-Za-z0-9_-]{20,}/g,
   /gsk_[A-Za-z0-9_-]{12,}/g,
+  /nvapi-[A-Za-z0-9_-]{12,}/g,
   /api[_-]?key[:=]\s*[A-Za-z0-9._-]+/gi,
   /apikey[A-Za-z0-9._:= -]*/gi,
   /service[_-]?role[_-]?key[:=]\s*[A-Za-z0-9._-]+/gi,
   /secret[:=]\s*[A-Za-z0-9._-]+/gi,
   /(STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_[1-4]=)[^\s]+/gi,
   /(GROQ_API_KEY(?:_[1-5])?\s*[:=]\s*)[^\s,;]+/gi,
-  /(GEMINI_API_KEY(?:_[1-5])?\s*[:=]\s*)[^\s,;]+/gi,
+  /(GEMINI_API_KEY(?:_[1-6])?\s*[:=]\s*)[^\s,;]+/gi,
+  /(NVIDIA_API_KEY(?:_[1-3])?\s*[:=]\s*)[^\s,;]+/gi,
   /(POLLINATIONS_API_KEY\s*[:=]\s*)[^\s,;]+/gi,
   /(STUDENTOS_BILLING_MOCK_WEBHOOK_SECRET=)[^\s]+/gi,
   /(RAZORPAY_(?:KEY_SECRET|WEBHOOK_SECRET)=)[^\s]+/gi,
@@ -44,7 +46,7 @@ function isSensitiveObjectKey(key) {
     "password",
     "private_key",
   ].includes(normalized) ||
-    /^(?:groq|gemini|pollinations)_api_key(?:_[1-5])?$/.test(normalized) ||
+    /^(?:groq|gemini|nvidia|pollinations)_api_key(?:_[1-6])?$/.test(normalized) ||
     normalized.endsWith("_secret") ||
     normalized.endsWith("_token") ||
     normalized.endsWith("_code") ||

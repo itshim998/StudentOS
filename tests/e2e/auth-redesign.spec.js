@@ -133,10 +133,13 @@ test("presents the new brand-led sign-in and sign-up states", async ({ page }) =
 test("supports password reveal, inline validation, and mobile restraint", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-  await expect(page.locator("#public-auth-shell")).toBeVisible({ timeout: 5000 });
+  const shell = page.locator("#public-auth-shell");
+  await expect(shell).toBeVisible({ timeout: 5000 });
+  await expect(shell).toHaveAttribute("data-auth-redesign-ready", "true");
 
   const password = page.locator("#auth-password");
-  const toggle = page.getByRole("button", { name: "Show password" });
+  const toggle = page.locator(".auth-password-toggle");
+  await expect(toggle).toHaveAttribute("aria-label", "Show password");
   await expect(password).toHaveAttribute("type", "password");
   await toggle.click();
   await expect(password).toHaveAttribute("type", "text");

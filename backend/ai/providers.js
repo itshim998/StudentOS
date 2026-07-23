@@ -3,23 +3,34 @@ import { getAiProviderConfig } from "./providerConfig.js";
 const PROVIDER_CODES = Object.freeze({
   groq: "groq",
   gemini: "gemini",
+  nvidia: "nvidia",
   pollinations: "pollinations",
 });
 
 const runtime = {
   groq: { cursor: 0, unhealthyUntil: new Map(), disabled: new Set() },
   gemini: { cursor: 0, unhealthyUntil: new Map(), disabled: new Set() },
+  nvidia: { cursor: 0, unhealthyUntil: new Map(), disabled: new Set() },
 };
 
 function runtimeKeyId(key, model = "") {
   return `${key.name}:${key.value}:${model}`;
 }
 
-function timeoutSignal(timeoutMs, operationDeadline = null) {
+function timeoutSignal(timeoutMs, operationDeadline = null, externalSignal = null) {
   const remaining = operationDeadline ? Math.max(1, operationDeadline - Date.now()) : timeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(1, Math.min(timeoutMs, remaining)));
-  return { signal: controller.signal, clear: () => clearTimeout(timer) };
+  const abort = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) abort();
+  else externalSignal?.addEventListener?.("abort", abort, { once: true });
+  return {
+    signal: controller.signal,
+    clear: () => {
+      clearTimeout(timer);
+      externalSignal?.removeEventListener?.("abort", abort);
+    },
+  };
 }
 
 function sanitizeError(error) {
@@ -29,6 +40,7 @@ function sanitizeError(error) {
     .replace(/api[_-]?key(?:_\d+)?\s*[:=]\s*[^\s,;]+/gi, "api_key=[redacted]")
     .replace(/AIza[A-Za-z0-9_-]{20,}/g, "[redacted]")
     .replace(/gsk_[A-Za-z0-9_-]{12,}/g, "[redacted]")
+    .replace(/nvapi-[A-Za-z0-9_-]{12,}/g, "[redacted]")
     .slice(0, 240);
 }
 
@@ -39,6 +51,41 @@ function readRetryAfterMs(response) {
   if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
   const date = Date.parse(raw);
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+function parseResetValueMs(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return null;
+  if (/^\d+(?:\.\d+)?$/.test(value)) {
+    const numeric = Number(value);
+    if (numeric > 10_000_000_000) return Math.max(0, numeric - Date.now());
+    if (numeric > 1_000_000_000) return Math.max(0, (numeric * 1000) - Date.now());
+    return Math.ceil(numeric * 1000);
+  }
+  let durationMs = 0;
+  let matched = false;
+  for (const match of value.matchAll(/(\d+(?:\.\d+)?)\s*(ms|s|m|h)/gi)) {
+    matched = true;
+    const amount = Number(match[1]);
+    durationMs += amount * ({ ms: 1, s: 1000, m: 60_000, h: 3_600_000 }[match[2].toLowerCase()] || 0);
+  }
+  if (matched) return Math.ceil(durationMs);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+function readProviderResetMs(response, body) {
+  const values = [
+    response?.headers?.get?.("x-ratelimit-reset"),
+    response?.headers?.get?.("x-ratelimit-reset-requests"),
+    response?.headers?.get?.("ratelimit-reset"),
+  ];
+  const retryInfo = Array.isArray(body?.error?.details)
+    ? body.error.details.find((detail) => /RetryInfo$/i.test(String(detail?.["@type"] || "")))
+    : null;
+  values.push(retryInfo?.retryDelay);
+  const parsed = values.map(parseResetValueMs).filter((value) => Number.isFinite(value) && value >= 0);
+  return parsed.length ? Math.max(...parsed) : null;
 }
 
 function looksLikePolicyBlock(value) {
@@ -59,7 +106,7 @@ async function parseJsonResponse(response) {
     const error = new Error(`provider_http_${response.status}:${sanitizeError(detail)}`);
     error.status = response.status;
     error.providerCode = body?.error?.code || body?.error?.status || body?.error?.type || null;
-    error.retryAfterMs = readRetryAfterMs(response);
+    error.retryAfterMs = readRetryAfterMs(response) ?? readProviderResetMs(response, body);
     error.policyBlocked = looksLikePolicyBlock(`${detail} ${error.providerCode || ""}`);
     throw error;
   }
@@ -172,12 +219,13 @@ function providerFailure(providerName, lastError, prefix) {
   failure.status = lastError?.status || null;
   failure.providerCode = lastError?.providerCode || null;
   failure.policyBlocked = Boolean(lastError?.policyBlocked);
-  failure.retryAfterMs = lastError?.retryAfterMs || null;
+  failure.retryAfterMs = lastError?.retryAfterMs ?? null;
   failure.provider = providerName;
+  failure.name = lastError?.name || failure.name;
   return failure;
 }
 
-function isRequestCompatibilityError(error) {
+export function isRequestCompatibilityError(error) {
   return [400, 404, 422].includes(Number(error?.status || 0)) && !error?.policyBlocked;
 }
 
@@ -190,7 +238,7 @@ function safeFailureCode(providerName, error) {
   return `${providerName}:request_failed`;
 }
 
-function providerStatusClass(error) {
+export function providerStatusClass(error) {
   if (error?.policyBlocked) return "policy_blocked";
   const status = Number(error?.status || 0);
   if ([401, 403].includes(status)) return "credential_rejected";
@@ -259,15 +307,15 @@ export class GroqGroundedProvider {
     return Boolean(this.config.enabled !== false && this.config.configured && this.fetch);
   }
 
-  async generate({ messages, maxTokens = this.config.maxCompletionTokens, reasoningEffort = this.config.reasoningEffort, responseMode = "text", operationDeadline = null }) {
+  async generate({ messages, maxTokens = this.config.maxCompletionTokens, reasoningEffort = this.config.reasoningEffort, responseMode = "text", operationDeadline = null, signal = null, keyRecord = null, manageRuntimeHealth = true }) {
     if (!this.isConfigured()) throw new Error("groq_not_configured");
-    const keys = orderedKeys(this.code, this.config.keys, this.config.model);
+    const keys = keyRecord ? [keyRecord] : orderedKeys(this.code, this.config.keys, this.config.model);
     if (!keys.length) throw new Error("groq_cooling_or_disabled");
     let lastError = null;
     const includeReasoningEffort = groqSupportsReasoningEffort(this.config.model);
     for (const key of keys) {
       const request = async (body) => {
-        const timeout = timeoutSignal(this.config.timeoutMs, operationDeadline);
+        const timeout = timeoutSignal(this.config.timeoutMs, operationDeadline, signal);
         try {
           const response = await this.fetch(this.config.endpoint, {
             method: "POST",
@@ -288,7 +336,7 @@ export class GroqGroundedProvider {
         try {
           normalized = await request(initialBody);
         } catch (error) {
-          if (!isRequestCompatibilityError(error)) throw error;
+          if (keyRecord || !isRequestCompatibilityError(error)) throw error;
           normalized = await request(buildGroqRequestBody({
             model: this.config.model,
             messages,
@@ -304,7 +352,7 @@ export class GroqGroundedProvider {
         lastError = error;
         if (error?.policyBlocked) throw providerFailure(this.name, error, "groq_failed");
         if (isRequestCompatibilityError(error)) break;
-        markKeyFailure(this.code, key, error, this.config);
+        if (manageRuntimeHealth) markKeyFailure(this.code, key, error, this.config);
       }
     }
     throw providerFailure(this.name, lastError, "groq_failed");
@@ -328,14 +376,14 @@ export class GeminiTextProvider {
     return Boolean(this.config.enabled !== false && this.config.configured && this.fetch);
   }
 
-  async generate({ messages, maxTokens = this.config.maxCompletionTokens, responseMode = "text", operationDeadline = null }) {
+  async generate({ messages, maxTokens = this.config.maxCompletionTokens, responseMode = "text", operationDeadline = null, signal = null, keyRecord = null, manageRuntimeHealth = true }) {
     if (!this.isConfigured()) throw new Error("gemini_not_configured");
-    const keys = orderedKeys(this.code, this.config.keys, this.config.model);
+    const keys = keyRecord ? [keyRecord] : orderedKeys(this.code, this.config.keys, this.config.model);
     if (!keys.length) throw new Error("gemini_cooling_or_disabled");
     let lastError = null;
     for (const key of keys) {
       const request = async (safeRewrite) => {
-        const timeout = timeoutSignal(this.config.timeoutMs, operationDeadline);
+        const timeout = timeoutSignal(this.config.timeoutMs, operationDeadline, signal);
         const base = this.config.apiBase.replace(/\/+$/, "");
         const endpoint = `${base}/models/${encodeURIComponent(this.config.model)}:generateContent?key=${encodeURIComponent(key.value)}`;
         try {
@@ -357,7 +405,7 @@ export class GeminiTextProvider {
         try {
           normalized = await request(false);
         } catch (error) {
-          if (!isRequestCompatibilityError(error)) throw error;
+          if (keyRecord || !isRequestCompatibilityError(error)) throw error;
           normalized = await request(true);
         }
         return { provider: this.name, providerCode: this.code, modelUsed: this.config.model, keyIndexUsed: key.index, ...normalized };
@@ -365,7 +413,7 @@ export class GeminiTextProvider {
         lastError = error;
         if (error?.policyBlocked) throw providerFailure(this.name, error, "gemini_failed");
         if (isRequestCompatibilityError(error)) break;
-        markKeyFailure(this.code, key, error, this.config);
+        if (manageRuntimeHealth) markKeyFailure(this.code, key, error, this.config);
       }
     }
     throw providerFailure(this.name, lastError, "gemini_failed");
@@ -389,7 +437,7 @@ export class PollinationsTextProvider {
     return Boolean(this.config.enabled !== false && this.config.configured && this.fetch);
   }
 
-  async generate({ messages, maxTokens = this.config.maxCompletionTokens, responseMode = "text", operationDeadline = null }) {
+  async generate({ messages, maxTokens = this.config.maxCompletionTokens, responseMode = "text", operationDeadline = null, signal = null }) {
     if (!this.isConfigured()) throw new Error("pollinations_not_configured");
     const headers = { "Content-Type": "application/json" };
     if (this.config.apiKey) headers.Authorization = `Bearer ${this.config.apiKey}`;
@@ -397,7 +445,7 @@ export class PollinationsTextProvider {
     let lastError = null;
     for (const endpoint of endpoints) {
       try {
-        const timeout = timeoutSignal(this.config.timeoutMs, operationDeadline);
+        const timeout = timeoutSignal(this.config.timeoutMs, operationDeadline, signal);
         try {
           const response = await this.fetch(endpoint, {
             method: "POST",
@@ -425,6 +473,68 @@ export class PollinationsTextProvider {
       }
     }
     throw providerFailure(this.name, lastError, "pollinations_failed");
+  }
+
+  async *stream(request) {
+    const result = await this.generate(request);
+    yield { ...result, delta: result.text, firstChunk: true, done: true };
+  }
+}
+
+export class NvidiaTextProvider {
+  constructor({ config = getAiProviderConfig(), fetchImpl = globalThis.fetch } = {}) {
+    this.code = PROVIDER_CODES.nvidia;
+    this.name = "nvidia_openai_text";
+    this.config = config.nvidia;
+    this.fetch = fetchImpl;
+  }
+
+  isConfigured() {
+    return Boolean(this.config.enabled !== false && this.config.configured && this.fetch);
+  }
+
+  async generate({ messages, maxTokens = this.config.maxCompletionTokens, responseMode = "text", operationDeadline = null, signal = null, keyRecord = null, model = null, manageRuntimeHealth = true }) {
+    if (!this.isConfigured()) throw new Error("nvidia_not_configured");
+    const selectedModel = model || (responseMode === "json" ? this.config.structuredModel : this.config.model);
+    if (!selectedModel) {
+      const error = new Error("nvidia_structured_model_not_configured");
+      error.capabilitySkipped = true;
+      throw error;
+    }
+    const keys = keyRecord ? [keyRecord] : orderedKeys(this.code, this.config.keys, selectedModel);
+    if (!keys.length) throw new Error("nvidia_cooling_or_disabled");
+    let lastError = null;
+    for (const key of keys) {
+      try {
+        const timeout = timeoutSignal(this.config.timeoutMs, operationDeadline, signal);
+        try {
+          const response = await this.fetch(this.config.endpoint, {
+            method: "POST",
+            signal: timeout.signal,
+            headers: { Authorization: `Bearer ${key.value}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: selectedModel,
+              messages,
+              temperature: 0.4,
+              max_tokens: maxTokens,
+              ...(responseMode === "json" ? { response_format: { type: "json_object" } } : {}),
+              stream: false,
+            }),
+          });
+          const normalized = await parseOpenAiProviderResponse(response);
+          if (!normalized.text) throw new Error("nvidia_empty_response");
+          return { provider: this.name, providerCode: this.code, modelUsed: selectedModel, keyIndexUsed: key.index, ...normalized };
+        } finally {
+          timeout.clear();
+        }
+      } catch (error) {
+        lastError = error;
+        if (error?.policyBlocked) throw providerFailure(this.name, error, "nvidia_failed");
+        if (isRequestCompatibilityError(error)) break;
+        if (manageRuntimeHealth) markKeyFailure(this.code, key, error, { ...this.config, model: selectedModel });
+      }
+    }
+    throw providerFailure(this.name, lastError, "nvidia_failed");
   }
 
   async *stream(request) {
@@ -464,6 +574,7 @@ function legacyProviderOrder(config) {
   const requested = config.requestedMode;
   if (requested === "groq") return [PROVIDER_CODES.groq];
   if (requested === "gemini") return [PROVIDER_CODES.gemini];
+  if (requested === "nvidia") return [PROVIDER_CODES.nvidia];
   if (requested === "pollinations") return [PROVIDER_CODES.pollinations];
   if (requested === "mock") return [];
   return [PROVIDER_CODES.groq, PROVIDER_CODES.gemini, PROVIDER_CODES.pollinations];
@@ -473,6 +584,7 @@ function createProvider(code, options) {
   if (!options?.config?.[code]) return null;
   if (code === PROVIDER_CODES.groq) return new GroqGroundedProvider(options);
   if (code === PROVIDER_CODES.gemini) return new GeminiTextProvider(options);
+  if (code === PROVIDER_CODES.nvidia) return new NvidiaTextProvider(options);
   if (code === PROVIDER_CODES.pollinations) return new PollinationsTextProvider(options);
   return null;
 }
@@ -482,6 +594,7 @@ export async function runProviderFallback({
   responseMode = "text",
   maxTokens,
   reasoningEffort,
+  signal = null,
   providerOrder = null,
   operationDeadline = null,
   validateOutput = null,
@@ -507,7 +620,7 @@ export async function runProviderFallback({
     }
     const startedAt = Date.now();
     try {
-      const result = await provider.generate({ messages, responseMode, maxTokens, reasoningEffort, operationDeadline });
+      const result = await provider.generate({ messages, responseMode, maxTokens, reasoningEffort, operationDeadline, signal });
       let validatedOutput = null;
       if (typeof validateOutput === "function") {
         try {

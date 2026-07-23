@@ -6,6 +6,7 @@ import { createInitialProductLifecycle, normalizeProductLifecycle } from "../dom
 import { removeLegacyDemoArtifacts } from "../migrations/legacyDemoDataCleanup.js";
 import { migrateLegacyClassroomAcademicData } from "../connectors/googleClassroom/mapper.js";
 import { normalizeLegacyWeakTopicState } from "../domain/topicPerformanceService.js";
+import { AiRouterV2Coordinator } from "../ai/routerV2State.js";
 
 const COLLECTIONS = [
   ["courses", "courses"],
@@ -2660,9 +2661,13 @@ class SupabaseStudentOsRepository {
 }
 
 export class StudentOsRepository {
-  constructor({ config, shardClients }) {
+  constructor({ config, shardClients, routerClient = null, aiRouterCoordinator = null }) {
     this.mock = new MockStudentOsRepository();
     this.supabase = new SupabaseStudentOsRepository({ config, shardClients });
+    this.aiRouterCoordinator = aiRouterCoordinator || new AiRouterV2Coordinator({
+      centralClient: routerClient,
+      mode: config?.mode === "supabase" ? "supabase" : "mock",
+    });
   }
 
   useSupabase(session) {
@@ -2821,6 +2826,50 @@ export class StudentOsRepository {
     return this.useSupabase(session)
       ? this.supabase.getAiWeeklySuccessfulRequestCount(session, request)
       : this.mock.getAiWeeklySuccessfulRequestCount(session, request);
+  }
+
+  async claimAiRouterPrimary(request) {
+    return this.aiRouterCoordinator.claimPrimary(request);
+  }
+
+  async claimAiRouterNvidia(request) {
+    return this.aiRouterCoordinator.claimNvidia(request);
+  }
+
+  async claimAiRouterSlot(request) {
+    return this.aiRouterCoordinator.claimSlot(request);
+  }
+
+  async recordAiRouterSuccess(request) {
+    return this.aiRouterCoordinator.recordSuccess(request);
+  }
+
+  async recordAiRouterFailure(request) {
+    return this.aiRouterCoordinator.recordFailure(request);
+  }
+
+  async getAiRouterPollinationsDecision(request) {
+    return this.aiRouterCoordinator.getPollinationsDecision(request);
+  }
+
+  async enterAiRouterPollinations(request) {
+    return this.aiRouterCoordinator.enterPollinations(request);
+  }
+
+  async leaveAiRouterPollinations(request) {
+    return this.aiRouterCoordinator.leavePollinations(request);
+  }
+
+  async completeAiRouterOperation(request) {
+    return this.aiRouterCoordinator.completeOperation(request);
+  }
+
+  getSafeAiRouterState() {
+    return this.aiRouterCoordinator.safeSnapshot();
+  }
+
+  async readSafeAiRouterState() {
+    return this.aiRouterCoordinator.readSafeSnapshot();
   }
 
   async uploadExportPackage(session, storageObject) {

@@ -162,6 +162,7 @@ import {
   fingerprintAiOperation,
   getAiOperationId,
   isProviderCycleEnabledForUser,
+  isRouterV2EnabledForUser,
 } from "./ai/authorizedAiExecutionService.js";
 import {
   contentHash,
@@ -320,6 +321,7 @@ const STUDENTOS_APP_PASS = "30";
 const repository = new StudentOsRepository({
   config: supabaseConfig,
   shardClients: supabaseClients.shardClients,
+  routerClient: supabaseClients.routerClient,
 });
 
 const PORT = Number(process.env.STUDENTOS_PORT || process.env.PORT || 3101);
@@ -804,6 +806,7 @@ function getPublicAiStatus(config) {
   const configuredProviders = [
     config?.groq?.enabled !== false && config?.groq?.configured ? "groq" : null,
     config?.gemini?.enabled !== false && config?.gemini?.configured ? "gemini" : null,
+    config?.nvidia?.enabled !== false && config?.nvidia?.configured ? "nvidia" : null,
     config?.pollinations?.enabled !== false && config?.pollinations?.configured ? "pollinations" : null,
   ].filter(Boolean);
   return {
@@ -1013,7 +1016,7 @@ function publicErrorMessage(error, fallback = "We couldn’t complete that reque
   if ((error?.status || 0) === 429 || /429|too many|rate limit/i.test(message)) {
     return "Too many attempts. Please wait a minute and try again.";
   }
-  if (/supabase|groq|pollinations|gemini|openai|gpt|gpt-oss|anthropic|claude|provider|model|pgvector|rpc|postgrest|postgres/i.test(message)) {
+  if (/supabase|groq|pollinations|gemini|nvidia|nvapi|kimi|openai|gpt|gpt-oss|anthropic|claude|provider|model|pgvector|rpc|postgrest|postgres/i.test(message)) {
     return fallback;
   }
   if (/cannot read properties|is not iterable|undefined is not|null is not|referenceerror|typeerror/i.test(message)) {
@@ -1989,6 +1992,7 @@ async function handleApi(req, res, url) {
       },
       workerQueue: queueHealth,
       aiProviderMode: getSafeAiProviderStatus(aiProviderConfig),
+      aiRouterState: await repository.readSafeAiRouterState(),
       billingProviderMode: getSafeBillingProviderStatus(billingProviderConfig),
       billingCancellationSafety: getSafeBillingCancellationStatus(billingCancellationConfig),
       operatorRbac: getSafeOperatorRbacStatus(operatorRbacConfig),
@@ -2350,6 +2354,7 @@ async function handleApi(req, res, url) {
         repository,
         session,
         config: aiProviderConfig,
+        signal: req.operationSignal,
         requestFingerprint: operation.requestFingerprint,
         workflow: "daily_todo",
         responseMode: "json",
@@ -2533,6 +2538,7 @@ async function handleApi(req, res, url) {
         repository,
         session,
         config: aiProviderConfig,
+        signal: req.operationSignal,
         requestFingerprint: operation.requestFingerprint,
         workflow: "study_material",
         responseMode: "text",
@@ -2669,6 +2675,7 @@ async function handleApi(req, res, url) {
         repository,
         session,
         config: aiProviderConfig,
+        signal: req.operationSignal,
         requestFingerprint: operation.requestFingerprint,
         workflow: "study_test",
         responseMode: "json",
@@ -2829,7 +2836,8 @@ async function handleApi(req, res, url) {
       throw error;
     }
     const inFlightKey = `${session.user.id}:${testSession.id}`;
-    const routedEvaluation = isProviderCycleEnabledForUser(aiProviderConfig, session.user.id);
+    const routedEvaluation = isProviderCycleEnabledForUser(aiProviderConfig, session.user.id)
+      || isRouterV2EnabledForUser(aiProviderConfig, session.user.id);
     if (!routedEvaluation && studyTestEvaluationsInFlight.has(inFlightKey)) {
       const error = new Error("This test is already being evaluated. Please wait for the result.");
       error.status = 409;
@@ -2883,6 +2891,7 @@ async function handleApi(req, res, url) {
           repository,
           session,
           config: aiProviderConfig,
+          signal: req.operationSignal,
           requestFingerprint: operation.requestFingerprint,
           workflow: "study_test_evaluation",
           responseMode: "json",
@@ -3657,6 +3666,7 @@ async function handleApi(req, res, url) {
         repository,
         session,
         config: aiProviderConfig,
+        signal: req.operationSignal,
         requestFingerprint: operation.requestFingerprint,
         workflow: "assistant",
         responseMode: "text",
@@ -4431,6 +4441,13 @@ const server = createServer(async (req, res) => {
   req.requestId = requestId;
   res.requestId = requestId;
   res.corsOrigin = corsOriginForRequest(req);
+  const operationAbortController = new AbortController();
+  const abortOperation = () => operationAbortController.abort(new Error("client_disconnected"));
+  req.once("aborted", abortOperation);
+  res.once("close", () => {
+    if (!res.writableEnded) abortOperation();
+  });
+  req.operationSignal = operationAbortController.signal;
   const startedAt = Date.now();
   try {
     enforceRateLimit(req, null, "request");

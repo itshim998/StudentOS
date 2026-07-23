@@ -1,4 +1,5 @@
-import { getAiProviderConfig } from "../backend/ai/providerConfig.js";
+import { getAiProviderConfig, getSafeAiProviderStatus } from "../backend/ai/providerConfig.js";
+import { validateAzureAiProviderSecrets } from "./validateAzureAiProviderSecrets.js";
 import { getEmbeddingConfig } from "../backend/embeddings/embeddingService.js";
 import { getSaasConfig, validateProductionReadiness } from "../backend/config/saasConfig.js";
 import { getSafeSupabaseStatus, getSupabaseEnvironment, loadDotEnv } from "../backend/config/supabaseEnv.js";
@@ -62,6 +63,7 @@ export function runProductionPreflight(env = process.env) {
   });
   const productFlowConfig = getProductFlowConfig(env, saasConfig.deployment);
   const readiness = validateProductionReadiness({ env, supabaseConfig, saasConfig });
+  const aiProviderValidation = validateAzureAiProviderSecrets(env);
   const authRedirectUsesWrongLocalPort = [
     env.STUDENTOS_AUTH_REDIRECT_URL,
     env.STUDENTOS_PUBLIC_FRONTEND_URL,
@@ -76,6 +78,12 @@ export function runProductionPreflight(env = process.env) {
     readiness.warnings.push("production_google_classroom_token_encryption_secret_missing");
   }
   if (saasConfig.deployment === "production") {
+    if (aiConfig.routing.v2.enabled) {
+      if (!supabaseConfig.auth.serviceRoleKey) readiness.errors.push("ai_router_v2_requires_auth_project_service_role");
+      if (!aiProviderValidation.ok) readiness.errors.push(`ai_router_v2_provider_configuration_invalid:${aiProviderValidation.errorCode}`);
+      if (aiConfig.pollinations.textModel !== "gpt-oss") readiness.errors.push("pollinations_required_model_must_be_gpt_oss");
+      if (readiness.errors.length) readiness.ok = false;
+    }
     if (recoveryConfig.enabled && String(env.STUDENTOS_BACKGROUND_WORKERS_ENABLED || "").toLowerCase() !== "true") {
       readiness.errors.push("adaptive_recovery_requires_background_workers");
       readiness.ok = false;
@@ -117,6 +125,8 @@ export function runProductionPreflight(env = process.env) {
     monitoringAlerts: getSafeMonitoringAlertStatus(monitoringAlertConfig),
     googleClassroom: getSafeGoogleClassroomStatus(classroomConfig),
     adaptiveRecovery: getSafeRecoveryStatus(recoveryConfig),
+    aiProviders: getSafeAiProviderStatus(aiConfig),
+    aiProviderValidation,
     productFlow: productFlowConfig,
     authRedirects: {
       signupCallbackPath: "/auth/callback",

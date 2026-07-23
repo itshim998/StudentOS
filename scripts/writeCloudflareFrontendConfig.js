@@ -21,7 +21,54 @@ function normalizePublicApiBase(value) {
 }
 
 const apiBase = normalizePublicApiBase(rawApiBase);
-const body = `window.StudentOSRuntimeConfig = window.StudentOSRuntimeConfig || {\n  apiBase: ${JSON.stringify(apiBase)},\n};\n\n(() => {\n  if (!document.getElementById("studentos-auth-redesign-styles")) {\n    const stylesheet = document.createElement("link");\n    stylesheet.id = "studentos-auth-redesign-styles";\n    stylesheet.rel = "stylesheet";\n    stylesheet.href = "/styles/auth-redesign.css";\n    document.head.append(stylesheet);\n  }\n\n  if (!document.getElementById("studentos-auth-redesign-script")) {\n    const script = document.createElement("script");\n    script.id = "studentos-auth-redesign-script";\n    script.src = "/scripts/auth-redesign.js";\n    script.async = false;\n    document.head.append(script);\n  }\n})();\n`;
+const body = `window.StudentOSRuntimeConfig = window.StudentOSRuntimeConfig || {
+  apiBase: ${JSON.stringify(apiBase)},
+};
+
+(() => {
+  const assets = [
+    { id: "studentos-auth-redesign-styles", tag: "link", href: "/styles/auth-redesign.css" },
+    { id: "studentos-auth-redesign-script", tag: "script", src: "/scripts/auth-redesign.js" },
+    { id: "studentos-auth-accessibility-script", tag: "script", src: "/scripts/auth-accessibility.js" },
+  ];
+
+  function writeParserBlockingAssets() {
+    for (const asset of assets) {
+      if (document.getElementById(asset.id)) continue;
+      if (asset.tag === "link") {
+        document.write(\`<link id="\${asset.id}" rel="stylesheet" href="\${asset.href}">\`);
+      } else {
+        document.write(\`<script id="\${asset.id}" src="\${asset.src}"><\\/script>\`);
+      }
+    }
+  }
+
+  function appendAssets() {
+    for (const asset of assets) {
+      if (document.getElementById(asset.id)) continue;
+      if (asset.tag === "link") {
+        const stylesheet = document.createElement("link");
+        stylesheet.id = asset.id;
+        stylesheet.rel = "stylesheet";
+        stylesheet.href = asset.href;
+        document.head.append(stylesheet);
+      } else {
+        const script = document.createElement("script");
+        script.id = asset.id;
+        script.src = asset.src;
+        script.async = false;
+        document.head.append(script);
+      }
+    }
+  }
+
+  if (document.readyState === "loading") {
+    writeParserBlockingAssets();
+  } else {
+    appendAssets();
+  }
+})();
+`;
 writeFileSync(outputPath, body, "utf8");
 
 const apiBaseHost = apiBase ? new URL(apiBase).host : "same-origin";

@@ -134,7 +134,8 @@ Backend-only secret values:
 - at least one Groq key is required for the production Ask StudentOS route: `GROQ_API_KEY` or any of `GROQ_API_KEY_1` through `GROQ_API_KEY_5`
 - `GROQ_API_KEY` is the backward-compatible single-key fallback
 - `GROQ_API_KEY_1` through `GROQ_API_KEY_5` are the preferred production key pool
-- `GEMINI_API_KEY` or `GEMINI_API_KEY_1` through `GEMINI_API_KEY_5` provide backend-only Gemini fallback; all five distinct numbered slots are required only before cyclic routing is enabled
+- `GEMINI_API_KEY` or `GEMINI_API_KEY_1` through `GEMINI_API_KEY_6` provide backend-only Gemini fallback; Router V2 requires all six distinct numbered slots
+- `NVIDIA_API_KEY_1` through `NVIDIA_API_KEY_3` provide fallback-only NVIDIA capacity when `STUDENTOS_AI_NVIDIA_ENABLED=true`
 - `POLLINATIONS_API_KEY` if Pollinations paid/authenticated mode is enabled
 - At least two enabled provider families must have credentials in production. `auto` mode attempts every configured provider rather than depending on Groq alone.
 - `STUDENTOS_EMBEDDING_API_KEY` if real embeddings are enabled
@@ -143,9 +144,9 @@ Backend-only secret values:
 
 The `Azure Container Apps - StudentOS API` GitHub Actions workflow validates and maps the required Supabase values plus every configured provider key into Azure Container Apps as backend-only secret refs after the Bicep deployment. With cyclic routing disabled, validation keeps the existing requirement of at least one Groq key. With cyclic routing enabled, it fails closed unless Groq, all five distinct numbered Gemini slots, and authenticated Pollinations are configured. Missing required secret names cause the workflow to fail before deployment output is shown. Provider and service-role keys stay in GitHub Actions and Azure Container Apps only; do not add them to Cloudflare Pages or any frontend runtime config.
 
-The GitHub environment variables `STUDENTOS_AI_GROQ_ENABLED`, `STUDENTOS_AI_GEMINI_ENABLED`, and `STUDENTOS_AI_POLLINATIONS_ENABLED` are independent emergency kill switches and default to `true`. The global cycle flag remains the fastest full rollback.
+The GitHub environment variables `STUDENTOS_AI_GROQ_ENABLED`, `STUDENTOS_AI_GEMINI_ENABLED`, `STUDENTOS_AI_NVIDIA_ENABLED`, and `STUDENTOS_AI_POLLINATIONS_ENABLED` are independent emergency kill switches. Router V2 deploys disabled with rollout zero; `STUDENTOS_AI_ROUTER_V2_ENABLED=false` is its immediate rollback.
 
-Azure secret names remain lowercase and hyphen-safe while backend runtime env names remain unchanged. Groq and Gemini numbered slots map to `groq-api-key-1` through `groq-api-key-5` and `gemini-api-key-1` through `gemini-api-key-5`. Empty optional secrets are skipped while routing is disabled. If Azure CLI mapping fails, the workflow prints only the safe command category and exit code; raw CLI output is withheld because it may contain secret-bearing command arguments.
+Azure secret names remain lowercase and hyphen-safe while backend runtime env names remain unchanged. Numbered slots map to `groq-api-key-1` through `groq-api-key-5`, `gemini-api-key-1` through `gemini-api-key-6`, and `nvidia-api-key-1` through `nvidia-api-key-3`. Empty optional secrets are skipped while routing is disabled. If Azure CLI mapping fails, the workflow prints only the safe command category and exit code; raw CLI output is withheld because it may contain secret-bearing command arguments. See [Provider Router V2](./PROVIDER_ROUTER_V2.md) for migration order, registry preflight, staged rollout, and rollback.
 
 The backend loads non-empty numbered keys in `_1` through `_5` order, uses the legacy unnumbered key only when slot one is absent, and deduplicates matching values. Comma-separated key pools are not supported.
 
