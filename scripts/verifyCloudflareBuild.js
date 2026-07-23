@@ -8,6 +8,9 @@ const cssPath = join(katexRoot, "katex.min.css");
 const jsPath = join(katexRoot, "katex.min.js");
 const fontsPath = join(katexRoot, "fonts");
 const indexPath = join(frontendRoot, "index.html");
+const runtimeConfigPath = join(frontendRoot, "runtime-config.js");
+const authRedesignCssPath = join(frontendRoot, "styles", "auth-redesign.css");
+const authRedesignJsPath = join(frontendRoot, "scripts", "auth-redesign.js");
 
 function requireNonEmptyFile(path, label) {
   if (!existsSync(path) || !statSync(path).isFile() || statSync(path).size === 0) {
@@ -17,6 +20,9 @@ function requireNonEmptyFile(path, label) {
 
 requireNonEmptyFile(cssPath, "frontend/vendor/katex/katex.min.css");
 requireNonEmptyFile(jsPath, "frontend/vendor/katex/katex.min.js");
+requireNonEmptyFile(runtimeConfigPath, "frontend/runtime-config.js");
+requireNonEmptyFile(authRedesignCssPath, "frontend/styles/auth-redesign.css");
+requireNonEmptyFile(authRedesignJsPath, "frontend/scripts/auth-redesign.js");
 
 if (!existsSync(fontsPath) || !statSync(fontsPath).isDirectory()) {
   throw new Error("Cloudflare build is missing the KaTeX fonts directory.");
@@ -33,10 +39,17 @@ if (!indexHtml.includes('href="/vendor/katex/katex.min.css"')) {
   throw new Error("frontend/index.html does not reference the vendored KaTeX stylesheet.");
 }
 
+const runtimeConfig = readFileSync(runtimeConfigPath, "utf8");
+if (!runtimeConfig.includes("/styles/auth-redesign.css") || !runtimeConfig.includes("/scripts/auth-redesign.js")) {
+  throw new Error("frontend/runtime-config.js does not load the StudentOS auth redesign assets.");
+}
+
 console.log(JSON.stringify({
   ok: true,
   css: "frontend/vendor/katex/katex.min.css",
   js: "frontend/vendor/katex/katex.min.js",
+  authRedesignCss: "frontend/styles/auth-redesign.css",
+  authRedesignJs: "frontend/scripts/auth-redesign.js",
   fontCount: fonts.length,
   htmlFallback: false,
   secretsPrinted: false,

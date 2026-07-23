@@ -21,7 +21,7 @@ function normalizePublicApiBase(value) {
 }
 
 const apiBase = normalizePublicApiBase(rawApiBase);
-const body = `window.StudentOSRuntimeConfig = window.StudentOSRuntimeConfig || {\n  apiBase: ${JSON.stringify(apiBase)},\n};\n`;
+const body = `window.StudentOSRuntimeConfig = window.StudentOSRuntimeConfig || {\n  apiBase: ${JSON.stringify(apiBase)},\n};\n\n(() => {\n  if (!document.getElementById("studentos-auth-redesign-styles")) {\n    const stylesheet = document.createElement("link");\n    stylesheet.id = "studentos-auth-redesign-styles";\n    stylesheet.rel = "stylesheet";\n    stylesheet.href = "/styles/auth-redesign.css";\n    document.head.append(stylesheet);\n  }\n\n  if (!document.getElementById("studentos-auth-redesign-script")) {\n    const script = document.createElement("script");\n    script.id = "studentos-auth-redesign-script";\n    script.src = "/scripts/auth-redesign.js";\n    script.async = false;\n    document.head.append(script);\n  }\n})();\n`;
 writeFileSync(outputPath, body, "utf8");
 
 const apiBaseHost = apiBase ? new URL(apiBase).host : "same-origin";
