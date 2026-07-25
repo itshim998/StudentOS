@@ -27,6 +27,13 @@ assert.match(renderProgressiveMarkdown("Use **active recall** now."), /<strong>a
 assert.match(renderProgressiveMarkdown("| Topic | Time |\n| --- | --- |\n| Recall | 15 min |"), /<table>/);
 assert.match(renderProgressiveMarkdown("```md\n### literal\n```"), /<code>### literal<\/code>/);
 assert.equal(renderProgressiveMarkdown("### "), "");
+globalThis.katex = {
+  renderToString(source, options) {
+    return `<span data-display="${options.displayMode}">${source}</span>`;
+  },
+};
+assert.match(renderProgressiveMarkdown("Use $x^2$ here."), /data-display="false">x\^2<\/span>/);
+delete globalThis.katex;
 
 const currentFile = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(currentFile), "..");
