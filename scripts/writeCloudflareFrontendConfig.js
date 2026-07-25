@@ -31,6 +31,7 @@ const body = `window.StudentOSRuntimeConfig = window.StudentOSRuntimeConfig || {
     { id: "studentos-auth-redesign-script", tag: "script", src: "/scripts/auth-redesign.js" },
     { id: "studentos-auth-accessibility-script", tag: "script", src: "/scripts/auth-accessibility.js" },
     { id: "studentos-ai-response-enhancements-script", tag: "script", src: "/scripts/ai-response-enhancements.js" },
+    { id: "studentos-ai-adaptive-drawer-script", tag: "script", src: "/scripts/ai-drawer-adaptive-layout.js" },
   ];
 
   function writeParserBlockingAssets() {
