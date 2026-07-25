@@ -14,6 +14,8 @@ const {
   normalizedVisibleText,
   isRedundantPreparingState,
   responseContainsTable,
+  isLikelyCaptionHeaderText,
+  repairResponseTables,
   syncAdaptiveDrawer,
 } = globalThis.StudentOSAiDrawerAdaptiveLayout || {};
 
@@ -44,6 +46,9 @@ delete globalThis.katex;
 
 assert.equal(normalizedVisibleText("  Preparing   your answer...  "), "Preparing your answer...");
 assert.equal(typeof syncAdaptiveDrawer, "function");
+assert.equal(typeof repairResponseTables, "function");
+assert.equal(isLikelyCaptionHeaderText("Stemming vs. Lemmatization - Quick Comparison"), true);
+assert.equal(isLikelyCaptionHeaderText("Aspect"), false);
 
 function fakeClassList() {
   const values = new Set();
@@ -71,6 +76,9 @@ const response = {
   },
   querySelector() {
     return null;
+  },
+  querySelectorAll() {
+    return [];
   },
 };
 const panel = {
@@ -112,6 +120,8 @@ assert.match(enhancement, /studentosProgressive/);
 assert.match(adaptiveDrawer, /Preparing your answer/);
 assert.match(adaptiveDrawer, /studentos-ai-loading-suppressed/);
 assert.match(adaptiveDrawer, /studentos-ai-table-expanded/);
+assert.match(adaptiveDrawer, /repairShiftedTable/);
+assert.match(adaptiveDrawer, /study-generated-table-caption/);
 assert.match(adaptiveDrawer, /width 340ms/);
 assert.match(adaptiveDrawer, /max-width: 860px/);
 
