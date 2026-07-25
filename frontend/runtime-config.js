@@ -7,6 +7,7 @@ window.StudentOSRuntimeConfig = window.StudentOSRuntimeConfig || {
     { id: "studentos-auth-redesign-styles", tag: "link", href: "/styles/auth-redesign.css" },
     { id: "studentos-auth-redesign-script", tag: "script", src: "/scripts/auth-redesign.js" },
     { id: "studentos-auth-accessibility-script", tag: "script", src: "/scripts/auth-accessibility.js" },
+    { id: "studentos-ai-response-enhancements-script", tag: "script", src: "/scripts/ai-response-enhancements.js" },
   ];
 
   function writeParserBlockingAssets() {
