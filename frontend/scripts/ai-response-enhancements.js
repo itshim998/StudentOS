@@ -64,6 +64,25 @@ function isTableDivider(row) {
   return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
+function renderMath(value, { displayMode = false } = {}) {
+  const source = String(value || "").trim();
+  const katex = globalThis.katex;
+  if (!source || typeof katex?.renderToString !== "function") {
+    return escapeHtml(displayMode ? `$$${source}$$` : `$${source}$`);
+  }
+  try {
+    return katex.renderToString(source, {
+      displayMode,
+      throwOnError: false,
+      strict: "ignore",
+      trust: false,
+      output: "htmlAndMathml",
+    });
+  } catch {
+    return escapeHtml(displayMode ? `$$${source}$$` : `$${source}$`);
+  }
+}
+
 function renderInline(value, baseHref) {
   const placeholders = [];
   const hold = (html) => {
@@ -73,6 +92,8 @@ function renderInline(value, baseHref) {
   };
 
   let text = String(value || "");
+  text = text.replace(/\\\((.+?)\\\)/g, (_, math) => hold(renderMath(math)));
+  text = text.replace(/(^|[^\\])\$([^$\n]+)\$/g, (_, prefix, math) => `${prefix}${hold(renderMath(math))}`);
   text = text.replace(/`([^`]+)`/g, (_, code) => hold(`<code>${escapeHtml(code)}</code>`));
   text = text.replace(/\[([^\]\n]{1,240})\]\(([^)\s]{1,500})\)/g, (_, label, href) => {
     const safeHref = safeMarkdownUrl(href, baseHref);
@@ -269,7 +290,9 @@ function installResponseObserver(windowObj, documentObj) {
     }
 
     if (!copy.textContent.trim() || !enhancementState.latestAnswer) return;
-    const normalizedMarkup = renderProgressiveMarkdown(enhancementState.latestAnswer, { baseHref: windowObj.location?.href });
+    const normalizedAnswer = normalizeLooseMarkdownHeadings(enhancementState.latestAnswer);
+    if (normalizedAnswer === enhancementState.latestAnswer) return;
+    const normalizedMarkup = renderProgressiveMarkdown(normalizedAnswer, { baseHref: windowObj.location?.href });
     if (copy.innerHTML !== normalizedMarkup) copy.innerHTML = normalizedMarkup;
   };
 
