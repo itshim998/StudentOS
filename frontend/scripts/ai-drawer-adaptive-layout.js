@@ -4,6 +4,7 @@ const adaptiveDrawerState = {
 };
 
 const REDUNDANT_LOADING_COPY = /^Preparing your answer(?:\.{3}|…)?$/i;
+const TITLE_LIKE_TABLE_HEADER = /\b(?:comparison|overview|summary|difference|differences|versus|vs\.?|quick guide|at a glance)\b/i;
 
 function normalizedVisibleText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -16,6 +17,49 @@ function isRedundantPreparingState(response) {
 
 function responseContainsTable(response) {
   return Boolean(response?.querySelector("table, .study-generated-table-wrap"));
+}
+
+function isLikelyCaptionHeaderText(value) {
+  const text = normalizedVisibleText(value);
+  return text.length >= 24 || TITLE_LIKE_TABLE_HEADER.test(text);
+}
+
+function repairShiftedTable(table) {
+  if (!table || table.dataset?.studentosColumnAlignment === "repaired") return false;
+  const headerRow = table.querySelector?.("thead tr");
+  const bodyRows = [...(table.querySelectorAll?.("tbody tr") || [])];
+  const headerCells = [...(headerRow?.children || [])].filter((cell) => cell.tagName === "TH");
+  if (headerCells.length < 3 || !bodyRows.length || table.querySelector?.("caption")) return false;
+
+  const columnCount = headerCells.length;
+  const rowCells = bodyRows.map((row) => [...row.children].filter((cell) => cell.tagName === "TD"));
+  if (rowCells.some((cells) => cells.length !== columnCount)) return false;
+  if (!rowCells.every((cells) => normalizedVisibleText(cells.at(-1)?.textContent) === "")) return false;
+
+  const titleCell = headerCells[0];
+  if (!isLikelyCaptionHeaderText(titleCell.textContent)) return false;
+  if (!headerCells.slice(1).every((cell) => normalizedVisibleText(cell.textContent))) return false;
+  if (!rowCells.every((cells) => normalizedVisibleText(cells[0]?.textContent))) return false;
+
+  const documentObj = table.ownerDocument;
+  if (!documentObj?.createElement) return false;
+  const caption = documentObj.createElement("caption");
+  caption.className = "study-generated-table-caption";
+  caption.innerHTML = titleCell.innerHTML;
+  table.prepend(caption);
+  titleCell.remove();
+  rowCells.forEach((cells) => cells.at(-1)?.remove());
+  table.dataset.studentosColumnAlignment = "repaired";
+  return true;
+}
+
+function repairResponseTables(response) {
+  if (!response || typeof response.querySelectorAll !== "function") return 0;
+  let repaired = 0;
+  response.querySelectorAll("table").forEach((table) => {
+    if (repairShiftedTable(table)) repaired += 1;
+  });
+  return repaired;
 }
 
 function setPreparingStateSuppressed(response, suppressed) {
@@ -42,6 +86,7 @@ function syncAdaptiveDrawer(panel, response) {
   if (!panel || !response) return { preparingSuppressed: false, tableExpanded: false };
   const preparingSuppressed = isRedundantPreparingState(response);
   setPreparingStateSuppressed(response, preparingSuppressed);
+  if (!preparingSuppressed) repairResponseTables(response);
   const tableExpanded = !preparingSuppressed && responseContainsTable(response);
   setTableExpanded(panel, tableExpanded);
   return { preparingSuppressed, tableExpanded };
@@ -96,6 +141,16 @@ function installAdaptiveDrawerStyles(documentObj) {
       width: 100%;
       min-width: 620px;
       table-layout: auto;
+    }
+
+    #ai-panel.studentos-ai-table-expanded .study-generated-table-caption {
+      caption-side: top;
+      padding: 0 0 12px;
+      color: inherit;
+      font-size: 1rem;
+      font-weight: 800;
+      line-height: 1.35;
+      text-align: left;
     }
 
     #ai-panel.studentos-ai-table-expanded .study-generated-table-wrap th,
@@ -183,6 +238,9 @@ globalThis.StudentOSAiDrawerAdaptiveLayout = Object.freeze({
   normalizedVisibleText,
   isRedundantPreparingState,
   responseContainsTable,
+  isLikelyCaptionHeaderText,
+  repairShiftedTable,
+  repairResponseTables,
   syncAdaptiveDrawer,
   installAdaptiveDrawer,
   initAdaptiveDrawer,
