@@ -49,6 +49,17 @@ jobs:
           block = source[start + len(start_marker):end]
           lines = block.splitlines()
           script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
+          wrong = '''old_results = \'\'\'    testResults: (state.testResults || []).map((result) => {
+              const { topicEvidence, ...safeResult } = result;
+              return safeResult;
+            }),\'\'\''''
+          corrected = '''old_results = \'\'\'    testResults: (state.testResults || []).map((result) => {
+      const { topicEvidence, ...safeResult } = result;
+      return safeResult;
+    }),\'\'\''''
+          if wrong not in script:
+              raise SystemExit('Could not locate the staged server result projection patch')
+          script = script.replace(wrong, corrected, 1)
           Path('/tmp/c01-remediation.py').write_text(script, encoding='utf-8')
           PY
           set +e
@@ -60,13 +71,6 @@ jobs:
             diagnostic="$(tail -c 12000 /tmp/c01-remediation.log)"
             gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
               -f body="### C-01 remediation diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`" || true
-            git reset --hard HEAD
-            cp /tmp/c01-remediation.log c01-remediation-error.log
-            git config user.name "StudentOS Security Remediation"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add c01-remediation-error.log
-            git commit -m "chore: capture C-01 remediation failure"
-            git push origin HEAD:fix/c01-assessment-integrity
             exit "$status"
           fi
 
