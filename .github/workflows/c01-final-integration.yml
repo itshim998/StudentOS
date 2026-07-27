@@ -82,7 +82,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          diagnostic="$(tail -c 12000 /tmp/c01-finalize.log)"
+          diagnostic="$(tail -c 6000 /tmp/c01-finalize.log)"
           gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
             -f body="### C-01 final integration diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`"
 
@@ -113,14 +113,22 @@ jobs:
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit "$status"
 
-      - name: Publish full regression diagnostic
+      - name: Publish concise full regression diagnostic
         if: failure() && steps.full-regression.outputs.status != '0'
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          diagnostic="$(tail -c 18000 /tmp/c01-full-regression.log)"
+          {
+            echo "Error-focused lines:"
+            grep -nE 'FAIL|Error:|AssertionError|failed|not ok|Expected|Received|Test timeout|playwright' /tmp/c01-full-regression.log | tail -n 80 || true
+            echo
+            echo "Final output:"
+            tail -n 140 /tmp/c01-full-regression.log
+          } > /tmp/c01-concise-diagnostic.log
+          diagnostic="$(tail -c 7000 /tmp/c01-concise-diagnostic.log)"
           gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
-            -f body="### C-01 full regression diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`"
+            -f body="### C-01 concise full regression diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`"
 
       - name: Run production and Azure preflights
         run: npm run preflight:production && npm run preflight:azure
