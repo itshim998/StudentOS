@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: c01-pr-remediation-trigger-${{ github.event.pull_request.number }}
@@ -24,12 +26,6 @@ jobs:
           ref: fix/c01-assessment-integrity
           fetch-depth: 0
 
-      - name: Stop after a captured diagnostic
-        if: hashFiles('c01-remediation-error.log') != ''
-        run: |
-          echo "A remediation diagnostic is already committed on the branch."
-          exit 1
-
       - name: Use Node 22
         uses: actions/setup-node@v4
         with:
@@ -38,6 +34,8 @@ jobs:
 
       - name: Extract and run staged C-01 patch
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -47,7 +45,7 @@ jobs:
           start = source.find(start_marker)
           end = source.find(end_marker, start + len(start_marker))
           if start < 0 or end < 0:
-              raise SystemExit('Could not extract staged remediation script')
+              raise SystemExit(f'Could not extract staged remediation script: start={start}, end={end}')
           block = source[start + len(start_marker):end]
           lines = block.splitlines()
           script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
@@ -59,6 +57,10 @@ jobs:
           set -e
           cat /tmp/c01-remediation.log
           if [ "$status" -ne 0 ]; then
+            diagnostic="$(tail -c 12000 /tmp/c01-remediation.log)"
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
+              -f body="### C-01 remediation diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`" || true
+            git reset --hard HEAD
             cp /tmp/c01-remediation.log c01-remediation-error.log
             git config user.name "StudentOS Security Remediation"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -97,6 +99,6 @@ jobs:
           rm -f c01-remediation-error.log
           git config user.name "StudentOS Security Remediation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/domain/studentosDomain.js backend/ai/studyTestService.js backend/server.js backend/testDomain.js backend/testC01AssessmentIntegrity.js package.json .github/workflows/c01-assessment-integrity-remediation.yml .github/workflows/c01-pr-remediation-trigger.yml c01-remediation-error.log
+          git add -A
           git commit -m "Fix C-01 assessment score integrity"
           git push origin HEAD:fix/c01-assessment-integrity
