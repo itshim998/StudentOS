@@ -42,6 +42,31 @@ jobs:
           text = path.read_text(encoding="utf-8")
           text = text.replace('study = study_path.read_text(encoding="utf-8")nstudy_old =', 'study = study_path.read_text(encoding="utf-8")\nstudy_old =', 1)
           text = text.replace('replace_once(study, nstudy_old, nstudy_new,', 'replace_once(study, study_old, study_new,', 1)
+          label = '"public test result answer variants"'
+          label_pos = text.find(label)
+          block_start = text.rfind('server = replace_once(', 0, label_pos)
+          block_end = text.find(')\nserver_path.write_text', label_pos)
+          if label_pos < 0 or block_start < 0 or block_end < 0:
+              raise SystemExit(f"Could not locate result-answer patch block: label={label_pos}, start={block_start}, end={block_end}")
+          block_end += 2
+          replacement = '''answer_marker = "          expected_answer,\\n"
+          answer_index = server.find(answer_marker)
+          if answer_index < 0:
+              raise SystemExit("Could not locate expected-answer field in public result projection")
+          answer_insert = """          referenceAnswer,
+                    reference_answer,
+                    modelSolution,
+                    model_solution,
+                    hiddenSolution,
+                    hiddenSolutions,
+                    hidden_solution,
+                    hidden_solutions,
+                    markingScheme,
+                    marking_scheme,
+          """
+          server = server[:answer_index + len(answer_marker)] + answer_insert + server[answer_index + len(answer_marker):]
+          '''
+          text = text[:block_start] + replacement + text[block_end:]
           path.write_text(text, encoding="utf-8")
           PY
           set +e
