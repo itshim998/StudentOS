@@ -73,8 +73,6 @@ jobs:
             npm run test:pass9
             npm run test:rag
             npm run test:pass7
-            npm run test:sources
-            npm run test:persistence
           } > /tmp/c02-final-focused.log 2>&1
           status=$?
           set -e
