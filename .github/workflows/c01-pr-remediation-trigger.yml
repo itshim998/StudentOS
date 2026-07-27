@@ -32,47 +32,26 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Extract and run staged C-01 patch
+      - name: Apply C-01 integrity patch
+        id: patch
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          source = Path('.github/workflows/c01-assessment-integrity-remediation.yml').read_text(encoding='utf-8')
-          start_marker = "          python - <<'PY'\n"
-          end_marker = "\n          PY\n\n      - name: Install dependencies"
-          start = source.find(start_marker)
-          end = source.find(end_marker, start + len(start_marker))
-          if start < 0 or end < 0:
-              raise SystemExit(f'Could not extract staged remediation script: start={start}, end={end}')
-          block = source[start + len(start_marker):end]
-          lines = block.splitlines()
-          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
-          wrong = '''old_results = \'\'\'    testResults: (state.testResults || []).map((result) => {
-              const { topicEvidence, ...safeResult } = result;
-              return safeResult;
-            }),\'\'\''''
-          corrected = '''old_results = \'\'\'    testResults: (state.testResults || []).map((result) => {
-      const { topicEvidence, ...safeResult } = result;
-      return safeResult;
-    }),\'\'\''''
-          if wrong not in script:
-              raise SystemExit('Could not locate the staged server result projection patch')
-          script = script.replace(wrong, corrected, 1)
-          Path('/tmp/c01-remediation.py').write_text(script, encoding='utf-8')
-          PY
           set +e
-          python /tmp/c01-remediation.py > /tmp/c01-remediation.log 2>&1
+          python scripts/runC01Remediation.py > /tmp/c01-remediation.log 2>&1
           status=$?
           set -e
           cat /tmp/c01-remediation.log
-          if [ "$status" -ne 0 ]; then
-            diagnostic="$(tail -c 12000 /tmp/c01-remediation.log)"
-            gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
-              -f body="### C-01 remediation diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`" || true
-            exit "$status"
-          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Publish patch diagnostic
+        if: failure() && steps.patch.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          diagnostic="$(tail -c 12000 /tmp/c01-remediation.log)"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
+            -f body="### C-01 remediation diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`"
 
       - name: Install dependencies
         run: npm ci
@@ -95,11 +74,12 @@ jobs:
       - name: Check patch whitespace
         run: git diff --check
 
-      - name: Commit validated remediation and remove temporary workflows
+      - name: Commit validated remediation and remove temporary files
         shell: bash
         run: |
           rm .github/workflows/c01-assessment-integrity-remediation.yml
           rm .github/workflows/c01-pr-remediation-trigger.yml
+          rm scripts/runC01Remediation.py
           rm -f c01-remediation-error.log
           git config user.name "StudentOS Security Remediation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
