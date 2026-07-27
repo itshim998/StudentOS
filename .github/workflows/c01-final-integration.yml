@@ -102,7 +102,25 @@ jobs:
         run: npm run check:syntax
 
       - name: Run full regression suite
-        run: npm test
+        id: full-regression
+        shell: bash
+        run: |
+          set +e
+          npm test > /tmp/c01-full-regression.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/c01-full-regression.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Publish full regression diagnostic
+        if: failure() && steps.full-regression.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          diagnostic="$(tail -c 18000 /tmp/c01-full-regression.log)"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
+            -f body="### C-01 full regression diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`"
 
       - name: Run production and Azure preflights
         run: npm run preflight:production && npm run preflight:azure
