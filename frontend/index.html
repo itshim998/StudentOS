@@ -578,21 +578,14 @@
             <div class="section-heading">
               <div>
                 <p class="eyebrow">Practice and credit</p>
-                <h3>Record practice result</h3>
+                <h3>Complete a StudentOS test</h3>
+                <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Review" data-ai-prompt="Help me review a practice score and decide what to repair next.">Help review</button>
               </div>
-              <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Review" data-ai-prompt="Help me review a practice score and decide what to repair next.">Help review</button>
             </div>
-            <p class="studio-helper-copy">Save an overall practice result, review corrections, and keep earned study credit current.</p>
+            <p class="studio-helper-copy">Scores and study credits are recorded only from a StudentOS-generated test with server-owned questions and marking.</p>
             <form id="score-form" class="form-grid">
-              <label>
-                Topic
-                <select name="topicId" id="score-topic-select"></select>
-              </label>
-              <label>
-                Score
-                <input name="scorePercent" type="number" min="0" max="100" value="82" required>
-              </label>
-              <button class="primary-button" type="submit">Save test score</button>
+              <select id="score-topic-select" hidden aria-hidden="true" tabindex="-1"></select>
+              <button class="primary-button" type="submit">Open Study and Evaluate</button>
             </form>
             <div id="score-result" class="result-box rich-result" aria-live="polite"></div>
           </section>

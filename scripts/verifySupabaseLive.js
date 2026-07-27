@@ -90,6 +90,21 @@ async function apiRequest(apiBase, path, token, { method = "GET", body } = {}) {
   return parseJson(response);
 }
 
+async function apiRequestExpectStatus(apiBase, path, token, expectedStatus, { method = "GET", body } = {}) {
+  const response = await fetch(`${apiBase.replace(/\/+$/, "")}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
+  assertOk(response.status === expectedStatus, `${path} returned ${response.status}, expected ${expectedStatus}`);
+  return payload;
+}
+
 async function verifyTables(shardClients) {
   const verified = [];
   for (const shard of shardClients) {
@@ -111,8 +126,6 @@ async function verifyTables(shardClients) {
 async function verifyPersistedRows(route, userId) {
   const checks = [
     ["student_profiles", "profile"],
-    ["test_results", "test result"],
-    ["credit_ledger", "credit ledger entry"],
     ["ai_usage_ledger", "AI usage entry"],
     ["assignment_automation_contracts", "assignment contract"],
     ["ai_conversations", "AI conversation"],
@@ -175,18 +188,15 @@ async function main() {
   assertOk(bootstrap.persistence?.mode === "supabase", "Bootstrap did not use Supabase persistence");
   assertOk(bootstrap.persistence?.shard?.label === firstRoute.label, "Bootstrap shard label did not match router");
 
-  const score = await apiRequest(apiBase, "/api/tests/score", session.access_token, {
+  const forgedScore = await apiRequestExpectStatus(apiBase, "/api/tests/score", session.access_token, 400, {
     method: "POST",
     body: {
-      courseId: "course_alg2",
-      topicId: "topic_quadratics",
-      type: "mcq",
-      answers: ["A", "B", "C", "D"],
-      answerKey: ["A", "B", "C", "X"],
+      scorePercent: 100,
+      answerKey: ["forged"],
+      answers: [{ isCorrect: true }],
     },
   });
-  assertOk(score.result?.scorePercent === 75, "Test scoring endpoint did not return expected MCQ score");
-  assertOk(score.creditEntry?.amount === 1, "Credit ledger entry was not created by test scoring");
+  assertOk(/client-controlled assessment field/i.test(String(forgedScore?.error || "")), "Forged score authority was not rejected clearly");
 
   const contract = await apiRequest(apiBase, "/api/assignment-contract", session.access_token, {
     method: "POST",
@@ -225,7 +235,7 @@ async function main() {
     endpointsVerified: [
       "GET /api/config",
       "GET /api/bootstrap",
-      "POST /api/tests/score",
+      "POST /api/tests/score (forged authority rejected)",
       "POST /api/assignment-contract",
       "POST /api/ai/verb",
     ],

@@ -5418,65 +5418,16 @@ async function submitAssignmentFlow(event) {
   });
 }
 
-function derivedAnswersForScore(topic, scorePercent) {
-  if (scorePercent >= 90) {
-    return [
-      { question: `Core idea of ${topic.title}`, selected: "Correct", correct: "Correct", concept: topic.title, isCorrect: true },
-    ];
-  }
-  return [
-    {
-      question: `Setup check for ${topic.title}`,
-      selected: "Skipped the setup",
-      correct: "Identify givens and method first",
-      concept: topic.weakSignals?.[0] || topic.title,
-      isCorrect: false,
-    },
-    {
-      question: `Timed check for ${topic.title}`,
-      selected: scorePercent >= 70 ? "Mostly correct" : "Unstable",
-      correct: "Use the source-backed method",
-      concept: topic.weakSignals?.[1] || "exam timing",
-      isCorrect: scorePercent >= 80,
-    },
-  ];
-}
-
-async function recordScore(event) {
+function recordScore(event) {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
-  const topicId = form.get("topicId");
-  const topic = topicById(topicId);
-  const scorePercent = Number(form.get("scorePercent"));
-  await withButtonLoading(event.submitter, "Saving...", async () => {
-    setLoading(els.scoreResult, "Saving practice score...");
-    const result = await api("/api/tests/score", {
-      method: "POST",
-      body: JSON.stringify({
-        topicId,
-        courseId: topic?.courseId,
-        scorePercent,
-        type: "mcq",
-        answers: derivedAnswersForScore(topic, scorePercent),
-      }),
-    });
-
-    setResult(els.scoreResult, `
-      <strong>Practice saved: ${result.result.scorePercent}%</strong>
-      <p>${escapeHtml(result.scoreSummary)}</p>
-      <div class="studio-result-strip">
-        <span><strong>${escapeHtml(String(result.result.creditsAwarded))}</strong> study credit${result.result.creditsAwarded === 1 ? "" : "s"} updated</span>
-        <span><strong>Saved</strong> overall practice result</span>
-      </div>
-      <strong>What to repair next</strong>
-      ${list(result.correctionSheet.corrections.map((item) => `${item.concept}: ${item.repair}`))}
-      <div class="tag-row">
-        ${tag(result.nextRecommendedAction, result.result.scorePercent < 70 ? "urgent" : "source")}
-      </div>
-    `);
-    renderLesson(result.tutorLesson);
-    await loadBootstrap();
-  }, { timeoutTarget: els.scoreResult, timeoutCopy: "Saving the score is taking longer than expected. You can try again." });
+  setResult(els.scoreResult, `
+    <strong>Use a StudentOS-generated test</strong>
+    <p>Manual score entry has been retired. StudentOS records results only after it evaluates a server-owned test attempt.</p>
+    <div class="tag-row">
+      ${tag("assessment integrity protected", "source")}
+    </div>
+  `);
+  document.querySelector('.nav-item[data-view="study"]')?.click();
 }
 
 async function draftExtension(event) {
