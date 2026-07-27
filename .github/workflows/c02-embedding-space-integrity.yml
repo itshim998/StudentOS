@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/c02-embedding-space-integrity
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -12,10 +15,11 @@ permissions:
 
 concurrency:
   group: c02-embedding-space-integrity
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   remediate-validate-commit:
+    if: github.event_name == 'push' || github.head_ref == 'fix/c02-embedding-space-integrity'
     runs-on: ubuntu-latest
     timeout-minutes: 65
     steps:
@@ -62,9 +66,10 @@ jobs:
         shell: bash
         run: |
           diagnostic="$(tail -c 10000 /tmp/c02-patch.log)"
-          gh api "repos/${GITHUB_REPOSITORY}/issues" \
-            -f title="C-02 remediation patch diagnostic" \
-            -f body="The temporary C-02 integration workflow could not apply its repository patch.\n\n\`\`\`text\n${diagnostic}\n\`\`\`" || true
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
+              -f body="### C-02 remediation patch diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`" || true
+          fi
 
       - name: Install dependencies
         if: steps.guard.outputs.skip != 'true'
@@ -113,9 +118,10 @@ jobs:
             tail -n 180 /tmp/c02-regression.log
           } > /tmp/c02-regression-diagnostic.log
           diagnostic="$(tail -c 12000 /tmp/c02-regression-diagnostic.log)"
-          gh api "repos/${GITHUB_REPOSITORY}/issues" \
-            -f title="C-02 regression diagnostic" \
-            -f body="The C-02 branch did not pass the complete regression suite.\n\n\`\`\`text\n${diagnostic}\n\`\`\`" || true
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
+              -f body="### C-02 regression diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`" || true
+          fi
 
       - name: Run production and Azure preflights
         if: steps.guard.outputs.skip != 'true'
@@ -138,6 +144,7 @@ jobs:
         shell: bash
         run: |
           rm .github/workflows/c02-embedding-space-integrity.yml
+          rm -f .github/workflows/c02-pr-trigger.yml
           rm scripts/applyC02Remediation.py
           git config user.name "StudentOS Security Remediation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
