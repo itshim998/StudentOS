@@ -1,0 +1,59 @@
+name: C-02 Focused Diagnostic
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: c02-focused-diagnostic
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'fix/c02-embedding-space-integrity'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/c02-embedding-space-integrity
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply integration patch
+        run: python scripts/applyC02Remediation.py
+      - name: Install dependencies
+        run: npm ci
+      - name: Run focused tests with diagnostics
+        id: focused
+        shell: bash
+        run: |
+          set +e
+          {
+            npm run test:embeddings
+            npm run test:pass9
+            npm run test:rag
+            npm run test:pass7
+            npm run test:sources
+            npm run test:persistence
+          } > /tmp/c02-focused.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/c02-focused.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+      - name: Publish focused diagnostic
+        if: failure() && steps.focused.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          diagnostic="$(tail -c 14000 /tmp/c02-focused.log)"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
+            -f body="### C-02 focused-test diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`"
