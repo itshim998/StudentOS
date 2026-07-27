@@ -247,13 +247,15 @@ async function main() {
     assert.equal(deletedAssignment.hardDeleted, true);
     assert.equal(deletedAssignment.state.assignments.some((assignment) => assignment.id === assignmentUpload.assignment.id), false);
 
-    const score = await request(baseUrl, "/api/tests/score", {
+    const forgedScoreResponse = await fetch(`${baseUrl}/api/tests/score`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topicId, scorePercent: 82, answers: [{ isCorrect: true, concept: "Quadratics" }] }),
+      body: JSON.stringify({ topicId, scorePercent: 100, answers: [{ isCorrect: true }] }),
     });
-    assert.equal(score.result.creditsAwarded, 2);
-    assert.equal(score.creditEntry.amount, 2);
+    const forgedScore = await forgedScoreResponse.json();
+    assert.equal(forgedScoreResponse.status, 400);
+    assert.match(String(forgedScore.error || ""), /client-controlled assessment field/i);
+    assertNoSensitiveOutput("/api/tests/score forged rejection", forgedScore);
 
     const classroomStatus = await request(baseUrl, "/api/classroom/status");
     assert.equal(classroomStatus.readOnly, true);

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   applyTestScore,
   getCreditBalance,
@@ -166,11 +167,15 @@ const projected = publicTestSession({
   settledAnswerSignature: "private-signature",
   scoreSettlement: { internal: true },
   internalEvaluation: { provider: "private" },
-  questions: [{ id: "q1", prompt: "Visible prompt", answer: "A", solution: "Private solution", rubric: "Private rubric" }],
+  marking_scheme: "Private marking scheme",
+  reference_answers: ["A"],
+  questions: [{ id: "q1", prompt: "Visible prompt", answer: "A", solution: "Private solution", hidden_solution: "Private hidden solution", reference_answer: "A", rubric: "Private rubric", is_correct: true }],
   testPaper: {
     answerKey: ["A"],
     gradingRubric: "Private rubric",
-    questions: [{ question_number: 1, prompt: "Visible prompt", answer: "A", correctAnswer: "A", solution: "Private solution" }],
+    marking_scheme: "Private marking scheme",
+    model_solutions: ["Private model solution"],
+    questions: [{ question_number: 1, prompt: "Visible prompt", answer: "A", correctAnswer: "A", model_solution: "Private model solution", solution: "Private solution" }],
   },
   answerSheetDraft: { extractedText: "private OCR", filename: "answers.pdf" },
 });
@@ -178,12 +183,32 @@ assert.equal(projected.answerKey, undefined);
 assert.equal(projected.settledAnswerSignature, undefined);
 assert.equal(projected.scoreSettlement, undefined);
 assert.equal(projected.internalEvaluation, undefined);
+assert.equal(projected.marking_scheme, undefined);
+assert.equal(projected.reference_answers, undefined);
 assert.equal(projected.questions[0].answer, undefined);
 assert.equal(projected.questions[0].solution, undefined);
+assert.equal(projected.questions[0].hidden_solution, undefined);
+assert.equal(projected.questions[0].reference_answer, undefined);
+assert.equal(projected.questions[0].is_correct, undefined);
 assert.equal(projected.testPaper.answerKey, undefined);
 assert.equal(projected.testPaper.gradingRubric, undefined);
+assert.equal(projected.testPaper.marking_scheme, undefined);
+assert.equal(projected.testPaper.model_solutions, undefined);
 assert.equal(projected.testPaper.questions[0].correctAnswer, undefined);
+assert.equal(projected.testPaper.questions[0].model_solution, undefined);
 assert.equal(projected.answerSheetDraft.extractedText, undefined);
 assert.equal(projected.answerSheetDraft.filename, "answers.pdf");
+
+const frontendApp = readFileSync(new URL("../frontend/scripts/app.js", import.meta.url), "utf8");
+const frontendHtml = readFileSync(new URL("../frontend/index.html", import.meta.url), "utf8");
+const smokeScript = readFileSync(new URL("../scripts/smokeCoreFlows.js", import.meta.url), "utf8");
+const liveVerifier = readFileSync(new URL("../scripts/verifySupabaseLive.js", import.meta.url), "utf8");
+assert.doesNotMatch(frontendApp, /api\/tests\/score/);
+assert.doesNotMatch(frontendApp, /derivedAnswersForScore/);
+assert.doesNotMatch(frontendHtml, /name="scorePercent"/);
+assert.doesNotMatch(frontendHtml, /Save test score/);
+assert.match(frontendHtml, /server-owned questions and marking/);
+assert.match(smokeScript, /forgedScoreResponse\.status, 400/);
+assert.match(liveVerifier, /forged authority rejected/);
 
 console.log("PASS | C-01 assessment integrity and adversarial scoring tests passed");

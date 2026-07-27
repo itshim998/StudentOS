@@ -288,6 +288,12 @@ const PRIVATE_TEST_SESSION_FIELDS = [
   "evaluation_prompt",
   "providerPayload",
   "provider_payload",
+  "markingScheme",
+  "marking_scheme",
+  "referenceAnswers",
+  "reference_answers",
+  "modelSolutions",
+  "model_solutions",
 ];
 
 function deletePrivateTestFields(record) {
@@ -315,7 +321,16 @@ function stripQuestionSecrets(question) {
     grading_rubric,
     hiddenSolution,
     hiddenSolutions,
+    hidden_solution,
+    hidden_solutions,
+    referenceAnswer,
+    reference_answer,
+    modelSolution,
+    model_solution,
+    markingScheme,
+    marking_scheme,
     isCorrect,
+    is_correct,
     ...safeQuestion
   } = question || {};
   return safeQuestion;

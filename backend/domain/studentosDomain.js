@@ -780,7 +780,16 @@ export function publicLegacyPracticeTestSession(session) {
       grading_rubric,
       hiddenSolution,
       hiddenSolutions,
+      hidden_solution,
+      hidden_solutions,
+      referenceAnswer,
+      reference_answer,
+      modelSolution,
+      model_solution,
+      markingScheme,
+      marking_scheme,
       isCorrect,
+      is_correct,
       ...safeQuestion
     } = question || {};
     return safeQuestion;
@@ -1164,10 +1173,14 @@ export function applyTestScore(state, payload = {}) {
     if (settledSignature !== signature) {
       throw legacyScoreError("This test has already been scored and its answers cannot be changed.", 409, "legacy_test_already_settled");
     }
+    const replayTopic = topicById(state, existingResult.topicId || session.topicId);
+    if (!replayTopic) {
+      throw legacyScoreError("This scored test is missing its server-owned academic mapping.", 409, "legacy_test_mapping_unavailable");
+    }
     return legacyScoreResponse(state, {
       session,
       result: existingResult,
-      topic: topicById(state, existingResult.topicId || session.topicId),
+      topic: replayTopic,
       orderedAnswers,
       answerKey,
       replayed: true,
