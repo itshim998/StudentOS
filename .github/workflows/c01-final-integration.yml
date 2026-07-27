@@ -73,6 +73,23 @@ jobs:
           python scripts/finalizeC01Remediation.py > /tmp/c01-finalize.log 2>&1
           status=$?
           set -e
+          if [ "$status" -eq 0 ]; then
+            python - <<'PY'
+          from pathlib import Path
+          path = Path("frontend/index.html")
+          text = path.read_text(encoding="utf-8")
+          old = '''                <h3>Complete a StudentOS test</h3>
+              </div>
+            </div>'''
+          new = '''                <h3>Complete a StudentOS test</h3>
+              </div>
+              <button class="text-button ai-context-button" type="button" data-ai-open data-ai-verb="Review" data-ai-prompt="Help me review a practice score and decide what to repair next.">Help review</button>
+            </div>'''
+          if text.count(old) != 1:
+              raise SystemExit(f"Expected one secure practice-card heading, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          fi
           cat /tmp/c01-finalize.log
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit "$status"
