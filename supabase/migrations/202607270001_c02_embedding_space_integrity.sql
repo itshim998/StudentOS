@@ -138,6 +138,7 @@ begin
           sc.chunk_index,
           sc.chunk_text,
           sc.embedding_status,
+          sc.embedding_retry_required,
           sc.embedding_provider,
           sc.embedding_family,
           sc.embedding_model,
@@ -358,7 +359,7 @@ begin
       $body$;
     $fn$;
     execute 'drop trigger if exists studentos_source_chunks_embedding_sync on public.source_chunks';
-    execute 'create trigger studentos_source_chunks_embedding_sync before insert or update of embedding_values, embedding_status, embedding_retry_required, embedding_dimensions on public.source_chunks for each row execute function public.studentos_sync_source_chunk_embedding()';
+    execute 'create trigger studentos_source_chunks_embedding_sync before insert or update on public.source_chunks for each row execute function public.studentos_sync_source_chunk_embedding()';
     execute 'update public.source_chunks set embedding_values = embedding_values';
   end if;
 exception when others then

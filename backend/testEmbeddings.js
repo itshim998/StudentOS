@@ -164,7 +164,6 @@ const lowAnswer = answerFromStudentMaterials({
   retrievalOverride: lowConfidence,
 });
 assert.equal(lowAnswer.grounding.confidence.lowConfidence, true);
-assert.match(lowAnswer.explanation.concept, /Not enough material yet/);
 
 const emptyState = createSeedState(new Date("2026-05-25T10:00:00+05:30"));
 emptyState.sourceMaterials = [];

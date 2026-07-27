@@ -1,4 +1,13 @@
-import { confidenceLabel, cosineSimilarity, createDeterministicEmbedding } from "../embeddings/embeddingService.js";
+import {
+  areEmbeddingIdentitiesCompatible,
+  confidenceLabel,
+  cosineSimilarity,
+  createDeterministicEmbedding,
+  deterministicEmbeddingIdentity,
+  embeddingIdentityFromChunk,
+  isEmbeddingIdentityComplete,
+  normalizeEmbeddingIdentity,
+} from "../embeddings/embeddingService.js";
 import { isAcademicContextRecord } from "../connectors/googleClassroom/mapper.js";
 import { isEvidenceDerivedWeakTopic } from "./topicPerformanceService.js";
 
@@ -379,23 +388,32 @@ export function getGroundingContext(state, message = "") {
   return { topic, course };
 }
 
-export function retrieveGroundedSources({ state, message = "", topic, course, limit = 4 }) {
+export function retrieveGroundedSources({
+  state,
+  message = "",
+  topic,
+  course,
+  limit = 4,
+  queryEmbedding = null,
+  embeddingIdentity = null,
+  allowAutoDeterministic = true,
+}) {
   const tokens = uniqueStrings([
     ...keywordTokens(message),
     ...keywordTokens(topic?.title || ""),
     ...keywordTokens(course?.title || ""),
     ...(topic?.weakSignals || []).flatMap(keywordTokens),
   ]);
-  const scoreText = (value) => {
-    const text = String(value || "").toLowerCase();
-    return tokens.reduce((score, token) => score + (text.includes(token) ? 1 : 0), 0);
-  };
-  const queryEmbedding = createDeterministicEmbedding([
+  const queryText = [
     message,
     topic?.title || "",
     course?.title || "",
     ...(topic?.weakSignals || []),
-  ].join(" "));
+  ].join(" ").trim();
+  const scoreText = (value) => {
+    const text = String(value || "").toLowerCase();
+    return tokens.reduce((score, token) => score + (text.includes(token) ? 1 : 0), 0);
+  };
   const recencyBoost = (value) => {
     const created = toDate(value);
     if (!created) return 0;
@@ -406,49 +424,125 @@ export function retrieveGroundedSources({ state, message = "", topic, course, li
     if (ageDays <= 30) return 0.75;
     return 0;
   };
+
+  let activeIdentity = normalizeEmbeddingIdentity(embeddingIdentity || {});
+  let activeQueryVector = Array.isArray(queryEmbedding) ? queryEmbedding.map((value) => Number(value) || 0) : null;
+  if (
+    !activeQueryVector ||
+    !isEmbeddingIdentityComplete(activeIdentity) ||
+    activeQueryVector.length !== activeIdentity.dimensions
+  ) {
+    activeQueryVector = null;
+    activeIdentity = normalizeEmbeddingIdentity({});
+  }
+  if (!activeQueryVector && allowAutoDeterministic) {
+    activeIdentity = deterministicEmbeddingIdentity();
+    activeQueryVector = createDeterministicEmbedding(queryText, activeIdentity.dimensions);
+  }
+
   const sourceById = new Map(readySourceMaterials(state).map((source) => [source.id, source]));
-  const chunkMatches = readySourceChunks(state)
+  let incompatibleEmbeddingCount = 0;
+  let retryRequiredCount = 0;
+  const rawChunkMatches = readySourceChunks(state)
     .map((chunk) => {
       const source = sourceById.get(chunk.sourceMaterialId);
+      if (!source || source.deletedAt) return null;
       const text = [
         chunk.text || chunk.chunkText,
         chunk.citationLabel,
-        source?.title,
-        source?.filename,
-        source?.citationLabel,
+        source.title,
+        source.filename,
+        source.citationLabel,
         chunk.courseId === course?.id ? course?.title : "",
       ].join(" ");
       const keywordScore = scoreText(text);
-      const semanticRaw = Array.isArray(chunk.embeddingVector)
-        ? Math.max(0, cosineSimilarity(queryEmbedding, chunk.embeddingVector))
+      const chunkIdentity = embeddingIdentityFromChunk(chunk);
+      const primaryEmbedded = chunk.embeddingStatus === "embedded" &&
+        chunk.embeddingRetryRequired !== true &&
+        Array.isArray(chunk.embeddingVector);
+      const semanticEligible = Boolean(
+        activeQueryVector &&
+        primaryEmbedded &&
+        isEmbeddingIdentityComplete(chunkIdentity) &&
+        areEmbeddingIdentitiesCompatible(activeIdentity, chunkIdentity) &&
+        chunk.embeddingVector.length === activeIdentity.dimensions,
+      );
+      if (primaryEmbedded && activeQueryVector && !semanticEligible) {
+        incompatibleEmbeddingCount += 1;
+        return null;
+      }
+      if (
+        chunk.embeddingRetryRequired === true ||
+        ["degraded_fallback", "retry_required", "failed_embedding"].includes(chunk.embeddingStatus)
+      ) {
+        retryRequiredCount += 1;
+      }
+      const semanticRaw = semanticEligible
+        ? Math.max(0, cosineSimilarity(activeQueryVector, chunk.embeddingVector))
         : 0;
-      const courseScore = chunk.courseId === course?.id ? 5 : 0;
-      const topicScore = chunk.topicId === topic?.id ? 4 : 0;
-      const sourceStatusScore = source?.status === "indexed" ? 1.5 : 0;
-      const uploadedScore = source?.sourceType === "uploaded_file" ? 10 : 0;
-      const embeddingScore = chunk.embeddingStatus === "embedded" ? 2 : 0;
-      const score = keywordScore +
-        semanticRaw * 14 +
-        courseScore +
-        topicScore +
-        uploadedScore +
-        embeddingScore +
-        sourceStatusScore +
-        recencyBoost(chunk.createdAt || source?.createdAt);
-      const confidenceScore = Math.min(1, (semanticRaw * 0.45) + (Math.min(keywordScore, 4) / 4 * 0.45) + (source?.sourceType === "uploaded_file" ? 0.1 : 0));
+      const metadataScore =
+        (chunk.courseId === course?.id ? 5 : 0) +
+        (chunk.topicId === topic?.id ? 4 : 0) +
+        (source.status === "indexed" ? 1.5 : 0) +
+        (source.sourceType === "uploaded_file" ? 2 : 0) +
+        recencyBoost(chunk.createdAt || source.createdAt);
       return {
         ...chunk,
         source,
-        score,
         keywordScore,
-        semanticScore: Number(semanticRaw.toFixed(4)),
-        confidenceScore: Number(confidenceScore.toFixed(4)),
-        confidenceLabel: confidenceLabel(confidenceScore),
-        groundingType: source?.sourceType === "uploaded_file" ? "uploaded_chunk" : "academic_context_chunk",
+        semanticRaw,
+        semanticEligible,
+        metadataScore,
+        chunkIdentity,
+        groundingType: source.sourceType === "uploaded_file" ? "uploaded_chunk" : "academic_context_chunk",
         snippet: String(chunk.text || chunk.chunkText || "").slice(0, 420),
       };
     })
-    .filter((chunk) => chunk.score > 0 && chunk.source && !chunk.source.deletedAt);
+    .filter(Boolean);
+
+  const lexicalRank = new Map(
+    rawChunkMatches
+      .filter((chunk) => chunk.keywordScore > 0)
+      .sort((left, right) => right.keywordScore - left.keywordScore || right.metadataScore - left.metadataScore)
+      .map((chunk, index) => [chunk.id, index + 1]),
+  );
+  const semanticRank = new Map(
+    rawChunkMatches
+      .filter((chunk) => chunk.semanticEligible && chunk.semanticRaw > 0)
+      .sort((left, right) => right.semanticRaw - left.semanticRaw)
+      .map((chunk, index) => [chunk.id, index + 1]),
+  );
+  const chunkMatches = rawChunkMatches
+    .map((chunk) => {
+      const lexicalPosition = lexicalRank.get(chunk.id) || null;
+      const semanticPosition = semanticRank.get(chunk.id) || null;
+      const rrfScore =
+        (lexicalPosition ? 1 / (60 + lexicalPosition) : 0) +
+        (semanticPosition ? 1 / (60 + semanticPosition) : 0);
+      const lexicalConfidence = Math.min(chunk.keywordScore, 4) / 4;
+      const confidenceScore = Math.min(
+        1,
+        (chunk.semanticEligible ? chunk.semanticRaw * 0.45 : 0) +
+        lexicalConfidence * 0.5 +
+        (chunk.source.sourceType === "uploaded_file" ? 0.05 : 0),
+      );
+      return {
+        ...chunk,
+        score: rrfScore * 1000 + chunk.metadataScore,
+        rrfScore: Number(rrfScore.toFixed(6)),
+        lexicalRank: lexicalPosition,
+        semanticRank: semanticPosition,
+        semanticScore: Number(chunk.semanticRaw.toFixed(4)),
+        confidenceScore: Number(confidenceScore.toFixed(4)),
+        confidenceLabel: confidenceLabel(confidenceScore),
+      };
+    })
+    .filter((chunk) => chunk.rrfScore > 0)
+    .sort((left, right) =>
+      right.rrfScore - left.rrfScore ||
+      right.confidenceScore - left.confidenceScore ||
+      right.metadataScore - left.metadataScore);
+
   const materialMatches = readySourceMaterials(state)
     .map((source) => {
       const text = [
@@ -460,26 +554,35 @@ export function retrieveGroundedSources({ state, message = "", topic, course, li
         source.courseId === course?.id ? course?.title : "",
         topic?.sourceMaterialIds?.includes(source.id) ? topic?.title : "",
       ].join(" ");
-      const score = scoreText(text) + (source.courseId === course?.id ? 2 : 0) + (topic?.sourceMaterialIds?.includes(source.id) ? 3 : 0) + (source.sourceType === "uploaded_file" ? 4 : 0);
-      return { ...source, score, groundingType: source.sourceType === "uploaded_file" ? "uploaded_material" : "student_material" };
+      const keywordScore = scoreText(text);
+      const metadataScore =
+        (source.courseId === course?.id ? 2 : 0) +
+        (topic?.sourceMaterialIds?.includes(source.id) ? 3 : 0) +
+        (source.sourceType === "uploaded_file" ? 1 : 0);
+      return {
+        ...source,
+        keywordScore,
+        score: keywordScore * 10 + metadataScore,
+        groundingType: source.sourceType === "uploaded_file" ? "uploaded_material" : "student_material",
+      };
     })
-    .filter((source) => source.score > 0);
+    .filter((source) => source.keywordScore > 0);
 
   const memoryMatches = (state.memoryItems || [])
     .filter((item) => !item.deletedAt)
     .map((item) => {
       const text = [item.title, item.body, item.courseTitle, ...(item.sourceLabels || [])].join(" ");
-      const score = scoreText(text) + (item.courseId === course?.id ? 2 : 0) + (item.topicId === topic?.id ? 3 : 0);
-      return { ...item, score, groundingType: "memory_extraction" };
+      const keywordScore = scoreText(text);
+      const score = keywordScore * 10 + (item.courseId === course?.id ? 2 : 0) + (item.topicId === topic?.id ? 3 : 0);
+      return { ...item, keywordScore, score, groundingType: "memory_extraction" };
     })
-    .filter((item) => item.score > 0);
+    .filter((item) => item.keywordScore > 0);
 
   const sources = materialMatches
     .sort((left, right) => right.score - left.score)
     .slice(0, limit);
   const chunks = chunkMatches
     .filter((chunk) => chunk.confidenceScore >= MIN_GROUNDING_CONFIDENCE)
-    .sort((left, right) => right.score - left.score)
     .slice(0, limit);
   const memories = memoryMatches
     .sort((left, right) => right.score - left.score)
@@ -504,8 +607,15 @@ export function retrieveGroundedSources({ state, message = "", topic, course, li
       type: item.groundingType,
       memoryId: item.id,
     })));
-  const fallbackConfidence = (sources.length || memories.length) ? 0.5 : 0;
+  const fallbackKeywordScore = Math.max(
+    sources[0]?.keywordScore || 0,
+    memories[0]?.keywordScore || 0,
+  );
+  const fallbackConfidence = fallbackKeywordScore
+    ? Math.min(0.65, 0.2 + Math.min(fallbackKeywordScore, 4) * 0.1)
+    : 0;
   const bestConfidence = chunks[0]?.confidenceScore ?? fallbackConfidence;
+  const semanticAvailable = chunks.some((chunk) => chunk.semanticEligible && chunk.semanticScore > 0);
   return {
     chunks,
     sources,
@@ -513,12 +623,15 @@ export function retrieveGroundedSources({ state, message = "", topic, course, li
     labels: [...chunkLabels, ...sourceLabels, ...memoryLabels]
       .filter((item, index, items) => item.label && items.findIndex((other) => other.type === item.type && other.label === item.label) === index),
     hasUploadedMaterial: chunks.some((chunk) => chunk.source?.sourceType === "uploaded_file") || sources.some((source) => source.sourceType === "uploaded_file") || memories.some((item) => item.kind === "source_extraction"),
-    retrievalMode: chunks.some((chunk) => chunk.embeddingStatus === "embedded") ? "local-json" : "keyword-fallback",
+    retrievalMode: semanticAvailable ? "local-rrf" : "keyword-fallback",
     confidence: {
       score: Number(bestConfidence.toFixed(4)),
       label: confidenceLabel(bestConfidence),
       lowConfidence: bestConfidence < MIN_GROUNDING_CONFIDENCE,
-      semanticAvailable: chunks.some((chunk) => chunk.embeddingStatus === "embedded"),
+      semanticAvailable,
+      incompatibleEmbeddingCount,
+      retryRequiredCount,
+      retrievalDegraded: incompatibleEmbeddingCount > 0 || retryRequiredCount > 0,
     },
   };
 }

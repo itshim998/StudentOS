@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { confidenceLabel, createDeterministicEmbedding } from "../embeddings/embeddingService.js";
+import {
+  buildEmbeddingQueryText,
+  confidenceLabel,
+  embedQueryText,
+  getEmbeddingConfig,
+  normalizeEmbeddingIdentity,
+} from "../embeddings/embeddingService.js";
 import { createEmptyStudentState, MIN_GROUNDING_CONFIDENCE, retrieveGroundedSources } from "../domain/studentosDomain.js";
 import { publicShardRoute, routeUserToShard } from "../supabase/shardRouter.js";
 import { createInitialProductLifecycle, normalizeProductLifecycle } from "../domain/productLifecycleService.js";
@@ -474,12 +480,21 @@ function rowForCollection(key, item, userId) {
       status: item.status || "indexed",
       embedding_status: item.embeddingStatus || "pending_embedding",
       embedding_provider: item.embeddingProvider || null,
+      embedding_family: item.embeddingFamily || null,
       embedding_model: item.embeddingModel || null,
+      embedding_version: item.embeddingVersion || null,
       embedding_hash: item.embeddingHash || null,
       embedding_dimensions: item.embeddingDimensions ?? null,
       embedding_values: item.embeddingVector || null,
       embedding_updated_at: item.embeddingUpdatedAt || null,
       embedding_error: item.embeddingError || null,
+      embedding_retry_required: item.embeddingRetryRequired === true,
+      embedding_fallback: item.embeddingFallback === true,
+      embedding_target_provider: item.embeddingTargetProvider || null,
+      embedding_target_family: item.embeddingTargetFamily || null,
+      embedding_target_model: item.embeddingTargetModel || null,
+      embedding_target_version: item.embeddingTargetVersion || null,
+      embedding_target_dimensions: item.embeddingTargetDimensions ?? null,
       deleted_at: item.deletedAt || null,
     };
   }
@@ -619,7 +634,9 @@ function rowForCollection(key, item, userId) {
       source_chunk_id: item.sourceChunkId || null,
       memory_item_id: item.memoryItemId || null,
       provider: item.provider || "pending",
+      embedding_family: item.embeddingFamily || item.family || null,
       model: item.model || "pending",
+      embedding_version: item.embeddingVersion || item.version || null,
       vector_table: item.vectorTable || null,
       vector_ref: item.vectorRef || null,
       chunk_index: item.chunkIndex ?? null,
@@ -627,6 +644,8 @@ function rowForCollection(key, item, userId) {
       embedding_hash: item.embeddingHash || null,
       embedding_values: item.embeddingValues || null,
       embedding_status: item.embeddingStatus || item.status || "pending_embedding",
+      retry_required: item.retryRequired === true || item.embeddingRetryRequired === true,
+      fallback: item.fallback === true || item.embeddingFallback === true,
       error: item.error || null,
       status: item.status || item.embeddingStatus || "pending",
     };
@@ -978,9 +997,10 @@ function isStaleExportJob(job, lockTimeoutSeconds = 600) {
   return Date.now() - Date.parse(job.lockedAt) > Number(lockTimeoutSeconds || 600) * 1000;
 }
 
-function rpcRowsToRetrieval(rows = [], { fallbackMode = "rpc-vector" } = {}) {
+function rpcRowsToRetrieval(rows = [], { fallbackMode = "rpc-fts-rrf", queryResult = null } = {}) {
   const chunks = rows.map((row) => {
     const confidenceScore = Number(row.confidence_score ?? row.similarity ?? 0) || 0;
+    const semanticScore = Number(row.similarity || 0) || 0;
     const source = {
       id: row.source_id,
       title: row.source_title,
@@ -998,16 +1018,25 @@ function rpcRowsToRetrieval(rows = [], { fallbackMode = "rpc-vector" } = {}) {
       snippet: row.snippet || "",
       citationLabel: row.citation_label || row.source_title,
       source,
-      score: Number(row.similarity || 0) * 100,
-      semanticScore: Number(row.similarity || 0),
+      score: Number(row.rrf_score || 0) * 1000,
+      semanticScore,
+      lexicalScore: Number(row.lexical_score || 0) || 0,
+      rrfScore: Number(row.rrf_score || 0) || 0,
       confidenceScore,
       confidenceLabel: row.confidence_label || confidenceLabel(confidenceScore),
       groundingType: "uploaded_chunk",
-      embeddingStatus: row.embedding_status || "embedded",
+      embeddingStatus: row.embedding_status || "pending_embedding",
+      embeddingProvider: row.embedding_provider || null,
+      embeddingFamily: row.embedding_family || null,
+      embeddingModel: row.embedding_model || null,
+      embeddingVersion: row.embedding_version || null,
+      embeddingDimensions: Number(row.embedding_dimensions || 0) || null,
       retrievalMode: row.retrieval_mode || fallbackMode,
     };
   }).filter((chunk) => chunk.confidenceScore >= MIN_GROUNDING_CONFIDENCE);
   const bestConfidence = chunks[0]?.confidenceScore || 0;
+  const semanticAvailable = chunks.some((chunk) =>
+    chunk.semanticScore > 0 && chunk.retrievalMode === "rpc-pgvector-rrf");
   return {
     chunks,
     sources: [],
@@ -1023,25 +1052,62 @@ function rpcRowsToRetrieval(rows = [], { fallbackMode = "rpc-vector" } = {}) {
     })),
     hasUploadedMaterial: chunks.length > 0,
     retrievalMode: chunks[0]?.retrievalMode || fallbackMode,
+    queryEmbeddingStatus: queryResult?.status || "unknown",
+    queryEmbeddingError: queryResult?.error || null,
     confidence: {
       score: Number(bestConfidence.toFixed(4)),
       label: confidenceLabel(bestConfidence),
       lowConfidence: bestConfidence < MIN_GROUNDING_CONFIDENCE,
-      semanticAvailable: chunks.length > 0,
+      semanticAvailable,
+      incompatibleEmbeddingCount: 0,
+      retryRequiredCount: 0,
+      retrievalDegraded: queryResult?.status !== "embedded" || !semanticAvailable,
     },
   };
 }
 
-function localRetrieval({ state, message, topic, course, limit, fallbackReason = null }) {
-  const retrieval = retrieveGroundedSources({ state, message, topic, course, limit });
-  if (fallbackReason) {
-    retrieval.rpcFallbackReason = fallbackReason;
+async function localRetrieval({
+  state,
+  message,
+  topic,
+  course,
+  limit,
+  fallbackReason = null,
+  embeddingConfig = getEmbeddingConfig(),
+  embeddingFetch = globalThis.fetch,
+  allowSemantic = true,
+}) {
+  const queryText = buildEmbeddingQueryText({ message, topic, course });
+  const queryResult = allowSemantic
+    ? await embedQueryText({ text: queryText, config: embeddingConfig, fetchImpl: embeddingFetch })
+    : { status: "disabled", vector: null, identity: null, error: "semantic_fallback_disabled" };
+  const retrieval = retrieveGroundedSources({
+    state,
+    message,
+    topic,
+    course,
+    limit,
+    queryEmbedding: queryResult.status === "embedded" ? queryResult.vector : null,
+    embeddingIdentity: queryResult.status === "embedded" ? queryResult.identity : null,
+    allowAutoDeterministic: false,
+  });
+  retrieval.queryEmbeddingStatus = queryResult.status;
+  retrieval.queryEmbeddingError = queryResult.error || null;
+  if (queryResult.status !== "embedded") {
+    retrieval.confidence = {
+      ...retrieval.confidence,
+      semanticAvailable: false,
+      retrievalDegraded: true,
+    };
   }
+  if (fallbackReason) retrieval.rpcFallbackReason = fallbackReason;
   return retrieval;
 }
 
 class MockStudentOsRepository {
-  constructor() {
+  constructor({ embeddingConfig = getEmbeddingConfig(), embeddingFetch = globalThis.fetch } = {}) {
+    this.embeddingConfig = embeddingConfig;
+    this.embeddingFetch = embeddingFetch;
     this.states = new Map();
     this.sourceObjects = new Map();
     this.exportPackages = new Map();
@@ -1595,7 +1661,12 @@ class MockStudentOsRepository {
   }
 
   async retrieveGroundedChunks(session, args) {
-    return localRetrieval(args);
+    return localRetrieval({
+      ...args,
+      embeddingConfig: this.embeddingConfig,
+      embeddingFetch: this.embeddingFetch,
+      allowSemantic: true,
+    });
   }
 
   async listRunnableJobs({ limit = 25 } = {}) {
@@ -1676,9 +1747,11 @@ class MockStudentOsRepository {
 }
 
 class SupabaseStudentOsRepository {
-  constructor({ config, shardClients }) {
+  constructor({ config, shardClients, embeddingConfig = getEmbeddingConfig(), embeddingFetch = globalThis.fetch }) {
     this.config = config;
     this.shardClients = shardClients;
+    this.embeddingConfig = embeddingConfig;
+    this.embeddingFetch = embeddingFetch;
   }
 
   canUseSupabase(session) {
@@ -2531,28 +2604,56 @@ class SupabaseStudentOsRepository {
 
   async retrieveGroundedChunks(session, { state, message, topic, course, limit = 4 }) {
     if (!this.canUseSupabase(session)) {
-      return localRetrieval({ state, message, topic, course, limit });
+      return localRetrieval({
+        state,
+        message,
+        topic,
+        course,
+        limit,
+        embeddingConfig: this.embeddingConfig,
+        embeddingFetch: this.embeddingFetch,
+      });
     }
     const route = this.route(session);
     if (!route.client?.rpc) {
-      return localRetrieval({ state, message, topic, course, limit, fallbackReason: "rpc_client_unavailable" });
-    }
-    try {
-      const queryEmbedding = createDeterministicEmbedding([
+      return localRetrieval({
+        state,
         message,
-        topic?.title || "",
-        course?.title || "",
-        ...(topic?.weakSignals || []),
-      ].join(" "));
-      const rows = await route.client.rpc("match_source_chunks", {
+        topic,
+        course,
+        limit,
+        fallbackReason: "rpc_client_unavailable",
+        embeddingConfig: this.embeddingConfig,
+        embeddingFetch: this.embeddingFetch,
+        allowSemantic: false,
+      });
+    }
+    const queryText = buildEmbeddingQueryText({ message, topic, course });
+    const queryResult = await embedQueryText({
+      text: queryText,
+      config: this.embeddingConfig,
+      fetchImpl: this.embeddingFetch,
+    });
+    const identity = normalizeEmbeddingIdentity(queryResult.identity || {});
+    try {
+      const rows = await route.client.rpc("match_source_chunks_v2", {
         p_user_id: session.user.id,
-        p_query_embedding: queryEmbedding,
+        p_query_text: queryText,
+        p_query_embedding: queryResult.status === "embedded" ? queryResult.vector : null,
+        p_embedding_provider: identity.provider || null,
+        p_embedding_family: identity.family || null,
+        p_embedding_model: identity.model || null,
+        p_embedding_version: identity.version || null,
+        p_embedding_dimensions: identity.dimensions || null,
         p_course_id: course?.id || null,
         p_topic_id: topic?.id || null,
         p_match_count: limit,
         p_min_similarity: MIN_GROUNDING_CONFIDENCE,
       });
-      return rpcRowsToRetrieval(rows, { fallbackMode: rows?.[0]?.retrieval_mode || "rpc-vector" });
+      return rpcRowsToRetrieval(rows, {
+        fallbackMode: rows?.[0]?.retrieval_mode || "rpc-fts-rrf",
+        queryResult,
+      });
     } catch (error) {
       return localRetrieval({
         state,
@@ -2561,6 +2662,9 @@ class SupabaseStudentOsRepository {
         course,
         limit,
         fallbackReason: safeErrorLabel(error),
+        embeddingConfig: this.embeddingConfig,
+        embeddingFetch: this.embeddingFetch,
+        allowSemantic: false,
       });
     }
   }
@@ -2661,9 +2765,16 @@ class SupabaseStudentOsRepository {
 }
 
 export class StudentOsRepository {
-  constructor({ config, shardClients, routerClient = null, aiRouterCoordinator = null }) {
-    this.mock = new MockStudentOsRepository();
-    this.supabase = new SupabaseStudentOsRepository({ config, shardClients });
+  constructor({
+    config,
+    shardClients,
+    routerClient = null,
+    aiRouterCoordinator = null,
+    embeddingConfig = getEmbeddingConfig(),
+    embeddingFetch = globalThis.fetch,
+  }) {
+    this.mock = new MockStudentOsRepository({ embeddingConfig, embeddingFetch });
+    this.supabase = new SupabaseStudentOsRepository({ config, shardClients, embeddingConfig, embeddingFetch });
     this.aiRouterCoordinator = aiRouterCoordinator || new AiRouterV2Coordinator({
       centralClient: routerClient,
       mode: config?.mode === "supabase" ? "supabase" : "mock",

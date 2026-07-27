@@ -42,6 +42,7 @@ const additionalShardMigrations = [
   "supabase/migrations/202607190001_studentos_adaptive_recovery_engine.sql",
   "supabase/migrations/202607190002_studentos_adaptive_recovery_hardening.sql",
   "supabase/migrations/202607210002_studentos_ai_router_v2_shards.sql",
+  "supabase/migrations/202607270001_c02_embedding_space_integrity.sql",
 ];
 
 const additionalAuthMigrations = [

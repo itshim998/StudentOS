@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { getSupabaseEnvironment, loadDotEnv } from "../backend/config/supabaseEnv.js";
 import { createSupabaseClients } from "../backend/supabase/clients.js";
-import { createDeterministicEmbedding, contentHash } from "../backend/embeddings/embeddingService.js";
+import {
+  contentHash,
+  createDeterministicEmbedding,
+  deterministicEmbeddingIdentity,
+} from "../backend/embeddings/embeddingService.js";
 
 function safeError(error) {
   return String(error?.message || error || "rpc_verification_failed")
@@ -22,6 +26,7 @@ async function verifyShard(shard) {
   const chunkId = `chunk_${sourceId}_0`;
   const text = "StudentOS live RPC verification chunk about quadratic roots and vertex form.";
   const embedding = createDeterministicEmbedding(text);
+  const identity = deterministicEmbeddingIdentity(embedding.length);
   const now = new Date().toISOString();
   const sourcePayload = {
     id: sourceId,
@@ -47,7 +52,9 @@ async function verifyShard(shard) {
     status: "indexed",
     embeddingStatus: "embedded",
     embeddingProvider: "mock_deterministic",
-    embeddingModel: "studentos-hash-embedding-v1",
+    embeddingFamily: identity.family,
+    embeddingModel: identity.model,
+    embeddingVersion: identity.version,
     embeddingHash: contentHash(text),
     embeddingDimensions: embedding.length,
     embeddingVector: embedding,
@@ -80,8 +87,10 @@ async function verifyShard(shard) {
     citation_label: chunkPayload.citationLabel,
     status: "indexed",
     embedding_status: "embedded",
-    embedding_provider: "mock_deterministic",
-    embedding_model: "studentos-hash-embedding-v1",
+    embedding_provider: identity.provider,
+    embedding_family: identity.family,
+    embedding_model: identity.model,
+    embedding_version: identity.version,
     embedding_hash: chunkPayload.embeddingHash,
     embedding_dimensions: embedding.length,
     embedding_values: embedding,
@@ -98,9 +107,15 @@ async function verifyShard(shard) {
     backgroundJobsNote = safeError(error);
   }
 
-  const rows = await shard.client.rpc("match_source_chunks", {
+  const rows = await shard.client.rpc("match_source_chunks_v2", {
     p_user_id: userId,
+    p_query_text: text,
     p_query_embedding: embedding,
+    p_embedding_provider: identity.provider,
+    p_embedding_family: identity.family,
+    p_embedding_model: identity.model,
+    p_embedding_version: identity.version,
+    p_embedding_dimensions: identity.dimensions,
     p_course_id: "course_rpc_verify",
     p_topic_id: null,
     p_match_count: 3,
@@ -109,9 +124,15 @@ async function verifyShard(shard) {
   assertOk(Array.isArray(rows), `${shard.label}: RPC did not return an array`);
   assertOk(rows.some((row) => row.chunk_id === chunkId), `${shard.label}: RPC did not return the verification chunk`);
 
-  const isolatedRows = await shard.client.rpc("match_source_chunks", {
+  const isolatedRows = await shard.client.rpc("match_source_chunks_v2", {
     p_user_id: otherUserId,
+    p_query_text: text,
     p_query_embedding: embedding,
+    p_embedding_provider: identity.provider,
+    p_embedding_family: identity.family,
+    p_embedding_model: identity.model,
+    p_embedding_version: identity.version,
+    p_embedding_dimensions: identity.dimensions,
     p_course_id: "course_rpc_verify",
     p_topic_id: null,
     p_match_count: 3,
@@ -125,7 +146,7 @@ async function verifyShard(shard) {
     rpcVerified: true,
     backgroundJobsVerified,
     backgroundJobsNote,
-    retrievalMode: rows[0]?.retrieval_mode || "rpc-json",
+    retrievalMode: rows[0]?.retrieval_mode || "rpc-fts-rrf",
     returnedRows: rows.length,
     userIsolationVerified: true,
   };
