@@ -40,10 +40,9 @@ jobs:
           from pathlib import Path
           path = Path("scripts/finalizeC01Remediation.py")
           text = path.read_text(encoding="utf-8")
-          broken = 'study = study_path.read_text(encoding="utf-8")nstudy_old ='
-          if broken not in text:
-              raise SystemExit("Expected integration-script typo was not found")
-          path.write_text(text.replace(broken, 'study = study_path.read_text(encoding="utf-8")\nstudy_old =', 1), encoding="utf-8")
+          text = text.replace('study = study_path.read_text(encoding="utf-8")nstudy_old =', 'study = study_path.read_text(encoding="utf-8")\nstudy_old =', 1)
+          text = text.replace('replace_once(study, nstudy_old, nstudy_new,', 'replace_once(study, study_old, study_new,', 1)
+          path.write_text(text, encoding="utf-8")
           PY
           set +e
           python scripts/finalizeC01Remediation.py > /tmp/c01-finalize.log 2>&1
