@@ -24,6 +24,12 @@ jobs:
           ref: fix/c01-assessment-integrity
           fetch-depth: 0
 
+      - name: Stop after a captured diagnostic
+        if: hashFiles('c01-remediation-error.log') != ''
+        run: |
+          echo "A remediation diagnostic is already committed on the branch."
+          exit 1
+
       - name: Use Node 22
         uses: actions/setup-node@v4
         with:
@@ -47,7 +53,20 @@ jobs:
           script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
           Path('/tmp/c01-remediation.py').write_text(script, encoding='utf-8')
           PY
-          python /tmp/c01-remediation.py
+          set +e
+          python /tmp/c01-remediation.py > /tmp/c01-remediation.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/c01-remediation.log
+          if [ "$status" -ne 0 ]; then
+            cp /tmp/c01-remediation.log c01-remediation-error.log
+            git config user.name "StudentOS Security Remediation"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add c01-remediation-error.log
+            git commit -m "chore: capture C-01 remediation failure"
+            git push origin HEAD:fix/c01-assessment-integrity
+            exit "$status"
+          fi
 
       - name: Install dependencies
         run: npm ci
@@ -75,8 +94,9 @@ jobs:
         run: |
           rm .github/workflows/c01-assessment-integrity-remediation.yml
           rm .github/workflows/c01-pr-remediation-trigger.yml
+          rm -f c01-remediation-error.log
           git config user.name "StudentOS Security Remediation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/domain/studentosDomain.js backend/ai/studyTestService.js backend/server.js backend/testDomain.js backend/testC01AssessmentIntegrity.js package.json .github/workflows/c01-assessment-integrity-remediation.yml .github/workflows/c01-pr-remediation-trigger.yml
+          git add backend/domain/studentosDomain.js backend/ai/studyTestService.js backend/server.js backend/testDomain.js backend/testC01AssessmentIntegrity.js package.json .github/workflows/c01-assessment-integrity-remediation.yml .github/workflows/c01-pr-remediation-trigger.yml c01-remediation-error.log
           git commit -m "Fix C-01 assessment score integrity"
           git push origin HEAD:fix/c01-assessment-integrity
