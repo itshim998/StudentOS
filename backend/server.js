@@ -587,13 +587,54 @@ function publicState(state, persistence) {
     assignments,
     roadmap,
     testResults: (state.testResults || []).map((result) => {
-      const { topicEvidence, ...safeResult } = result;
-      return safeResult;
-    }),
+    const {
+      topicEvidence,
+      answerKey,
+      answer_key,
+      gradingRubric,
+      grading_rubric,
+      hiddenSolutions,
+      hidden_solutions,
+      internalEvaluation,
+      internal_evaluation,
+      providerPayload,
+      provider_payload,
+      answers,
+      ...safeResult
+    } = result;
+    const safeAnswers = Array.isArray(answers)
+      ? answers.map((answer) => {
+          if (!answer || typeof answer !== "object" || Array.isArray(answer)) return answer;
+          const {
+            correct,
+            correctAnswer,
+            correct_answer,
+            expectedAnswer,
+            expected_answer,
+            answerKey: nestedAnswerKey,
+            answer_key: nestedAnswerKeySnake,
+            isCorrect,
+            is_correct,
+            rubric,
+            gradingRubric: nestedGradingRubric,
+            grading_rubric: nestedGradingRubricSnake,
+            internalEvaluation: nestedInternalEvaluation,
+            internal_evaluation: nestedInternalEvaluationSnake,
+            ...safeAnswer
+          } = answer;
+          return safeAnswer;
+        })
+      : [];
+    return { ...safeResult, answers: safeAnswers };
+  }),
     testSessions: (state.testSessions || []).filter(isAcademicContextRecord).map((session) => publicTestSession(session)),
     revisionEvents: (state.revisionEvents || []).filter(isAcademicContextRecord),
     tutorLessons: (state.tutorLessons || []).filter(isAcademicContextRecord),
     assignmentAutomationContracts: (state.assignmentAutomationContracts || []).filter(isAcademicContextRecord),
+    assignmentLearningFlows: (state.assignmentLearningFlows || []).map((flow) => ({
+      ...flow,
+      testSession: flow.testSession ? publicTestSession(flow.testSession) : null,
+    })),
     memoryItems: (state.memoryItems || []).filter(isAcademicContextRecord),
     classroomItems: (state.classroomItems || [])
       .filter((item) => item.selectionState !== "archived")

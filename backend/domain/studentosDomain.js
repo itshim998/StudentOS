@@ -144,20 +144,164 @@ function answerValue(answer) {
   return answer;
 }
 
+const LEGACY_SCORE_FORBIDDEN_TOP_LEVEL_FIELDS = new Set([
+  "scorePercent",
+  "score_percent",
+  "answerKey",
+  "answer_key",
+  "creditsAwarded",
+  "credits_awarded",
+  "mastery",
+  "masteryBand",
+  "mastery_band",
+  "isCorrect",
+  "is_correct",
+  "correct",
+  "correctAnswer",
+  "correct_answer",
+  "expectedAnswer",
+  "expected_answer",
+  "rubric",
+  "gradingRubric",
+  "grading_rubric",
+  "internalEvaluation",
+  "internal_evaluation",
+]);
+
+const LEGACY_SCORE_FORBIDDEN_ANSWER_FIELDS = new Set([
+  "isCorrect",
+  "is_correct",
+  "correct",
+  "correctAnswer",
+  "correct_answer",
+  "expectedAnswer",
+  "expected_answer",
+  "answerKey",
+  "answer_key",
+  "creditsAwarded",
+  "credits_awarded",
+  "mastery",
+  "masteryBand",
+  "mastery_band",
+  "score",
+  "scorePercent",
+  "score_percent",
+  "marks",
+  "awardedMarks",
+  "awarded_marks",
+  "rubric",
+  "gradingRubric",
+  "grading_rubric",
+  "internalEvaluation",
+  "internal_evaluation",
+]);
+
+function legacyScoreError(message, status = 400, code = "legacy_test_score_invalid") {
+  const error = new Error(message);
+  error.status = status;
+  error.code = code;
+  return error;
+}
+
+function hasOwn(record, key) {
+  return Boolean(record && Object.prototype.hasOwnProperty.call(record, key));
+}
+
+function assertNoClientAssessmentAuthority(payload = {}) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw legacyScoreError("A test score request must be a JSON object.");
+  }
+  for (const field of LEGACY_SCORE_FORBIDDEN_TOP_LEVEL_FIELDS) {
+    if (hasOwn(payload, field)) {
+      throw legacyScoreError(`Client-controlled assessment field is not allowed: ${field}.`, 400, "legacy_test_score_authority_rejected");
+    }
+  }
+  for (const answer of Array.isArray(payload.answers) ? payload.answers : []) {
+    if (!answer || typeof answer !== "object" || Array.isArray(answer)) continue;
+    for (const field of LEGACY_SCORE_FORBIDDEN_ANSWER_FIELDS) {
+      if (hasOwn(answer, field)) {
+        throw legacyScoreError(`Client-controlled answer field is not allowed: ${field}.`, 400, "legacy_test_score_authority_rejected");
+      }
+    }
+  }
+}
+
+function legacyQuestionId(question) {
+  return String(question?.id ?? question?.questionId ?? question?.question_id ?? "").trim();
+}
+
+function comparableAnswer(value) {
+  return String(value ?? "").trim();
+}
+
+function serverOwnedAnswerKey(session) {
+  const questions = Array.isArray(session?.questions) ? session.questions : [];
+  let answerKey = Array.isArray(session?.answerKey) ? session.answerKey : null;
+  if (!answerKey && questions.length && questions.every((question) => hasOwn(question, "answer"))) {
+    answerKey = questions.map((question) => question.answer);
+  }
+  if (!questions.length || !answerKey || answerKey.length !== questions.length) {
+    throw legacyScoreError("This test does not have a complete server-owned answer key.", 409, "legacy_test_answer_key_unavailable");
+  }
+  return [...answerKey];
+}
+
+function normalizeLegacySubmittedAnswers(session, answers) {
+  const questions = Array.isArray(session?.questions) ? session.questions : [];
+  const questionIds = questions.map(legacyQuestionId);
+  if (!questionIds.length || questionIds.some((questionId) => !questionId) || new Set(questionIds).size !== questionIds.length) {
+    throw legacyScoreError("This test has invalid server-owned question identifiers.", 409, "legacy_test_question_set_invalid");
+  }
+  if (!Array.isArray(answers) || answers.length !== questionIds.length) {
+    throw legacyScoreError("Submit exactly one answer for every test question.", 400, "legacy_test_answer_count_mismatch");
+  }
+  const allowedQuestionIds = new Set(questionIds);
+  const answersByQuestionId = new Map();
+  for (const answer of answers) {
+    if (!answer || typeof answer !== "object" || Array.isArray(answer)) {
+      throw legacyScoreError("Every submitted answer must include its question id.", 400, "legacy_test_answer_shape_invalid");
+    }
+    const questionId = String(answer.questionId ?? answer.question_id ?? "").trim();
+    if (!questionId || !allowedQuestionIds.has(questionId)) {
+      throw legacyScoreError("A submitted answer does not belong to this test.", 400, "legacy_test_question_id_mismatch");
+    }
+    if (answersByQuestionId.has(questionId)) {
+      throw legacyScoreError("Each test question can be answered only once.", 400, "legacy_test_duplicate_question_id");
+    }
+    const selected = answer.selected ?? answer.answer ?? answer.value ?? "";
+    answersByQuestionId.set(questionId, {
+      questionId,
+      selected: String(selected ?? ""),
+    });
+  }
+  if (answersByQuestionId.size !== questionIds.length) {
+    throw legacyScoreError("The submitted question ids do not exactly match this test.", 400, "legacy_test_question_id_mismatch");
+  }
+  return questionIds.map((questionId) => answersByQuestionId.get(questionId));
+}
+
+function legacyAnswerSignature(answers = []) {
+  return JSON.stringify((answers || []).map((answer) => ({
+    questionId: String(answer?.questionId || ""),
+    selected: String(answer?.selected ?? ""),
+  })));
+}
+
+function buildServerEvaluatedAnswers(session, orderedAnswers, answerKey, topic) {
+  return session.questions.map((question, index) => ({
+    question: question.prompt || question.question || `Question ${index + 1}`,
+    questionId: legacyQuestionId(question),
+    selected: orderedAnswers[index].selected,
+    correct: answerKey[index],
+    concept: question.concept || topic.title,
+    isCorrect: comparableAnswer(orderedAnswers[index].selected) === comparableAnswer(answerKey[index]),
+  }));
+}
+
 export function scoreMcqAnswers({ answers = [], answerKey = [] }) {
-  if (!Array.isArray(answers) || answers.length === 0) return null;
-  const markedAnswers = answers.filter((answer) => answer && typeof answer === "object" && typeof answer.isCorrect === "boolean");
-  if (markedAnswers.length === answers.length) {
-    const correctCount = markedAnswers.filter((answer) => answer.isCorrect).length;
-    return Math.round((correctCount / answers.length) * 100);
-  }
-  if (Array.isArray(answerKey) && answerKey.length > 0) {
-    const scoredCount = Math.min(answers.length, answerKey.length);
-    if (scoredCount === 0) return null;
-    const correctCount = answers.slice(0, scoredCount).filter((answer, index) => answerValue(answer) === answerKey[index]).length;
-    return Math.round((correctCount / scoredCount) * 100);
-  }
-  return null;
+  if (!Array.isArray(answers) || !Array.isArray(answerKey) || answers.length === 0 || answers.length !== answerKey.length) return null;
+  const correctCount = answers.filter((answer, index) => comparableAnswer(answerValue(answer)) === comparableAnswer(answerKey[index])).length;
+  return Math.round((correctCount / answerKey.length) * 100);
 }
 
 export function isReasonableExtensionReason(reason) {
@@ -609,6 +753,41 @@ export function createPracticeTestSession({ state, assignment, coverage }) {
   return session;
 }
 
+export function publicLegacyPracticeTestSession(session) {
+  if (!session) return null;
+  const projected = structuredClone(session);
+  delete projected.answerKey;
+  delete projected.answer_key;
+  delete projected.scoreSettlement;
+  delete projected.settledAnswerSignature;
+  delete projected.internalEvaluation;
+  projected.questions = (projected.questions || []).map((question) => {
+    const {
+      answer,
+      answerKey,
+      answer_key,
+      correct,
+      correctAnswer,
+      correct_answer,
+      expectedAnswer,
+      expected_answer,
+      modelAnswer,
+      model_answer,
+      solution,
+      solutions,
+      rubric,
+      gradingRubric,
+      grading_rubric,
+      hiddenSolution,
+      hiddenSolutions,
+      isCorrect,
+      ...safeQuestion
+    } = question || {};
+    return safeQuestion;
+  });
+  return projected;
+}
+
 export function queueRoadmapItem(state, item) {
   normalizeLearningState(state);
   const existing = state.roadmap.find((roadmapItem) =>
@@ -780,7 +959,7 @@ export function handleAssignmentLearningFlow(state, assignmentId) {
       : coverage.status === "partially_covered"
         ? "quick_revision_then_test"
         : "mastery_roadmap_before_test",
-    testSession,
+    testSession: publicLegacyPracticeTestSession(testSession),
     roadmapItem,
     lesson,
     nextAction,
@@ -792,7 +971,6 @@ export function handleAssignmentLearningFlow(state, assignmentId) {
   flow.lesson.sourceLabels = Array.isArray(flow.lesson.sourceLabels) ? flow.lesson.sourceLabels : [];
   if (flow.testSession) {
     flow.testSession.questions = Array.isArray(flow.testSession.questions) ? flow.testSession.questions : [];
-    flow.testSession.answerKey = Array.isArray(flow.testSession.answerKey) ? flow.testSession.answerKey : [];
   }
   state.assignmentLearningFlows.push(flow);
   state.auditLog.push({
@@ -807,21 +985,32 @@ export function handleAssignmentLearningFlow(state, assignmentId) {
   return flow;
 }
 
-export function createTestResult({ studentId, courseId, topicId, scorePercent, type = "mcq", answers = [], answerKey = [] }) {
-  const derivedScore = type === "mcq" ? scoreMcqAnswers({ answers, answerKey }) : null;
-  const score = clampScore(scorePercent) ?? derivedScore ?? 0;
-  const id = `test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+export function createTestResult({ studentId, courseId, topicId, testSessionId, type = "mcq", answers = [], answerKey = [] }) {
+  if (type !== "mcq") {
+    throw legacyScoreError("The legacy score endpoint supports server-owned MCQ sessions only.", 409, "legacy_test_type_unsupported");
+  }
+  const derivedScore = scoreMcqAnswers({ answers, answerKey });
+  if (derivedScore === null) {
+    throw legacyScoreError("The submitted answers could not be scored against the server-owned test.", 400, "legacy_test_score_unavailable");
+  }
+  const safeSessionId = String(testSessionId || "").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 180);
+  const id = safeSessionId
+    ? `test_${safeSessionId}`
+    : `test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   return {
     id,
     studentId,
     courseId,
     topicId,
+    testSessionId: testSessionId || null,
     type,
-    scorePercent: score,
-    masteryBand: masteryBand(score),
-    creditsAwarded: scoreToCredits(score),
-    answers,
-    answerKey,
+    scorePercent: derivedScore,
+    masteryBand: masteryBand(derivedScore),
+    creditsAwarded: scoreToCredits(derivedScore),
+    answers: answers.map((answer) => ({
+      questionId: String(answer.questionId || ""),
+      selected: String(answer.selected ?? ""),
+    })),
     completedAt: new Date().toISOString(),
   };
 }
@@ -911,76 +1100,17 @@ export function createRevisionRoadmapItem({ testResult, topicTitle, assessmentEv
   };
 }
 
-export function applyTestScore(state, payload) {
-  normalizeLearningState(state);
-  let topic = topicById(state, payload.topicId) || state.topics[0];
-  let course = topic ? courseById(state, payload.courseId || topic.courseId) || state.courses[0] : state.courses[0];
-  if (!course) {
-    course = {
-      id: payload.courseId || "course_unmapped",
-      title: "Imported course",
-      teacher: "StudentOS",
-      examDate: null,
-    };
-    state.courses.push(course);
-  }
-  if (!topic) {
-    topic = {
-      id: payload.topicId || "topic_unmapped",
-      courseId: course.id,
-      title: "Imported topic",
-      mastery: "new",
-      coverageState: "uncovered",
-      weakSignals: [],
-    };
-    state.topics.push(topic);
-  }
-  if (!Array.isArray(topic.weakSignals)) topic.weakSignals = [];
-  const session = payload.testSessionId
-    ? state.testSessions.find((testSession) => testSession.id === payload.testSessionId)
-    : null;
-  const answerKey = payload.answerKey || session?.answerKey || session?.questions?.map((question) => question.answer) || [];
-  const result = createTestResult({
-    studentId: state.studentProfile.id,
-    courseId: payload.courseId || topic.courseId,
-    topicId: topic.id,
-    scorePercent: payload.scorePercent,
-    type: payload.type || "mcq",
-    answers: payload.answers || [],
-    answerKey,
-  });
-  const creditEntry = createCreditLedgerEntry(result);
+function legacyScoreResponse(state, { session, result, topic, orderedAnswers, answerKey, replayed }) {
+  const evaluatedAnswers = buildServerEvaluatedAnswers(session, orderedAnswers, answerKey, topic);
   const correctionSheet = createCorrectionSheet({
     topic,
-    answers: payload.answers || [],
+    answers: evaluatedAnswers,
     scorePercent: result.scorePercent,
   });
-  const roadmapItem = createRevisionRoadmapItem({ testResult: result, topicTitle: topic.title, assessmentEvidenceAvailable: false });
-  const revisionEvent = createRevisionEventForTopic({
-    courseId: result.courseId,
-    topicId: result.topicId,
-    reason: result.scorePercent < 70
-      ? "Immediate revision queued after score below 70%."
-      : "Spaced revision within 24 hours after test corrections.",
-  });
-  const lesson = createTutorLesson({
-    course,
-    topic,
-    sources: sourcesForTopic(state, topic),
-    trigger: "test_result",
-    coverageStatus: result.scorePercent < 70 ? "partially_covered" : "covered",
-    wrongConcepts: correctionSheet.weakTopics,
-  });
-
-  state.testResults.push(result);
-  if (creditEntry) state.creditLedger.push(creditEntry);
-  state.roadmap.push(roadmapItem);
-  state.revisionEvents.push(revisionEvent);
-  state.tutorLessons.push(lesson);
-
-  // A manually entered overall percentage remains a valid historical result, but it
-  // is not marks-weighted mapped question evidence and therefore cannot classify a topic as weak.
-
+  const creditEntry = state.creditLedger.find((entry) => entry.sourceId === result.id) || null;
+  const roadmapItem = state.roadmap.find((item) => item.sourceTestResultId === result.id || item.id === `road_followup_${result.id}` || item.id === `road_repair_${result.id}`) || null;
+  const revisionEvent = state.revisionEvents.find((item) => item.sourceTestResultId === result.id || item.id === `rev_${result.id}`) || null;
+  const lesson = state.tutorLessons.find((item) => item.sourceTestResultId === result.id || item.id === `lesson_${result.id}`) || null;
   const scoreSummary = result.scorePercent >= 90
     ? "Mastery is secure. Credits unlocked for convenience workflows."
     : result.scorePercent >= 70
@@ -989,9 +1119,11 @@ export function applyTestScore(state, payload) {
   const nextRecommendedAction = result.scorePercent < 70
     ? "Open the tutor lesson, review the corrections, then complete a StudentOS test."
     : "Review the correction sheet, then do one 24-hour revision check.";
-
   return {
+    id: result.id,
+    testResult: result,
     result,
+    replayed,
     scoreSummary,
     creditEntry,
     correctionSheet,
@@ -1002,6 +1134,117 @@ export function applyTestScore(state, payload) {
     nextRecommendedAction,
     creditBalance: getCreditBalance(state),
   };
+}
+
+export function applyTestScore(state, payload = {}) {
+  normalizeLearningState(state);
+  assertNoClientAssessmentAuthority(payload);
+  const testSessionId = String(payload.testSessionId || "").trim();
+  if (!testSessionId) {
+    throw legacyScoreError("An existing StudentOS test session is required.", 400, "legacy_test_session_required");
+  }
+  const session = state.testSessions.find((testSession) => testSession.id === testSessionId);
+  if (!session) {
+    throw legacyScoreError("This StudentOS test session was not found.", 404, "legacy_test_session_not_found");
+  }
+  const ownerId = session.userId || session.studentId || session.user_id || session.student_id || null;
+  if (ownerId && state.studentProfile?.id && ownerId !== state.studentProfile.id) {
+    throw legacyScoreError("This test session does not belong to the current account.", 403, "legacy_test_session_forbidden");
+  }
+  if ((session.questionFormat || session.type || "mcq") !== "mcq") {
+    throw legacyScoreError("This test must use its dedicated evaluation flow.", 409, "legacy_test_type_unsupported");
+  }
+  const answerKey = serverOwnedAnswerKey(session);
+  const orderedAnswers = normalizeLegacySubmittedAnswers(session, payload.answers);
+  const signature = legacyAnswerSignature(orderedAnswers);
+  const deterministicResultId = `test_${String(session.id).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 180)}`;
+  const existingResult = state.testResults.find((result) => result.testSessionId === session.id || result.id === deterministicResultId) || null;
+  if (existingResult) {
+    const settledSignature = session.settledAnswerSignature || legacyAnswerSignature(existingResult.answers || []);
+    if (settledSignature !== signature) {
+      throw legacyScoreError("This test has already been scored and its answers cannot be changed.", 409, "legacy_test_already_settled");
+    }
+    return legacyScoreResponse(state, {
+      session,
+      result: existingResult,
+      topic: topicById(state, existingResult.topicId || session.topicId),
+      orderedAnswers,
+      answerKey,
+      replayed: true,
+    });
+  }
+  if (session.status !== "open") {
+    throw legacyScoreError("This test session is not open for scoring.", 409, "legacy_test_session_not_open");
+  }
+  const topic = topicById(state, session.topicId);
+  const course = topic ? courseById(state, session.courseId || topic.courseId) : null;
+  if (!topic || !course) {
+    throw legacyScoreError("This test is missing its server-owned academic mapping.", 409, "legacy_test_mapping_unavailable");
+  }
+  const result = createTestResult({
+    studentId: state.studentProfile.id,
+    courseId: course.id,
+    topicId: topic.id,
+    testSessionId: session.id,
+    type: "mcq",
+    answers: orderedAnswers,
+    answerKey,
+  });
+  const evaluatedAnswers = buildServerEvaluatedAnswers(session, orderedAnswers, answerKey, topic);
+  const creditEntry = createCreditLedgerEntry(result);
+  const correctionSheet = createCorrectionSheet({
+    topic,
+    answers: evaluatedAnswers,
+    scorePercent: result.scorePercent,
+  });
+  const roadmapItem = createRevisionRoadmapItem({
+    testResult: result,
+    topicTitle: topic.title,
+    assessmentEvidenceAvailable: true,
+  });
+  roadmapItem.sourceTestResultId = result.id;
+  const revisionEvent = createRevisionEventForTopic({
+    courseId: result.courseId,
+    topicId: result.topicId,
+    reason: result.scorePercent < 70
+      ? "Immediate revision queued after score below 70%."
+      : "Spaced revision within 24 hours after test corrections.",
+  });
+  revisionEvent.id = `rev_${result.id}`;
+  revisionEvent.sourceTestResultId = result.id;
+  const lesson = createTutorLesson({
+    course,
+    topic,
+    sources: sourcesForTopic(state, topic),
+    trigger: "test_result",
+    coverageStatus: result.scorePercent < 70 ? "partially_covered" : "covered",
+    wrongConcepts: correctionSheet.weakTopics,
+  });
+  lesson.id = `lesson_${result.id}`;
+  lesson.sourceTestResultId = result.id;
+
+  if (!state.testResults.some((item) => item.id === result.id)) state.testResults.push(result);
+  if (creditEntry && !state.creditLedger.some((item) => item.id === creditEntry.id)) state.creditLedger.push(creditEntry);
+  if (!state.roadmap.some((item) => item.id === roadmapItem.id)) state.roadmap.push(roadmapItem);
+  if (!state.revisionEvents.some((item) => item.id === revisionEvent.id)) state.revisionEvents.push(revisionEvent);
+  if (!state.tutorLessons.some((item) => item.id === lesson.id)) state.tutorLessons.push(lesson);
+
+  const completedAt = result.completedAt;
+  session.status = "completed";
+  session.completedAt = completedAt;
+  session.updatedAt = completedAt;
+  session.resultId = result.id;
+  session.settlementVersion = 2;
+  session.settledAnswerSignature = signature;
+
+  return legacyScoreResponse(state, {
+    session,
+    result,
+    topic,
+    orderedAnswers,
+    answerKey,
+    replayed: false,
+  });
 }
 
 export function createAssignmentAutomationContract({ assignment, course, topics, creditBalance }) {

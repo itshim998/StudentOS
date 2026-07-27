@@ -273,9 +273,69 @@ export function synchronizeTestSession(session, { now = new Date() } = {}) {
   return session;
 }
 
+const PRIVATE_TEST_SESSION_FIELDS = [
+  "answerKey",
+  "answer_key",
+  "scoreSettlement",
+  "settledAnswerSignature",
+  "gradingRubric",
+  "grading_rubric",
+  "hiddenSolutions",
+  "hidden_solutions",
+  "internalEvaluation",
+  "internal_evaluation",
+  "evaluationPrompt",
+  "evaluation_prompt",
+  "providerPayload",
+  "provider_payload",
+];
+
+function deletePrivateTestFields(record) {
+  if (!record || typeof record !== "object") return record;
+  for (const field of PRIVATE_TEST_SESSION_FIELDS) delete record[field];
+  return record;
+}
+
+function stripQuestionSecrets(question) {
+  const {
+    answer,
+    answerKey,
+    answer_key,
+    correct,
+    correctAnswer,
+    correct_answer,
+    expectedAnswer,
+    expected_answer,
+    modelAnswer,
+    model_answer,
+    solution,
+    solutions,
+    rubric,
+    gradingRubric,
+    grading_rubric,
+    hiddenSolution,
+    hiddenSolutions,
+    isCorrect,
+    ...safeQuestion
+  } = question || {};
+  return safeQuestion;
+}
+
+function stripQuestionContainerSecrets(container) {
+  if (!container || typeof container !== "object") return container;
+  deletePrivateTestFields(container);
+  if (Array.isArray(container.questions)) container.questions = container.questions.map(stripQuestionSecrets);
+  return container;
+}
+
 export function publicTestSession(session, options = {}) {
   const projected = structuredClone(session);
+  deletePrivateTestFields(projected);
   if (projected.answerSheetDraft?.extractedText) delete projected.answerSheetDraft.extractedText;
+  if (projected.answerSheetDraft) deletePrivateTestFields(projected.answerSheetDraft);
+  stripQuestionContainerSecrets(projected);
+  if (projected.testPaper) stripQuestionContainerSecrets(projected.testPaper);
+  if (projected.paper) stripQuestionContainerSecrets(projected.paper);
   return synchronizeTestSession(projected, options);
 }
 
