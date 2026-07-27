@@ -1,0 +1,156 @@
+name: C-02 Final Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: c02-final-validation
+  cancel-in-progress: true
+
+jobs:
+  validate-and-commit:
+    if: github.head_ref == 'fix/c02-embedding-space-integrity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - name: Checkout remediation branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/c02-embedding-space-integrity
+          fetch-depth: 0
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply corrected C-02 patch
+        id: patch
+        shell: bash
+        run: |
+          set +e
+          {
+            python scripts/applyC02Remediation.py
+            python scripts/applyC02Corrections.py
+          } > /tmp/c02-final-patch.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/c02-final-patch.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Publish patch diagnostic
+        if: failure() && steps.patch.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          diagnostic="$(tail -c 12000 /tmp/c02-final-patch.log)"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
+            -f body="### C-02 corrected-patch diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run focused C-02 tests
+        id: focused
+        shell: bash
+        run: |
+          set +e
+          {
+            npm run test:embeddings
+            npm run test:pass9
+            npm run test:rag
+            npm run test:pass7
+            npm run test:sources
+            npm run test:persistence
+          } > /tmp/c02-final-focused.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/c02-final-focused.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Publish focused-test diagnostic
+        if: failure() && steps.focused.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          diagnostic="$(tail -c 14000 /tmp/c02-final-focused.log)"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
+            -f body="### C-02 corrected focused-test diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`"
+
+      - name: Check syntax and core smoke flow
+        run: npm run check:syntax && npm run smoke:core
+
+      - name: Run complete regression suite
+        id: regression
+        shell: bash
+        run: |
+          set +e
+          npm test > /tmp/c02-final-regression.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/c02-final-regression.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Publish regression diagnostic
+        if: failure() && steps.regression.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          {
+            grep -nE 'FAIL|Error:|AssertionError|failed|not ok|Expected|Received|Test timeout|playwright' /tmp/c02-final-regression.log | tail -n 100 || true
+            echo
+            tail -n 180 /tmp/c02-final-regression.log
+          } > /tmp/c02-final-regression-diagnostic.log
+          diagnostic="$(tail -c 14000 /tmp/c02-final-regression-diagnostic.log)"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
+            -f body="### C-02 corrected regression diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`"
+
+      - name: Run production and Azure preflights
+        run: npm run preflight:production && npm run preflight:azure
+
+      - name: Validate migration and repository hygiene
+        shell: bash
+        run: |
+          grep -q "match_source_chunks_v2" supabase/migrations/202607270001_c02_embedding_space_integrity.sql
+          grep -q "embedding_family" supabase/migrations/202607270001_c02_embedding_space_integrity.sql
+          grep -q "embedding_version" supabase/migrations/202607270001_c02_embedding_space_integrity.sql
+          grep -q "embedding_retry_required" supabase/migrations/202607270001_c02_embedding_space_integrity.sql
+          grep -q "rpc-pgvector-rrf" supabase/migrations/202607270001_c02_embedding_space_integrity.sql
+          grep -q "rpc-fts-rrf" supabase/migrations/202607270001_c02_embedding_space_integrity.sql
+          ! grep -q 'match_source_chunks"' backend/repository/studentOsRepository.js
+          ! grep -q 'createDeterministicEmbedding' backend/repository/studentOsRepository.js
+          git diff --check
+
+      - name: Commit validated remediation and remove temporary files
+        shell: bash
+        run: |
+          rm -f .github/workflows/c02-embedding-space-integrity.yml
+          rm -f .github/workflows/c02-pr-trigger.yml
+          rm -f .github/workflows/c02-focused-diagnostic.yml
+          rm -f .github/workflows/c02-final-validation.yml
+          rm -f scripts/applyC02Remediation.py
+          rm -f scripts/applyC02Corrections.py
+          rm -f docs/.gitkeep-c02
+          rm -f docs/c02-validation-trigger.txt
+          git config user.name "StudentOS Security Remediation"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix C-02 embedding space integrity"
+          git push origin HEAD:fix/c02-embedding-space-integrity
