@@ -16,6 +16,7 @@ import {
   getTodayNextActions,
   handleAssignmentLearningFlow,
 } from "./domain/studentosDomain.js";
+import { createPublicStudentWorkspaceDTO } from "./presentation/publicStudentWorkspaceDto.js";
 import {
   applyStudentOnboarding,
   bindProductOnboardingStep,
@@ -580,8 +581,11 @@ function publicState(state, persistence) {
   const dueWork = getClassroomDueWork(state, {
     includeDiscoveredReview: classroomPolicy.courseworkReviewEnabled === true && classroomPolicy.autoCheckEnabled === true,
   });
-  return {
-    ...state,
+  return createPublicStudentWorkspaceDTO({
+    syllabi: (state.syllabi || []).filter(isAcademicContextRecord),
+    exams: (state.exams || []).filter(isAcademicContextRecord),
+    timetable: (state.timetable || []).filter(isAcademicContextRecord),
+    notes: (state.notes || []).filter(isAcademicContextRecord),
     courses,
     topics,
     assignments,
@@ -732,7 +736,7 @@ function publicState(state, persistence) {
     saas: getPublicSaasStatus(saasConfig),
     storagePlan: getSourceStoragePlan(supabaseConfig),
     internalMetricsHidden: true,
-  };
+  });
 }
 
 async function readRecoveryBody(req, schema) {

@@ -65,7 +65,7 @@
     "check:syntax": "node scripts/checkNodeSyntax.js",
     "eval:recovery": "node scripts/runRecoveryEvaluation.js",
     "test:pass36-planning": "node backend/testPass36EvidenceBasedPlanning.js",
-    "test": "npm run test:multi-provider && npm run test:c01-assessment-integrity && npm run test:embeddings && npm run test:pass9 && npm run test:router-v2 && npm run test:recovery && npm run test:pass35 && npm run test:pass354 && npm run test:pass355 && npm run test:pass36 && npm run test:pass36-1 && npm run test:pass36-2 && npm run test:pass36-3 && npm run test:pass36-planning && npm run test:task1 && npm run test:task2 && npm run test:task3-1 && npm run test:task3-2 && npm run test:task3-3 && npm run test:task3-4 && npm run test:phase1 && npm run test:phase1-2 && npm run test:phase2-1 && npm run test:phase2-1b && npm run test:phase2-2 && npm run test:phase2-3 && npm run test:ask-studentos && npm run test:e2e",
+    "test": "npm run test:multi-provider && npm run test:c01-assessment-integrity && npm run test:h01-public-dto && npm run test:embeddings && npm run test:pass9 && npm run test:router-v2 && npm run test:recovery && npm run test:pass35 && npm run test:pass354 && npm run test:pass355 && npm run test:pass36 && npm run test:pass36-1 && npm run test:pass36-2 && npm run test:pass36-3 && npm run test:pass36-planning && npm run test:task1 && npm run test:task2 && npm run test:task3-1 && npm run test:task3-2 && npm run test:task3-3 && npm run test:task3-4 && npm run test:phase1 && npm run test:phase1-2 && npm run test:phase2-1 && npm run test:phase2-1b && npm run test:phase2-2 && npm run test:phase2-3 && npm run test:ask-studentos && npm run test:e2e",
     "smoke": "npm run smoke:core",
     "smoke:core": "node scripts/smokeCoreFlows.js",
     "pretest:e2e": "npm run cloudflare:build",
@@ -112,7 +112,8 @@
     "cloudflare:build": "node scripts/vendorKatex.js && node scripts/writeCloudflareFrontendConfig.js && node scripts/verifyCloudflareBuild.js",
     "verify:cloudflare-azure": "node scripts/verifyCloudflareAzureWiring.js",
     "verify:azure-deployment": "node scripts/verifyAzureDeployment.js",
-    "test:c01-assessment-integrity": "node backend/testC01AssessmentIntegrity.js"
+    "test:c01-assessment-integrity": "node backend/testC01AssessmentIntegrity.js",
+    "test:h01-public-dto": "node backend/testH01PublicWorkspaceDto.js"
   },
   "engines": {
     "node": ">=20.16.0"
