@@ -1,0 +1,93 @@
+name: H-03 Background Embedding Boundary
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: h03-background-embedding-boundary
+  cancel-in-progress: true
+
+jobs:
+  validate-and-commit:
+    if: github.head_ref == 'fix/h03-background-embedding-boundary'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout remediation branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/h03-background-embedding-boundary
+          fetch-depth: 0
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply H-03 remediation
+        run: python scripts/applyH03BackgroundEmbeddingBoundary.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run focused H-03 tests
+        run: |
+          npm run test:h03-background-embeddings
+          npm run test:jobs
+          npm run test:embeddings
+          npm run test:h02-state-repositories
+
+      - name: Check syntax and core smoke flow
+        run: npm run check:syntax && npm run smoke:core
+
+      - name: Run complete regression suite
+        run: npm test
+
+      - name: Upload regression diagnostic
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: h03-regression-diagnostic
+          path: |
+            test-results
+            playwright-report
+          if-no-files-found: ignore
+          retention-days: 2
+
+      - name: Run production and Azure preflights
+        run: npm run preflight:production && npm run preflight:azure
+
+      - name: Validate H-03 architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -q 'ensureIndexedChunkEmbeddings' backend/server.js
+          ! grep -q 'uploadStage = "chunk_embed"' backend/server.js
+          ! grep -q 'await reindexSourceChunkEmbeddings' backend/server.js
+          grep -q 'queueSourceIngestionJob' backend/server.js
+          grep -q 'queueEmbeddingReindexJob' backend/server.js
+          grep -q 'executionBoundary: "background_jobs_only"' backend/embeddings/embeddingProcessingStatus.js
+          grep -q 'repository.saveBackgroundJobs' backend/jobs/workerRuntime.js
+          grep -q 'async saveJobQueue' backend/repository/studentOsRepository.js
+          git diff --check
+
+      - name: Commit validated remediation
+        shell: bash
+        run: |
+          rm -f .github/workflows/h03-background-embedding-boundary.yml
+          rm -f scripts/applyH03BackgroundEmbeddingBoundary.py
+          git config user.name "StudentOS Security Remediation"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix H-03 background embedding boundary"
+          git push origin HEAD:fix/h03-background-embedding-boundary
