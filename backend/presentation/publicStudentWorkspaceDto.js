@@ -36,6 +36,7 @@ export const PUBLIC_STUDENT_WORKSPACE_KEYS = Object.freeze([
   "classroomDueWork",
   "todayDoNow",
   "queueHealth",
+  "embeddingProcessing",
   "persistence",
   "productLifecycle",
   "planAccess",

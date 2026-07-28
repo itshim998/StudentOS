@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chunkExtractedText,
   createEmbeddingMetadataForChunks,
@@ -24,6 +24,7 @@ function sanitizeJobError(error) {
 }
 
 export function createBackgroundJob({
+  id = null,
   userId,
   sourceId = null,
   jobType = "source_reindex",
@@ -36,7 +37,7 @@ export function createBackgroundJob({
   if (!JOB_STATUSES.includes(status)) throw new Error("unsupported_background_job_status");
   const timestamp = nowIso();
   return {
-    id: `job_${Date.now()}_${randomUUID().slice(0, 8)}`,
+    id: id || `job_${Date.now()}_${randomUUID().slice(0, 8)}`,
     userId,
     sourceId,
     jobType,
@@ -50,6 +51,54 @@ export function createBackgroundJob({
     createdAt: timestamp,
     updatedAt: timestamp,
   };
+}
+
+function stableJobId({ userId, sourceId = null, jobType }) {
+  const digest = createHash("sha256").update(`${userId}:${jobType}:${sourceId || "all"}`).digest("hex").slice(0, 20);
+  return `job_${jobType}_${digest}`;
+}
+
+function queueUniqueJob(state, { userId, sourceId = null, jobType, payload = {}, maxAttempts = 3 }) {
+  state.backgroundJobs = state.backgroundJobs || [];
+  const id = stableJobId({ userId, sourceId, jobType });
+  const existing = state.backgroundJobs.find((job) => job.id === id)
+    || state.backgroundJobs.find((job) => job.userId === userId && job.sourceId === sourceId && job.jobType === jobType && ["queued", "processing"].includes(job.status));
+  if (existing && ["queued", "processing"].includes(existing.status)) {
+    return { job: existing, reused: true, requeued: false };
+  }
+  const timestamp = nowIso();
+  if (existing) {
+    Object.assign(existing, {
+      status: "queued",
+      attempts: 0,
+      maxAttempts,
+      lastError: null,
+      lockedAt: null,
+      processedAt: null,
+      result: null,
+      payload: { ...(existing.payload || {}), ...payload },
+      updatedAt: timestamp,
+    });
+    return { job: existing, reused: false, requeued: true };
+  }
+  const created = createBackgroundJob({ id, userId, sourceId, jobType, payload, maxAttempts });
+  state.backgroundJobs.push(created);
+  return { job: created, reused: false, requeued: false };
+}
+
+export function queueSourceIngestionJob(state, { userId, sourceId, payload = {}, maxAttempts = 3 } = {}) {
+  if (!sourceId) throw new Error("source_ingestion_job_source_required");
+  return queueUniqueJob(state, { userId, sourceId, jobType: "source_ingestion", payload, maxAttempts });
+}
+
+export function queueEmbeddingReindexJob(state, { userId, sourceId = null, limit = 50, force = false, maxAttempts = 3 } = {}) {
+  return queueUniqueJob(state, {
+    userId,
+    sourceId,
+    jobType: "embedding_reindex",
+    payload: { limit: Math.min(Math.max(Number(limit) || 50, 1), 250), force: force === true },
+    maxAttempts,
+  });
 }
 
 export function summarizeJobsForSource(jobs = [], sourceId) {
@@ -93,7 +142,7 @@ function updateExtractionFields(material, extraction) {
 }
 
 async function ensureExtractedText({ material, downloadSourceBytes }) {
-  if (material.status === "indexed" && material.extractedText) {
+  if ((material.extractionStatus === "indexed" || material.status === "indexed") && material.extractedText) {
     return { reExtracted: false, downloadedBytes: 0 };
   }
   if (!downloadSourceBytes || !material.storageBucket || !material.storagePath) {
@@ -197,15 +246,32 @@ async function processSourceIngestionJob({ state, job, downloadSourceBytes }) {
   const activeChunks = (state.sourceChunks || []).filter((chunk) => chunk.sourceMaterialId === material.id && !chunk.deletedAt);
   upsertMemoryItemForMaterial(state, material);
   upsertEmbeddingMetadata(state, activeChunks);
-  material.chunkCount = (state.sourceChunks || []).filter((chunk) => chunk.sourceMaterialId === material.id && !chunk.deletedAt).length;
-  return {
+  material.chunkCount = activeChunks.length;
+  const result = {
     createdChunks,
     updatedChunks,
     totalChunks: material.chunkCount,
     embeddedChunks: embeddingSummary.embedded,
+    degradedChunks: embeddingSummary.degraded,
+    retryRequiredChunks: embeddingSummary.retryRequired,
+    failedChunks: embeddingSummary.failed,
     reExtracted: extractionResult.reExtracted,
     downloadedBytes: extractionResult.downloadedBytes,
+    chunkIds: embeddingSummary.chunkIds,
   };
+  material.embeddingStatus = embeddingSummary.retryRequired || embeddingSummary.degraded || embeddingSummary.failed
+    ? "retry_required"
+    : "embedded";
+  material.embeddingError = material.embeddingStatus === "embedded" ? null : "source_embedding_retry_required";
+  material.status = material.embeddingStatus === "embedded" ? "indexed" : "processing";
+  material.updatedAt = nowIso();
+  if (material.embeddingStatus !== "embedded") {
+    job.result = result;
+    const error = new Error("source_embedding_retry_required");
+    error.retryable = true;
+    throw error;
+  }
+  return result;
 }
 
 async function processReindexJob({ state, job }) {
@@ -216,7 +282,25 @@ async function processReindexJob({ state, job }) {
     limit: Number(job.payload?.limit) || 100,
     includeEmbedded: job.payload?.force === true,
   });
-  upsertEmbeddingMetadata(state, sourceChunks.filter((chunk) => summary.chunkIds.includes(chunk.id)));
+  const changedChunks = sourceChunks.filter((chunk) => summary.chunkIds.includes(chunk.id));
+  upsertEmbeddingMetadata(state, changedChunks);
+  const touchedSourceIds = new Set(changedChunks.map((chunk) => chunk.sourceMaterialId).filter(Boolean));
+  for (const material of state.sourceMaterials || []) {
+    if (!touchedSourceIds.has(material.id)) continue;
+    const active = (state.sourceChunks || []).filter((chunk) => chunk.sourceMaterialId === material.id && !chunk.deletedAt && chunk.status !== "deleted");
+    const pending = active.filter((chunk) => chunk.embeddingStatus !== "embedded" || chunk.embeddingRetryRequired === true).length;
+    material.chunkCount = active.length;
+    material.embeddingStatus = pending ? "retry_required" : "embedded";
+    material.embeddingError = pending ? "source_embedding_retry_required" : null;
+    if (material.extractionStatus === "indexed" || material.extractedText) material.status = pending ? "processing" : "indexed";
+    material.updatedAt = nowIso();
+  }
+  if (summary.retryRequired || summary.degraded || summary.failed) {
+    job.result = summary;
+    const error = new Error("source_embedding_retry_required");
+    error.retryable = true;
+    throw error;
+  }
   return summary;
 }
 
@@ -255,9 +339,19 @@ export async function processBackgroundJob({
     job.lockedAt = null;
     job.processedAt = nowIso();
     const maxAttempts = Number(job.maxAttempts || 3);
-    const retryable = job.jobType === "recovery_analysis" ? error?.retryable === true : true;
+    const retryable = job.jobType === "recovery_analysis" ? error?.retryable === true : error?.retryable !== false;
     const exhausted = retryable && Number(job.attempts || 0) >= maxAttempts;
     job.status = retryable && !exhausted ? "queued" : "failed";
+    if (job.jobType !== "recovery_analysis") {
+      const touchedIds = new Set([job.sourceId, ...(job.result?.chunkIds || []).map((chunkId) => (state.sourceChunks || []).find((chunk) => chunk.id === chunkId)?.sourceMaterialId)].filter(Boolean));
+      for (const material of state.sourceMaterials || []) {
+        if (!touchedIds.has(material.id) || material.extractionStatus !== "indexed") continue;
+        material.embeddingStatus = exhausted ? "failed" : "retry_required";
+        material.embeddingError = job.lastError;
+        material.status = exhausted ? "embedding_failed" : "processing";
+        material.updatedAt = nowIso();
+      }
+    }
     job.updatedAt = nowIso();
     return {
       ok: false,

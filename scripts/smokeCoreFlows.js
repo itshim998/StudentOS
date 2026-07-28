@@ -197,11 +197,18 @@ async function main() {
       method: "POST",
       body: form,
     });
-    assert(["indexed", "ready"].includes(upload.material.status));
-    assert(upload.chunkCount >= 1);
+    assert.equal(upload.material.status, "processing");
+    assert.equal(upload.processing.status, "queued");
+    assert.equal(upload.processing.readPathProcessing, false);
+    assert.equal(upload.ingestionJob.status, "queued");
+    assert.equal(upload.chunkCount, 0);
 
     const sourceStatus = await request(baseUrl, "/api/sources/status");
-    assert(sourceStatus.sources.some((source) => source.id === upload.material.id));
+    const uploadedSourceStatus = sourceStatus.sources.find((source) => source.id === upload.material.id);
+    assert(uploadedSourceStatus);
+    assert(["queued", "processing", "awaiting_worker"].includes(uploadedSourceStatus.processing.status));
+    assert.equal(sourceStatus.embeddingProcessing.readPathProcessing, false);
+    assert.equal(sourceStatus.embeddingProcessing.processingPerformed, false);
 
     const assignmentForm = new FormData();
     assignmentForm.set("artifactKind", "assignment");
