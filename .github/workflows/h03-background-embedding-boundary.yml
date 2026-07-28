@@ -32,7 +32,10 @@ jobs:
           cache: npm
 
       - name: Apply H-03 remediation
-        run: python scripts/applyH03BackgroundEmbeddingBoundary.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/applyH03BackgroundEmbeddingBoundary.py 2>&1 | tee h03-patch.log
 
       - name: Install dependencies
         run: npm ci
@@ -59,6 +62,7 @@ jobs:
         with:
           name: h03-regression-diagnostic
           path: |
+            h03-patch.log
             test-results
             playwright-report
           if-no-files-found: ignore
@@ -86,6 +90,7 @@ jobs:
         run: |
           rm -f .github/workflows/h03-background-embedding-boundary.yml
           rm -f scripts/applyH03BackgroundEmbeddingBoundary.py
+          rm -f h03-patch.log
           git config user.name "StudentOS Security Remediation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
