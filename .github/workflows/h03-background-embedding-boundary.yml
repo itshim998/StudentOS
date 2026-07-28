@@ -59,17 +59,30 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run focused H-03 tests
+        shell: bash
         run: |
-          npm run test:h03-background-embeddings
-          npm run test:jobs
-          npm run test:embeddings
-          npm run test:h02-state-repositories
+          set -o pipefail
+          {
+            npm run test:h03-background-embeddings
+            npm run test:jobs
+            npm run test:embeddings
+            npm run test:h02-state-repositories
+          } 2>&1 | tee h03-focused.log
 
       - name: Check syntax and core smoke flow
-        run: npm run check:syntax && npm run smoke:core
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            npm run check:syntax
+            npm run smoke:core
+          } 2>&1 | tee h03-smoke.log
 
       - name: Run complete regression suite
-        run: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee h03-regression.log
 
       - name: Upload regression diagnostic
         if: failure()
@@ -78,6 +91,9 @@ jobs:
           name: h03-regression-diagnostic
           path: |
             h03-patch.log
+            h03-focused.log
+            h03-smoke.log
+            h03-regression.log
             test-results
             playwright-report
           if-no-files-found: ignore
@@ -105,7 +121,7 @@ jobs:
         run: |
           rm -f .github/workflows/h03-background-embedding-boundary.yml
           rm -f scripts/applyH03BackgroundEmbeddingBoundary.py
-          rm -f h03-patch.log
+          rm -f h03-patch.log h03-focused.log h03-smoke.log h03-regression.log
           git config user.name "StudentOS Security Remediation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
