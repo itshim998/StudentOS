@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT / "backend/repository/studentOsRepository.js"
 MIGRATION = ROOT / "supabase/migrations/202607280001_h02_narrow_state_repositories.sql"
+DESKTOP_E2E = ROOT / "tests/e2e/studentos-desktop.spec.js"
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -77,3 +78,12 @@ migration = replace_once(
     "transaction patch delete row count",
 )
 MIGRATION.write_text(migration, encoding="utf-8")
+
+desktop_test = DESKTOP_E2E.read_text(encoding="utf-8")
+desktop_test = replace_once(
+    desktop_test,
+    'await expect(page.locator("#auth-shell-title")).toHaveText("Sign in to StudentOS");',
+    'await expect(page.locator("#auth-shell-title")).toHaveText("Welcome back");',
+    "current redesigned auth heading expectation",
+)
+DESKTOP_E2E.write_text(desktop_test, encoding="utf-8")
