@@ -13,6 +13,7 @@ import { removeLegacyDemoArtifacts } from "../migrations/legacyDemoDataCleanup.j
 import { migrateLegacyClassroomAcademicData } from "../connectors/googleClassroom/mapper.js";
 import { normalizeLegacyWeakTopicState } from "../domain/topicPerformanceService.js";
 import { AiRouterV2Coordinator } from "../ai/routerV2State.js";
+import { STATE_SCOPE_NAMES, collectionKeysForScope, normalizeStateScope } from "./stateScopes.js";
 
 const COLLECTIONS = [
   ["courses", "courses"],
@@ -63,11 +64,62 @@ const RECOVERY_COLLECTIONS = [
 ];
 
 const ALL_COLLECTIONS = [...COLLECTIONS, ...RECOVERY_COLLECTIONS];
+const COLLECTION_TABLE_BY_KEY = new Map(ALL_COLLECTIONS);
+const ALL_COLLECTION_KEYS = Object.freeze(ALL_COLLECTIONS.map(([key]) => key));
+const RECOVERY_COLLECTION_KEY_SET = new Set(RECOVERY_COLLECTIONS.map(([key]) => key));
 const RECOVERY_PERSISTENCE_VERSION = Symbol("recoveryPersistenceVersion");
 const RECOVERY_CHANGE_KEYS = Object.freeze(RECOVERY_COLLECTIONS.map(([key]) => key));
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function isMissingDatabaseObject(error) {
+  const label = `${error?.code || ""} ${error?.message || ""}`.toLowerCase();
+  return error?.status === 404 || label.includes("42p01") || label.includes("42883") ||
+    label.includes("does not exist") || label.includes("could not find the function");
+}
+
+function stateFromScopePayload(payload, user, scope, entityId = null) {
+  const normalizedPayload = Array.isArray(payload) ? payload[0] : payload;
+  const raw = normalizedPayload?.state || normalizedPayload?.result || normalizedPayload || {};
+  const state = {
+    studentProfile: raw.studentProfile || raw.student_profile || initialStateForUser(user).studentProfile,
+  };
+  const keys = collectionKeysForScope(scope, ALL_COLLECTION_KEYS);
+  for (const key of keys) {
+    const values = raw[key];
+    state[key] = Array.isArray(values) ? values.filter(Boolean) : [];
+  }
+  if (entityId && Array.isArray(state.testSessions)) {
+    state.testSessions = state.testSessions.filter((item) => item?.id === entityId);
+  }
+  if (entityId && Array.isArray(state.testResults)) {
+    state.testResults = state.testResults.filter((item) => item?.testSessionId === entityId || item?.id === entityId);
+  }
+  return ensureStateShape(state);
+}
+
+function scopedClone(state, scope, entityId = null) {
+  const result = { studentProfile: clone(state.studentProfile) };
+  for (const key of collectionKeysForScope(scope, ALL_COLLECTION_KEYS)) {
+    result[key] = clone(state[key] || []);
+  }
+  if (entityId && Array.isArray(result.testSessions)) {
+    result.testSessions = result.testSessions.filter((item) => item?.id === entityId);
+  }
+  if (entityId && Array.isArray(result.testResults)) {
+    result.testResults = result.testResults.filter((item) => item?.testSessionId === entityId || item?.id === entityId);
+  }
+  return ensureStateShape(result);
+}
+
+function transactionalPatchRequired(error) {
+  const wrapped = new Error("StudentOS transactional state persistence is unavailable. Apply the H-02 shard migration before accepting this mutation.");
+  wrapped.code = "H02_TRANSACTIONAL_STATE_PATCH_REQUIRED";
+  wrapped.status = 503;
+  wrapped.cause = error;
+  return wrapped;
 }
 
 function recoveryVersions(state = {}) {
@@ -1139,6 +1191,77 @@ class MockStudentOsRepository {
     return markRecoveryPersistenceVersion(state);
   }
 
+  async loadStateScope(session, scope, { entityId = null } = {}) {
+    const state = await this.loadState(session);
+    return markRecoveryPersistenceVersion(scopedClone(state, normalizeStateScope(scope), entityId));
+  }
+
+  async loadDashboardState(session) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.DASHBOARD);
+  }
+
+  async loadAcademicContext(session) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.ACADEMIC_CONTEXT);
+  }
+
+  async loadTestSession(session, testSessionId) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.TEST_SESSION, { entityId: testSessionId });
+  }
+
+  async loadAccountLifecycle(session) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.ACCOUNT_LIFECYCLE);
+  }
+
+  async loadRecoveryState(session) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.RECOVERY);
+  }
+
+  async loadAiState(session) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.AI);
+  }
+
+  async saveProfile(session, state) {
+    const userId = session?.user?.id || state.studentProfile.id;
+    const current = ensureStateShape(clone(this.states.get(userId) || initialStateForUser(session?.user || { id: userId })));
+    current.studentProfile = clone(state.studentProfile);
+    this.states.set(userId, current);
+  }
+
+  async deleteCollectionRows(session, key, ids = []) {
+    if (!COLLECTION_TABLE_BY_KEY.has(key)) throw new Error("unknown_studentos_collection");
+    const userId = session?.user?.id || "student_local_001";
+    const state = ensureStateShape(clone(this.states.get(userId) || initialStateForUser(session?.user || { id: userId })));
+    const remove = new Set(ids.filter(Boolean));
+    state[key] = (state[key] || []).filter((item) => !remove.has(item?.id));
+    this.states.set(userId, state);
+    return { deleted: remove.size, mode: "mock" };
+  }
+
+  async archiveCollectionRows(session, key, ids = [], { reason = "explicit_archive", archivedAt = nowIso() } = {}) {
+    if (!COLLECTION_TABLE_BY_KEY.has(key)) throw new Error("unknown_studentos_collection");
+    const userId = session?.user?.id || "student_local_001";
+    const state = ensureStateShape(clone(this.states.get(userId) || initialStateForUser(session?.user || { id: userId })));
+    const targets = new Set(ids.filter(Boolean));
+    let archived = 0;
+    state[key] = (state[key] || []).map((item) => {
+      if (!targets.has(item?.id)) return item;
+      archived += 1;
+      return { ...item, archived: true, archivedAt, archiveReason: reason, updatedAt: archivedAt };
+    });
+    this.states.set(userId, state);
+    return { archived, mode: "mock" };
+  }
+
+  async saveAcademicContext(session, state) {
+    const userId = session?.user?.id || state.studentProfile.id;
+    const current = ensureStateShape(clone(this.states.get(userId) || initialStateForUser(session?.user || { id: userId })));
+    current.studentProfile = clone(state.studentProfile || current.studentProfile);
+    for (const key of collectionKeysForScope(STATE_SCOPE_NAMES.ACADEMIC_CONTEXT, ALL_COLLECTION_KEYS)) {
+      if (Object.prototype.hasOwnProperty.call(state, key)) current[key] = clone(state[key] || []);
+    }
+    this.states.set(userId, ensureStateShape(current));
+  }
+
   async saveState(session, state) {
     const userId = session?.user?.id || state.studentProfile.id;
     this.states.set(userId, ensureStateShape(clone(state)));
@@ -1779,95 +1902,144 @@ class SupabaseStudentOsRepository {
   }
 
   async loadState(session) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.FULL);
+  }
+
+  async loadStateScope(session, scope, { entityId = null } = {}) {
     const route = this.route(session);
     const user = session.user;
-    const profileRows = await route.client.select("student_profiles", {
+    const normalizedScope = normalizeStateScope(scope);
+    if (route.client?.rpc) {
+      try {
+        const payload = await route.client.rpc("load_studentos_state_scope", {
+          p_user_id: user.id,
+          p_scope: normalizedScope,
+          p_entity_id: entityId || null,
+        });
+        const candidate = Array.isArray(payload) ? payload[0] : payload;
+        const raw = candidate?.state || candidate?.result || candidate;
+        if (raw?.studentProfile || raw?.student_profile) {
+          return markRecoveryPersistenceVersion(stateFromScopePayload(raw, user, normalizedScope, entityId));
+        }
+      } catch (error) {
+        if (!isMissingDatabaseObject(error)) throw error;
+      }
+    }
+
+    const keys = collectionKeysForScope(normalizedScope, ALL_COLLECTION_KEYS);
+    const profilePromise = route.client.select("student_profiles", {
       columns: "payload",
       filters: { user_id: `eq.${user.id}` },
       limit: 1,
     });
-
-    if (!profileRows.length) {
-      const initialState = ensureStateShape(initialStateForUser(user));
-      await this.saveState(session, initialState);
-      return markRecoveryPersistenceVersion(initialState);
-    }
-
-    const storedProfile = fromPayload(profileRows[0]);
-    const storedProfilePayload = JSON.stringify(storedProfile ?? null);
-    const storedLifecycle = JSON.stringify(storedProfile?.productLifecycle ?? null);
-    const state = {
-      studentProfile: storedProfile,
-    };
-    for (const [key, table] of COLLECTIONS) {
-      const rows = await route.client.select(table, {
-        columns: "payload",
-        filters: { user_id: `eq.${user.id}` },
-        order: "created_at.asc",
-      });
-      state[key] = rows.map(fromPayload).filter(Boolean);
-    }
-    for (const [key, table] of RECOVERY_COLLECTIONS) {
+    const collectionPromises = keys.map(async (key) => {
+      const table = COLLECTION_TABLE_BY_KEY.get(key);
+      const filters = { user_id: `eq.${user.id}` };
+      if (entityId && key === "testSessions") filters.id = `eq.${entityId}`;
+      if (entityId && key === "testResults") filters.test_session_id = `eq.${entityId}`;
       try {
         const rows = await route.client.select(table, {
           columns: "payload",
-          filters: { user_id: `eq.${user.id}` },
+          filters,
           order: "created_at.asc",
         });
-        state[key] = rows.map(fromPayload).filter(Boolean);
+        return [key, rows.map(fromPayload).filter(Boolean)];
       } catch (error) {
-        const label = `${error?.code || ""} ${error?.message || ""}`.toLowerCase();
-        if (error?.status !== 404 && !label.includes("42p01") && !label.includes("does not exist")) throw error;
-        state[key] = [];
+        if (RECOVERY_COLLECTION_KEY_SET.has(key) && isMissingDatabaseObject(error)) return [key, []];
+        throw error;
       }
+    });
+    const [profileRows, collectionEntries] = await Promise.all([
+      profilePromise,
+      Promise.all(collectionPromises),
+    ]);
+    if (!profileRows.length) {
+      const initialState = ensureStateShape(initialStateForUser(user));
+      await this.saveProfile(session, initialState);
+      return markRecoveryPersistenceVersion(scopedClone(initialState, normalizedScope, entityId));
     }
-    const classroomMigrationKeys = [
-      "classroomItems",
-      "assignments",
-      "sourceMaterials",
-      "sourceChunks",
-      "memoryItems",
-      "embeddingsMetadata",
-      "backgroundJobs",
-      "courses",
-      "topics",
-      "roadmap",
-      "testSessions",
-      "assignmentAutomationContracts",
-      "tutorLessons",
-      "revisionEvents",
-    ];
-    const beforeClassroomMigration = Object.fromEntries(classroomMigrationKeys.map((key) => [key, JSON.stringify(state[key] || [])]));
-    const shaped = ensureStateShape(state);
-    if (JSON.stringify(shaped.studentProfile) !== storedProfilePayload || JSON.stringify(shaped.studentProfile.productLifecycle) !== storedLifecycle) {
-      await route.client.upsert("student_profiles", profileRow(shaped.studentProfile, user.id), {
-        onConflict: "user_id",
-        returning: "minimal",
-      });
-    }
-    const changedClassroomKeys = classroomMigrationKeys.filter((key) => JSON.stringify(shaped[key] || []) !== beforeClassroomMigration[key]);
-    if (changedClassroomKeys.length) {
-      await this.saveChangedCollections(session, shaped, changedClassroomKeys);
-    }
-    return markRecoveryPersistenceVersion(shaped);
+    const state = {
+      studentProfile: fromPayload(profileRows[0]),
+      ...Object.fromEntries(collectionEntries),
+    };
+    return markRecoveryPersistenceVersion(ensureStateShape(state));
   }
 
-  async saveState(session, state) {
+  async loadDashboardState(session) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.DASHBOARD);
+  }
+
+  async loadAcademicContext(session) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.ACADEMIC_CONTEXT);
+  }
+
+  async loadTestSession(session, testSessionId) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.TEST_SESSION, { entityId: testSessionId });
+  }
+
+  async loadAccountLifecycle(session) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.ACCOUNT_LIFECYCLE);
+  }
+
+  async loadRecoveryState(session) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.RECOVERY);
+  }
+
+  async loadAiState(session) {
+    return this.loadStateScope(session, STATE_SCOPE_NAMES.AI);
+  }
+
+  async saveProfile(session, state) {
     const route = this.route(session);
-    const userId = session.user.id;
-    const shaped = ensureStateShape(state);
-    await route.client.upsert("student_profiles", profileRow(shaped.studentProfile, userId), {
+    await route.client.upsert("student_profiles", profileRow(state.studentProfile, session.user.id), {
       onConflict: "user_id",
       returning: "minimal",
     });
-    for (const [key, table] of COLLECTIONS) {
-      const items = shaped[key] || [];
-      if (!items.length) continue;
-      const rows = items.filter((item) => item?.id).map((item) => rowForCollection(key, item, userId));
-      if (rows.length) {
-        await route.client.upsert(table, rows, { onConflict: "id", returning: "minimal" });
-      }
+  }
+
+  async persistStatePatch(session, state, keys, { includeProfile = false, deleteIds = {} } = {}) {
+    const route = this.route(session);
+    const userId = session.user.id;
+    const shaped = ensureStateShape(state);
+    const uniqueKeys = [...new Set((keys || []).filter((key) => COLLECTION_TABLE_BY_KEY.has(key)))];
+    const collections = {};
+    for (const key of uniqueKeys) {
+      collections[key] = (shaped[key] || [])
+        .filter((item) => item?.id)
+        .map((item) => rowForCollection(key, item, userId));
     }
+    const normalizedDeletes = Object.fromEntries(
+      Object.entries(deleteIds || {})
+        .filter(([key, ids]) => COLLECTION_TABLE_BY_KEY.has(key) && Array.isArray(ids) && ids.some(Boolean))
+        .map(([key, ids]) => [key, [...new Set(ids.filter(Boolean))]]),
+    );
+    try {
+      return await route.client.rpc("persist_studentos_state_patch", {
+        p_user_id: userId,
+        p_profile: includeProfile ? profileRow(shaped.studentProfile, userId) : null,
+        p_collections: collections,
+        p_delete_ids: normalizedDeletes,
+      });
+    } catch (error) {
+      const hasDeletes = Object.keys(normalizedDeletes).length > 0;
+      if (!isMissingDatabaseObject(error)) throw error;
+      if (uniqueKeys.length === 0 && includeProfile && !hasDeletes) {
+        return this.saveProfile(session, shaped);
+      }
+      if (uniqueKeys.length === 1 && !includeProfile && !hasDeletes) {
+        const key = uniqueKeys[0];
+        const rows = collections[key] || [];
+        if (!rows.length) return { persisted: true, fallback: "empty_single_collection" };
+        await route.client.upsert(COLLECTION_TABLE_BY_KEY.get(key), rows, { onConflict: "id", returning: "minimal" });
+        return { persisted: true, fallback: "single_collection" };
+      }
+      throw transactionalPatchRequired(error);
+    }
+  }
+
+  async saveState(session, state) {
+    const keys = COLLECTIONS.map(([key]) => key).filter((key) => Object.prototype.hasOwnProperty.call(state, key));
+    return this.persistStatePatch(session, state, keys, { includeProfile: true });
   }
 
   async saveOrdinaryState(session, state) {
@@ -1954,18 +2126,36 @@ class SupabaseStudentOsRepository {
     return { ...result, replayed: row.replayed === true };
   }
 
-  async saveChangedCollections(session, state, keys) {
-    const route = this.route(session);
-    const userId = session.user.id;
-    const shaped = ensureStateShape(state);
-    for (const key of keys) {
-      const table = ALL_COLLECTIONS.find(([collectionKey]) => collectionKey === key)?.[1];
-      if (!table) continue;
-      const rows = (shaped[key] || []).filter((item) => item?.id).map((item) => rowForCollection(key, item, userId));
-      if (rows.length) {
-        await route.client.upsert(table, rows, { onConflict: "id", returning: "minimal" });
-      }
-    }
+  async saveChangedCollections(session, state, keys, options = {}) {
+    return this.persistStatePatch(session, state, keys, options);
+  }
+
+  async saveAcademicContext(session, state) {
+    return this.saveChangedCollections(session, state, collectionKeysForScope(STATE_SCOPE_NAMES.ACADEMIC_CONTEXT, ALL_COLLECTION_KEYS), { includeProfile: true });
+  }
+
+  async deleteCollectionRows(session, key, ids = []) {
+    if (!COLLECTION_TABLE_BY_KEY.has(key)) throw new Error("unknown_studentos_collection");
+    const state = ensureStateShape({ studentProfile: initialStateForUser(session.user).studentProfile });
+    await this.persistStatePatch(session, state, [], { deleteIds: { [key]: ids } });
+    return { deleted: [...new Set(ids.filter(Boolean))].length, mode: "supabase" };
+  }
+
+  async archiveCollectionRows(session, key, records = [], { reason = "explicit_archive", archivedAt = nowIso() } = {}) {
+    if (!COLLECTION_TABLE_BY_KEY.has(key)) throw new Error("unknown_studentos_collection");
+    const archivedRecords = (records || []).filter((item) => item?.id).map((item) => ({
+      ...item,
+      archived: true,
+      archivedAt,
+      archiveReason: reason,
+      updatedAt: archivedAt,
+    }));
+    const state = ensureStateShape({
+      studentProfile: initialStateForUser(session.user).studentProfile,
+      [key]: archivedRecords,
+    });
+    await this.persistStatePatch(session, state, [key]);
+    return { archived: archivedRecords.length, mode: "supabase" };
   }
 
   async saveTestResultBundle(session, state) {
@@ -2014,6 +2204,8 @@ class SupabaseStudentOsRepository {
 
   async saveAccountLifecycle(session, state) {
     await this.saveChangedCollections(session, state, [
+      "billingSubscriptions",
+      "billingWebhookEvents",
       "consentVersions",
       "userConsents",
       "legalAcceptances",
@@ -2023,7 +2215,7 @@ class SupabaseStudentOsRepository {
       "accountDeletionReviews",
       "roleInvitations",
       "auditLog",
-    ]);
+    ], { includeProfile: true });
   }
 
   async saveDataExportState(session, state) {
@@ -2546,30 +2738,21 @@ class SupabaseStudentOsRepository {
     if (storageBucket && storagePath) {
       await route.client.deleteObjects(storageBucket, [storagePath]);
     }
-    const userFilter = `eq.${session.user.id}`;
-    const deletes = sourceId ? [
-      ["job_events", { user_id: userFilter, source_id: `eq.${sourceId}` }],
-      ["background_jobs", { user_id: userFilter, source_id: `eq.${sourceId}` }],
-      ["source_chunks", { user_id: userFilter, source_material_id: `eq.${sourceId}` }],
-      ["embeddings_metadata", { user_id: userFilter, source_material_id: `eq.${sourceId}` }],
-      ["source_materials", { user_id: userFilter, id: `eq.${sourceId}` }],
-    ] : [];
-    const memoryFilter = inFilter(memoryItemIds);
-    if (memoryFilter) deletes.unshift(["memory_items", { user_id: userFilter, id: memoryFilter }]);
-    const chunkFilter = inFilter(sourceChunkIds);
-    if (chunkFilter) deletes.unshift(["source_chunks", { user_id: userFilter, id: chunkFilter }]);
-    const embeddingFilter = inFilter(embeddingIds);
-    if (embeddingFilter) deletes.unshift(["embeddings_metadata", { user_id: userFilter, id: embeddingFilter }]);
-    const jobFilter = inFilter(jobIds);
-    if (jobFilter) deletes.unshift(["background_jobs", { user_id: userFilter, id: jobFilter }]);
-    const eventFilter = inFilter(jobEventIds);
-    if (eventFilter) deletes.unshift(["job_events", { user_id: userFilter, id: eventFilter }]);
-    const assignmentFilter = inFilter(assignmentIds);
-    if (assignmentFilter) deletes.unshift(["assignments", { user_id: userFilter, id: assignmentFilter }]);
-    const syllabusFilter = inFilter(syllabusIds);
-    if (syllabusFilter) deletes.unshift(["syllabi", { user_id: userFilter, id: syllabusFilter }]);
-    for (const [table, filters] of deletes) {
-      await route.client.deleteRows(table, { filters });
+    try {
+      await route.client.rpc("delete_studentos_source_artifacts", {
+        p_user_id: session.user.id,
+        p_source_id: sourceId || null,
+        p_memory_item_ids: memoryItemIds,
+        p_source_chunk_ids: sourceChunkIds,
+        p_embedding_ids: embeddingIds,
+        p_job_ids: jobIds,
+        p_job_event_ids: jobEventIds,
+        p_assignment_ids: assignmentIds,
+        p_syllabus_ids: syllabusIds,
+      });
+    } catch (error) {
+      if (isMissingDatabaseObject(error)) throw transactionalPatchRequired(error);
+      throw error;
     }
     return {
       hardDeleted: true,
@@ -2590,15 +2773,11 @@ class SupabaseStudentOsRepository {
   }
 
   async saveAiConversation(session, conversation, messages) {
-    const state = await this.loadState(session);
-    const conversationIndex = state.aiConversations.findIndex((item) => item.id === conversation.id);
-    if (conversationIndex >= 0) state.aiConversations[conversationIndex] = conversation;
-    else state.aiConversations.push(conversation);
-    for (const message of messages) {
-      const messageIndex = state.aiMessages.findIndex((item) => item.id === message.id);
-      if (messageIndex >= 0) state.aiMessages[messageIndex] = message;
-      else state.aiMessages.push(message);
-    }
+    const state = ensureStateShape({
+      studentProfile: initialStateForUser(session.user).studentProfile,
+      aiConversations: conversation?.id ? [conversation] : [],
+      aiMessages: (messages || []).filter((message) => message?.id),
+    });
     await this.saveChangedCollections(session, state, ["aiConversations", "aiMessages"]);
   }
 
@@ -2793,6 +2972,36 @@ export class StudentOsRepository {
     return this.useSupabase(session) ? this.supabase.loadState(session) : this.mock.loadState(session);
   }
 
+  async loadDashboardState(session) {
+    return this.useSupabase(session) ? this.supabase.loadDashboardState(session) : this.mock.loadDashboardState(session);
+  }
+
+  async loadAcademicContext(session) {
+    return this.useSupabase(session) ? this.supabase.loadAcademicContext(session) : this.mock.loadAcademicContext(session);
+  }
+
+  async loadTestSession(session, testSessionId) {
+    return this.useSupabase(session)
+      ? this.supabase.loadTestSession(session, testSessionId)
+      : this.mock.loadTestSession(session, testSessionId);
+  }
+
+  async loadAccountLifecycle(session) {
+    return this.useSupabase(session) ? this.supabase.loadAccountLifecycle(session) : this.mock.loadAccountLifecycle(session);
+  }
+
+  async loadRecoveryState(session) {
+    return this.useSupabase(session) ? this.supabase.loadRecoveryState(session) : this.mock.loadRecoveryState(session);
+  }
+
+  async loadAiState(session) {
+    return this.useSupabase(session) ? this.supabase.loadAiState(session) : this.mock.loadAiState(session);
+  }
+
+  async saveProfile(session, state) {
+    return this.useSupabase(session) ? this.supabase.saveProfile(session, state) : this.mock.saveProfile(session, state);
+  }
+
   async saveState(session, state) {
     return this.useSupabase(session) ? this.supabase.saveState(session, state) : this.mock.saveState(session, state);
   }
@@ -2853,6 +3062,24 @@ export class StudentOsRepository {
     return this.useSupabase(session)
       ? this.supabase.saveSourceIngestion(session, state)
       : this.mock.saveSourceIngestion(session, state);
+  }
+
+  async saveAcademicContext(session, state) {
+    return this.useSupabase(session)
+      ? this.supabase.saveAcademicContext(session, state)
+      : this.mock.saveAcademicContext(session, state);
+  }
+
+  async deleteCollectionRows(session, key, ids) {
+    return this.useSupabase(session)
+      ? this.supabase.deleteCollectionRows(session, key, ids)
+      : this.mock.deleteCollectionRows(session, key, ids);
+  }
+
+  async archiveCollectionRows(session, key, records, options) {
+    return this.useSupabase(session)
+      ? this.supabase.archiveCollectionRows(session, key, records, options)
+      : this.mock.archiveCollectionRows(session, key, (records || []).map((item) => item?.id).filter(Boolean), options);
   }
 
   async saveBackgroundJobs(session, state) {

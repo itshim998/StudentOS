@@ -517,19 +517,40 @@ async function readTextBody(req) {
   return raw;
 }
 
-async function getStateContext(req) {
+function requestStateScope(req) {
+  const pathname = new URL(req.url || "/", "http://studentos.local").pathname;
+  if (pathname === "/api/state" || pathname.startsWith("/api/dashboard")) return "dashboard";
+  if (pathname.startsWith("/api/account") || pathname.startsWith("/api/billing")) return "account_lifecycle";
+  if (pathname.startsWith("/api/recovery")) return "recovery";
+  if (pathname.startsWith("/api/ai")) return "ai";
+  return "academic_context";
+}
+
+async function loadRequestState(session, scope) {
+  if (scope === "dashboard") return repository.loadDashboardState(session);
+  if (scope === "account_lifecycle") return repository.loadAccountLifecycle(session);
+  if (scope === "recovery") return repository.loadRecoveryState(session);
+  if (scope === "ai") return repository.loadAiState(session);
+  return repository.loadAcademicContext(session);
+}
+
+async function getStateContext(req, { scope = null } = {}) {
   const session = await getRequestSession(req, {
     config: supabaseConfig,
     authClient: supabaseClients.authClient,
   });
-  const state = await repository.loadState(session);
+  const resolvedScope = scope || requestStateScope(req);
+  const state = await loadRequestState(session, resolvedScope);
   if (hydrateSavedProductOnboarding(state)) {
-    await repository.saveState(session, state);
+    await repository.saveProfile(session, state);
   }
-  await ensureIndexedChunkEmbeddings(session, state);
+  if (["academic_context", "ai"].includes(resolvedScope)) {
+    await ensureIndexedChunkEmbeddings(session, state);
+  }
   return {
     session,
     state,
+    stateScope: resolvedScope,
     persistence: repository.getInfo(session),
   };
 }
@@ -1061,7 +1082,7 @@ async function maybeRunAutomaticClassroomCheck({ state, session } = {}) {
       config: googleClassroomConfig,
       courseOnly: policy.courseOnly === true,
     });
-    await repository.saveState(session, state);
+    await repository.saveAcademicContext(session, state);
     return result;
   } catch (error) {
     logger.warn("classroom_automatic_check.failed", {
@@ -1723,9 +1744,9 @@ async function handleApi(req, res, url) {
       mode: "billing_webhook",
       user: { id: event.userId, email: "" },
     };
-    const state = await repository.loadState(session);
+    const state = await repository.loadAccountLifecycle(session);
     const result = processBillingWebhook({ state, event });
-    await repository.saveState(session, state);
+    await repository.saveAccountLifecycle(session, state);
     logger.info("billing.webhook.processed", {
       provider,
       providerEventId: event.id,
