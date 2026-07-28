@@ -48,7 +48,38 @@ jobs:
           )'''
           if text.count(old) != 1:
               raise SystemExit(f"H-03 anchor repair expected one match, found {text.count(old)}")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          text = text.replace(old, new, 1)
+          text += r'''
+
+# H-03 smoke flow now verifies queued background ingestion rather than synchronous embedding.
+smoke_path = ROOT / "scripts/smokeCoreFlows.js"
+smoke = smoke_path.read_text(encoding="utf-8")
+smoke = replace_once(
+    smoke,
+    '''    assert(["indexed", "ready"].includes(upload.material.status));
+    assert(upload.chunkCount >= 1);''',
+    '''    assert.equal(upload.material.status, "processing");
+    assert.equal(upload.processing.status, "queued");
+    assert.equal(upload.processing.readPathProcessing, false);
+    assert.equal(upload.ingestionJob.status, "queued");
+    assert.equal(upload.chunkCount, 0);''',
+    "smoke queued source ingestion",
+)
+smoke = replace_once(
+    smoke,
+    '''    const sourceStatus = await request(baseUrl, "/api/sources/status");
+    assert(sourceStatus.sources.some((source) => source.id === upload.material.id));''',
+    '''    const sourceStatus = await request(baseUrl, "/api/sources/status");
+    const uploadedSourceStatus = sourceStatus.sources.find((source) => source.id === upload.material.id);
+    assert(uploadedSourceStatus);
+    assert(["queued", "processing", "awaiting_worker"].includes(uploadedSourceStatus.processing.status));
+    assert.equal(sourceStatus.embeddingProcessing.readPathProcessing, false);
+    assert.equal(sourceStatus.embeddingProcessing.processingPerformed, false);''',
+    "smoke processing status read",
+)
+smoke_path.write_text(smoke, encoding="utf-8")
+'''
+          path.write_text(text, encoding="utf-8")
           PY
           python scripts/applyH03BackgroundEmbeddingBoundary.py 2>&1 | tee h03-patch.log
 
