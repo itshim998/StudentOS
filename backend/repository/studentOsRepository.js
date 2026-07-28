@@ -1184,10 +1184,8 @@ class MockStudentOsRepository {
 
   async loadState(session) {
     const user = session?.user || { id: "student_local_001" };
-    if (!this.states.has(user.id)) {
-      this.states.set(user.id, ensureStateShape(initialStateForUser(user)));
-    }
-    const state = clone(this.states.get(user.id));
+    const stored = this.states.get(user.id);
+    const state = stored ? clone(stored) : ensureStateShape(initialStateForUser(user));
     return markRecoveryPersistenceVersion(state);
   }
 
@@ -1357,6 +1355,14 @@ class MockStudentOsRepository {
 
   async saveSourceIngestion(session, state) {
     await this.saveState(session, state);
+  }
+
+  async saveJobQueue(session, state) {
+    const userId = session?.user?.id || state.studentProfile.id;
+    const current = ensureStateShape(clone(this.states.get(userId) || initialStateForUser(session?.user || { id: userId })));
+    current.backgroundJobs = clone(state.backgroundJobs || []);
+    current.jobEvents = clone(state.jobEvents || []);
+    this.states.set(userId, current);
   }
 
   async saveBackgroundJobs(session, state) {
@@ -1955,7 +1961,6 @@ class SupabaseStudentOsRepository {
     ]);
     if (!profileRows.length) {
       const initialState = ensureStateShape(initialStateForUser(user));
-      await this.saveProfile(session, initialState);
       return markRecoveryPersistenceVersion(scopedClone(initialState, normalizedScope, entityId));
     }
     const state = {
@@ -2196,6 +2201,10 @@ class SupabaseStudentOsRepository {
 
   async saveSourceIngestion(session, state) {
     await this.saveChangedCollections(session, state, ["assignments", "syllabi", "sourceMaterials", "sourceChunks", "memoryItems", "embeddingsMetadata", "backgroundJobs", "jobEvents", "auditLog"]);
+  }
+
+  async saveJobQueue(session, state) {
+    await this.saveChangedCollections(session, state, ["backgroundJobs", "jobEvents"]);
   }
 
   async saveBackgroundJobs(session, state) {
@@ -3080,6 +3089,12 @@ export class StudentOsRepository {
     return this.useSupabase(session)
       ? this.supabase.archiveCollectionRows(session, key, records, options)
       : this.mock.archiveCollectionRows(session, key, (records || []).map((item) => item?.id).filter(Boolean), options);
+  }
+
+  async saveJobQueue(session, state) {
+    return this.useSupabase(session)
+      ? this.supabase.saveJobQueue(session, state)
+      : this.mock.saveJobQueue(session, state);
   }
 
   async saveBackgroundJobs(session, state) {

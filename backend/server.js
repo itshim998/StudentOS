@@ -166,16 +166,19 @@ import {
   isRouterV2EnabledForUser,
 } from "./ai/authorizedAiExecutionService.js";
 import {
-  contentHash,
-  embedSourceChunks,
   getEmbeddingConfig,
   getSafeEmbeddingStatus,
-  reindexSourceChunkEmbeddings,
 } from "./embeddings/embeddingService.js";
+import {
+  buildEmbeddingProcessingStatus,
+  buildSourceEmbeddingProcessing,
+} from "./embeddings/embeddingProcessingStatus.js";
 import { createSupabaseClients } from "./supabase/clients.js";
 import { StudentOsRepository } from "./repository/studentOsRepository.js";
 import {
   createBackgroundJob,
+  queueEmbeddingReindexJob,
+  queueSourceIngestionJob,
   retryFailedJobs,
   summarizeJobsForSource,
 } from "./jobs/jobService.js";
@@ -183,12 +186,7 @@ import { buildQueueHealth, recordJobEvent } from "./jobs/jobObservability.js";
 import { getSourceStoragePlan } from "./storage/sourceStoragePlan.js";
 import { readMultipartForm } from "./http/multipart.js";
 import {
-  createMemoryItemForSource,
-  createEmbeddingMetadataForChunks,
   createSourceMaterialRecord,
-  createSourceChunks,
-  chunkExtractedText,
-  extractSourceText,
   MAX_SOURCE_UPLOAD_BYTES,
   validateAcademicContextPdfUpload,
 } from "./storage/sourceMaterialService.js";
@@ -542,44 +540,18 @@ async function getStateContext(req, { scope = null, entityId = null } = {}) {
   });
   const resolvedScope = scope || requestStateScope(req);
   const state = await loadRequestState(session, resolvedScope, entityId);
-  if (hydrateSavedProductOnboarding(state)) {
-    await repository.saveProfile(session, state);
-  }
-  if (["academic_context", "ai"].includes(resolvedScope)) {
-    await ensureIndexedChunkEmbeddings(session, state);
-  }
+  const onboardingHydrationPending = hydrateSavedProductOnboarding(state);
   return {
     session,
     state,
     stateScope: resolvedScope,
+    readStatus: {
+      sideEffectsPerformed: false,
+      embeddingBackfillPerformed: false,
+      onboardingHydrationPending,
+    },
     persistence: repository.getInfo(session),
   };
-}
-
-async function ensureIndexedChunkEmbeddings(session, state) {
-  const candidates = (state.sourceChunks || []).filter((chunk) => {
-    if (chunk.deletedAt || chunk.status === "deleted") return false;
-    const text = chunk.text || chunk.chunkText || "";
-    if (!text || chunk.status !== "indexed") return false;
-    return chunk.embeddingStatus !== "embedded" ||
-      chunk.embeddingHash !== contentHash(text) ||
-      !Array.isArray(chunk.embeddingVector);
-  });
-  if (!candidates.length) return;
-  await embedSourceChunks({ sourceChunks: candidates });
-  const metadataById = new Map((state.embeddingsMetadata || []).map((item) => [item.id, item]));
-  for (const row of createEmbeddingMetadataForChunks({
-    material: { id: null, userId: state.studentProfile.id },
-    sourceChunks: candidates,
-  })) {
-    const existing = metadataById.get(row.id);
-    if (existing) {
-      Object.assign(existing, row);
-    } else {
-      state.embeddingsMetadata.push(row);
-    }
-  }
-  await repository.saveSourceIngestion(session, state);
 }
 
 function publicState(state, persistence) {
@@ -603,6 +575,7 @@ function publicState(state, persistence) {
   const dueWork = getClassroomDueWork(state, {
     includeDiscoveredReview: classroomPolicy.courseworkReviewEnabled === true && classroomPolicy.autoCheckEnabled === true,
   });
+  const embeddingProcessing = buildEmbeddingProcessingStatus(state);
   return createPublicStudentWorkspaceDTO({
     syllabi: (state.syllabi || []).filter(isAcademicContextRecord),
     exams: (state.exams || []).filter(isAcademicContextRecord),
@@ -709,10 +682,12 @@ function publicState(state, persistence) {
         extractionProvider,
         ...safeSource
       } = source;
+      const processing = buildSourceEmbeddingProcessing(state, source);
       return {
         ...safeSource,
         isPrivate: Boolean(storageBucket || storagePath),
-        readyForStudy: source.status === "indexed" || source.status === "ready" || Number(chunkCount || 0) > 0,
+        readyForStudy: processing.status === "ready",
+        processing,
         extractedSnippet: extractedText ? String(extractedText).slice(0, 180) : "",
       };
     }),
@@ -743,6 +718,7 @@ function publicState(state, persistence) {
       includeDiscoveredReview: classroomPolicy.courseworkReviewEnabled === true && classroomPolicy.autoCheckEnabled === true,
     }),
     queueHealth: buildQueueHealth(state.backgroundJobs || []),
+    embeddingProcessing,
     persistence: publicRetrievalStatus(persistence),
     productLifecycle,
     planAccess: {
@@ -3862,37 +3838,33 @@ async function handleApi(req, res, url) {
     const { session, state } = await getStateContext(req);
     requireDashboardActive(state);
     requireUploadSession(session);
-    const summary = await reindexSourceChunkEmbeddings({
-      sourceChunks: state.sourceChunks,
+    const queued = queueEmbeddingReindexJob(state, {
+      userId: session.user.id,
+      sourceId: body.sourceId || null,
       limit: Math.min(Number(body.limit) || 50, 250),
-      includeEmbedded: body.force === true,
+      force: body.force === true,
     });
-    const metadataById = new Map((state.embeddingsMetadata || []).map((item) => [item.id, item]));
-    for (const row of createEmbeddingMetadataForChunks({
-      material: { id: null, userId: state.studentProfile.id },
-      sourceChunks: state.sourceChunks.filter((chunk) => summary.chunkIds.includes(chunk.id)),
-    })) {
-      const existing = metadataById.get(row.id);
-      if (existing) Object.assign(existing, row);
-      else state.embeddingsMetadata.push(row);
+    if (!queued.reused) {
+      recordJobEvent(state, {
+        job: queued.job,
+        eventType: queued.requeued ? "retry" : "queued",
+        message: queued.requeued ? "Embedding reindex job returned to the worker queue." : "Embedding reindex job queued for background processing.",
+        metadata: { sourceId: queued.job.sourceId, force: queued.job.payload?.force === true },
+      });
+      await repository.saveJobQueue(session, state);
     }
-    state.auditLog.push({
-      id: `audit_reindex_${Date.now()}`,
-      actorId: state.studentProfile.id,
-      action: "source_embeddings.reindexed",
-      targetType: "source_chunks",
-      riskLevel: "low",
-      metadata: {
-        selected: summary.selected,
-        embedded: summary.embedded,
-        failed: summary.failed,
-        mode: summary.mode,
-      },
-      createdAt: new Date().toISOString(),
-    });
-    await repository.saveSourceIngestion(session, state);
     sendJson(res, 200, {
-      summary,
+      queued: true,
+      reused: queued.reused,
+      requeued: queued.requeued,
+      job: {
+        id: queued.job.id,
+        sourceId: queued.job.sourceId,
+        jobType: queued.job.jobType,
+        status: queued.job.status,
+        attempts: queued.job.attempts,
+      },
+      embeddingProcessing: buildEmbeddingProcessingStatus(state, { sourceId: queued.job.sourceId }),
       retrievalModeStatus: publicRetrievalStatus(repository.getInfo(session)),
       secretsPrinted: false,
     });
@@ -3917,7 +3889,7 @@ async function handleApi(req, res, url) {
         metadata: { sourceId: job.sourceId },
       });
     }
-    await repository.saveBackgroundJobs(session, state);
+    await repository.saveJobQueue(session, state);
     sendJson(res, 200, {
       retried: retried.length,
       jobIds: retried.map((job) => job.id),
@@ -3931,6 +3903,7 @@ async function handleApi(req, res, url) {
     const { session, state } = await getStateContext(req);
     sendJson(res, 200, {
       queueHealth: buildQueueHealth(state.backgroundJobs || []),
+      embeddingProcessing: buildEmbeddingProcessingStatus(state),
       retrievalModeStatus: publicRetrievalStatus(repository.getInfo(session)),
       secretsPrinted: false,
     });
@@ -4099,6 +4072,7 @@ async function handleApi(req, res, url) {
         charCount: chunk.charCount || chunk.characterCount || 0,
         citationLabel: chunk.citationLabel || null,
       })),
+      embeddingProcessing: buildEmbeddingProcessingStatus(state),
       storagePlan: getSourceStoragePlan(supabaseConfig),
     });
     return;
@@ -4147,12 +4121,6 @@ async function handleApi(req, res, url) {
       const course = contract.course;
       enforceUsage(state, "upload", { fileSizeBytes: validation.sizeBytes });
 
-      uploadStage = "text_extraction";
-      const extraction = await runUploadStage(req, uploadStage, () => extractSourceText({
-        bytes: file.bytes,
-        mimeType: validation.mimeType,
-        filename: validation.filename,
-      }));
       const material = createSourceMaterialRecord({
         session,
         course,
@@ -4165,8 +4133,12 @@ async function handleApi(req, res, url) {
         },
         config: supabaseConfig,
         extraction: {
-          ...extraction,
-          status: "extracting",
+          status: "queued",
+          extractedText: "",
+          extractionSummary: "Stored privately. StudentOS is processing this material in the background.",
+          extractionError: null,
+          extractionPages: null,
+          extractionProvider: null,
         },
         artifactKind: contract.kind,
         contextKind: contract.kind === "material" ? "study_material" : contract.kind,
@@ -4181,62 +4153,33 @@ async function handleApi(req, res, url) {
         timeoutMs: SOURCE_UPLOAD_STAGE_TIMEOUT_MS,
       });
 
-      uploadStage = "chunk_embed";
-      const chunks = extraction.status === "indexed" ? chunkExtractedText(extraction.extractedText) : [];
-      const sourceChunks = await runUploadStage(req, uploadStage, () => embedSourceChunks({
-        sourceChunks: createSourceChunks({ material, chunks }),
-      }));
-      const embeddingRows = createEmbeddingMetadataForChunks({ material, sourceChunks });
-      material.status = extraction.status;
-      material.extractionStatus = material.status;
-      material.extractedText = extraction.extractedText;
-      material.extractionSummary = extraction.extractionSummary;
-      material.extractionError = extraction.extractionError || null;
-      material.extractionPages = extraction.extractionPages ?? null;
-      material.extractionProvider = extraction.extractionProvider || null;
-      material.ocrRequired = extraction.ocrRequired === true || extraction.status === "needs_ocr";
-      material.indexedAt = material.status === "indexed" ? new Date().toISOString() : null;
-      material.failedAt = material.status === "failed" || material.status === "needs_ocr" ? new Date().toISOString() : null;
-      material.chunkCount = sourceChunks.length;
+      material.status = "processing";
+      material.extractionStatus = "queued";
+      material.embeddingStatus = "pending_embedding";
+      material.chunkCount = 0;
+      material.indexedAt = null;
+      material.failedAt = null;
+      const sourceChunks = [];
+      const memoryItem = null;
       const { assignment, syllabus } = linkManualAcademicContextUpload(state, material, contract);
-      const memoryItem = material.status === "indexed"
-        ? createMemoryItemForSource({ material, course })
-        : null;
       state.sourceMaterials.push(material);
-      state.sourceChunks.push(...sourceChunks);
-      if (memoryItem) state.memoryItems.push(memoryItem);
-      state.embeddingsMetadata.push(...embeddingRows);
       markAcademicContextNeedsPreparation(state, `${contract.kind}_uploaded`);
-      const completedUploadJob = {
-        ...createBackgroundJob({
-          userId: session.user.id,
-          sourceId: material.id,
-          jobType: "source_ingestion",
-          status: "completed",
-          payload: {
-            chunks: sourceChunks.length,
-            extractionProvider: material.extractionProvider,
-          },
-        }),
-        attempts: 1,
-      };
-      state.backgroundJobs.push(completedUploadJob);
-      recordJobEvent(state, {
-        job: completedUploadJob,
-        eventType: "queued",
-        message: "Source ingestion job created during upload.",
-        metadata: { immediate: true },
-      });
-      recordJobEvent(state, {
-        job: completedUploadJob,
-        eventType: material.status === "indexed" ? "completed" : "failed",
-        severity: material.status === "indexed" ? "info" : "warn",
-        message: material.status === "indexed" ? "Source indexed during upload." : "Source extraction did not finish during upload.",
-        metadata: {
-          status: material.status,
-          extractionError: material.extractionError,
-          chunks: sourceChunks.length,
+      const queuedUpload = queueSourceIngestionJob(state, {
+        userId: session.user.id,
+        sourceId: material.id,
+        payload: {
+          filename: material.filename,
+          mimeType: material.mimeType,
+          storageBucket: material.storageBucket,
+          storagePath: material.storagePath,
         },
+      });
+      const ingestionJob = queuedUpload.job;
+      recordJobEvent(state, {
+        job: ingestionJob,
+        eventType: "queued",
+        message: "Source ingestion queued for background extraction, chunking, and embedding.",
+        metadata: { immediate: false, sourceId: material.id },
       });
       state.auditLog.push({
         id: `audit_${material.id}`,
@@ -4289,6 +4232,7 @@ async function handleApi(req, res, url) {
           contextKind: material.contextKind,
           assignmentId: assignment?.id || null,
           status: material.status,
+          processing: buildSourceEmbeddingProcessing(state, material),
           chunkCount: material.chunkCount,
           extractionSummary: material.extractionSummary,
           extractionError: material.extractionError,
@@ -4327,6 +4271,8 @@ async function handleApi(req, res, url) {
             }
           : null,
         status: material.status,
+        processing: buildSourceEmbeddingProcessing(state, material),
+        ingestionJob: { id: ingestionJob.id, status: ingestionJob.status, jobType: ingestionJob.jobType },
         chunkCount: material.chunkCount,
         extractionSummary: material.extractionSummary,
         extractionError: material.extractionError,

@@ -31,7 +31,9 @@ export async function processClaimedJob({
   signal = null,
 } = {}) {
   const session = sessionForJob(config, listedJob);
-  const state = await repository.loadState(session);
+  const state = listedJob.jobType === "recovery_analysis"
+    ? await repository.loadRecoveryState(session)
+    : await repository.loadAcademicContext(session);
   const job = (state.backgroundJobs || []).find((item) => item.id === listedJob.id) || listedJob;
   Object.assign(job, listedJob);
   if (!state.backgroundJobs.some((item) => item.id === job.id)) {
@@ -95,7 +97,8 @@ export async function processClaimedJob({
       error: result.error,
     },
   });
-  await repository.saveBackgroundJobForUser(session.user, job, state);
+  if (job.jobType === "recovery_analysis") await repository.saveJobQueue(session, state);
+  else await repository.saveBackgroundJobs(session, state);
   return {
     id: job.id,
     sourceId: job.sourceId,
