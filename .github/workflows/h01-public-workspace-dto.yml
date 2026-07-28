@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
   pull-requests: write
 
 concurrency:
@@ -47,7 +48,31 @@ jobs:
         run: npm run check:syntax && npm run smoke:core
 
       - name: Run complete regression suite
-        run: npm test
+        id: regression
+        shell: bash
+        run: |
+          set +e
+          npm test > /tmp/h01-regression.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/h01-regression.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Publish regression diagnostic
+        if: failure() && steps.regression.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          {
+            grep -nE 'FAIL|Error:|AssertionError|failed|not ok|Expected|Received|Test timeout|playwright' /tmp/h01-regression.log | tail -n 100 || true
+            echo
+            tail -n 220 /tmp/h01-regression.log
+          } > /tmp/h01-regression-diagnostic.log
+          diagnostic="$(tail -c 14000 /tmp/h01-regression-diagnostic.log)"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
+            -f body="### H-01 regression diagnostic\n\n\`\`\`text\n${diagnostic}\n\`\`\`"
 
       - name: Run production and Azure preflights
         run: npm run preflight:production && npm run preflight:azure
