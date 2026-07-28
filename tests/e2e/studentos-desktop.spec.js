@@ -2392,7 +2392,7 @@ test("public auth shell gates the app when auth is enabled", async ({ page }) =>
   await page.unroute("https://example.supabase.co/auth/v1/signup**");
 
   await page.evaluate(() => { window.location.hash = "login"; });
-  await expect(page.locator("#auth-shell-title")).toHaveText("Sign in to StudentOS");
+  await expect(page.locator("#auth-shell-title")).toHaveText("Welcome back");
   await page.locator("#auth-email").fill("qa@studentos.local");
   await page.getByRole("button", { name: "Forgot password?" }).click();
   await expect(page.locator("#auth-message")).toContainText("If an account exists for this email, a reset link has been sent. Please check your inbox.");
