@@ -35,6 +35,21 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/applyH03BackgroundEmbeddingBoundary.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''server = replace_once(server, '    queueHealth: buildQueueHealth(state.backgroundJobs || []),\\n', '    queueHealth: buildQueueHealth(state.backgroundJobs || []),\\n    embeddingProcessing,\\n', "public processing summary")'''
+          new = '''server = replace_once(
+              server,
+              '    queueHealth: buildQueueHealth(state.backgroundJobs || []),\\n    persistence: publicRetrievalStatus(persistence),',
+              '    queueHealth: buildQueueHealth(state.backgroundJobs || []),\\n    embeddingProcessing,\\n    persistence: publicRetrievalStatus(persistence),',
+              "public processing summary",
+          )'''
+          if text.count(old) != 1:
+              raise SystemExit(f"H-03 anchor repair expected one match, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
           python scripts/applyH03BackgroundEmbeddingBoundary.py 2>&1 | tee h03-patch.log
 
       - name: Install dependencies
