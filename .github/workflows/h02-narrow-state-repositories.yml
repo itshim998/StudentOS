@@ -50,12 +50,19 @@ jobs:
 
       - name: Run complete regression suite
         id: regression
-        run: npm test
-
-      - name: Publish regression diagnostic
-        if: failure() && steps.regression.outcome == 'failure'
+        shell: bash
         run: |
-          echo "The full repository suite failed after the focused H-02 and smoke checks passed. Inspect the npm test output above for the first regression."
+          set -o pipefail
+          npm test 2>&1 | tee h02-npm-test.log
+
+      - name: Upload regression diagnostic
+        if: failure() && steps.regression.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: h02-regression-diagnostic
+          path: h02-npm-test.log
+          if-no-files-found: error
+          retention-days: 2
 
       - name: Run production and Azure preflights
         run: npm run preflight:production && npm run preflight:azure
@@ -85,6 +92,7 @@ jobs:
           rm -f scripts/applyH02NarrowStateRepositories.py
           rm -f scripts/fixupH02NarrowStateRepositories.py
           rm -f docs/H02_*.tmp
+          rm -f h02-npm-test.log
           git config user.name "StudentOS Security Remediation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
