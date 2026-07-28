@@ -526,21 +526,22 @@ function requestStateScope(req) {
   return "academic_context";
 }
 
-async function loadRequestState(session, scope) {
+async function loadRequestState(session, scope, entityId = null) {
   if (scope === "dashboard") return repository.loadDashboardState(session);
+  if (scope === "test_session") return repository.loadTestSession(session, entityId);
   if (scope === "account_lifecycle") return repository.loadAccountLifecycle(session);
   if (scope === "recovery") return repository.loadRecoveryState(session);
   if (scope === "ai") return repository.loadAiState(session);
   return repository.loadAcademicContext(session);
 }
 
-async function getStateContext(req, { scope = null } = {}) {
+async function getStateContext(req, { scope = null, entityId = null } = {}) {
   const session = await getRequestSession(req, {
     config: supabaseConfig,
     authClient: supabaseClients.authClient,
   });
   const resolvedScope = scope || requestStateScope(req);
-  const state = await loadRequestState(session, resolvedScope);
+  const state = await loadRequestState(session, resolvedScope, entityId);
   if (hydrateSavedProductOnboarding(state)) {
     await repository.saveProfile(session, state);
   }
@@ -2845,9 +2846,10 @@ async function handleApi(req, res, url) {
   const studyTestStartMatch = url.pathname.match(/^\/api\/study\/tests\/([^/]+)\/start$/);
   if (req.method === "POST" && studyTestStartMatch) {
     const body = await readJsonBody(req);
-    const { session, state, persistence } = await getStateContext(req);
+    const testSessionId = decodeURIComponent(studyTestStartMatch[1]);
+    const { session, state, persistence } = await getStateContext(req, { scope: "test_session", entityId: testSessionId });
     requireDashboardActive(state);
-    const testSession = findStudyTestSession(state, { sessionId: decodeURIComponent(studyTestStartMatch[1]) });
+    const testSession = findStudyTestSession(state, { sessionId: testSessionId });
     if (!testSession) {
       const error = new Error("This test is no longer available.");
       error.status = 404;
@@ -2866,9 +2868,10 @@ async function handleApi(req, res, url) {
 
   const studyTestFinishMatch = url.pathname.match(/^\/api\/study\/tests\/([^/]+)\/finish$/);
   if (req.method === "POST" && studyTestFinishMatch) {
-    const { session, state, persistence } = await getStateContext(req);
+    const testSessionId = decodeURIComponent(studyTestFinishMatch[1]);
+    const { session, state, persistence } = await getStateContext(req, { scope: "test_session", entityId: testSessionId });
     requireDashboardActive(state);
-    const testSession = findStudyTestSession(state, { sessionId: decodeURIComponent(studyTestFinishMatch[1]) });
+    const testSession = findStudyTestSession(state, { sessionId: testSessionId });
     if (!testSession) {
       const error = new Error("This test is no longer available.");
       error.status = 404;
@@ -2891,11 +2894,12 @@ async function handleApi(req, res, url) {
 
   const studyTestEvaluateMatch = url.pathname.match(/^\/api\/study\/tests\/([^/]+)\/evaluate$/);
   if (req.method === "POST" && studyTestEvaluateMatch) {
-    const { session, state, persistence } = await getStateContext(req);
+    const testSessionId = decodeURIComponent(studyTestEvaluateMatch[1]);
+    const { session, state, persistence } = await getStateContext(req, { scope: "test_session", entityId: testSessionId });
     requireDashboardActive(state);
     assertProductFeatureAccess(state, FEATURE_KEYS.ASSISTANT);
     enforceRateLimit(req, session, "ai_call");
-    const testSession = findStudyTestSession(state, { sessionId: decodeURIComponent(studyTestEvaluateMatch[1]) });
+    const testSession = findStudyTestSession(state, { sessionId: testSessionId });
     if (!testSession) {
       const error = new Error("This test is no longer available.");
       error.status = 404;
@@ -3088,9 +3092,10 @@ async function handleApi(req, res, url) {
 
   const studyTestMatch = url.pathname.match(/^\/api\/study\/tests\/([^/]+)$/);
   if (studyTestMatch && ["GET", "PATCH"].includes(req.method)) {
-    const { session, state, persistence } = await getStateContext(req);
+    const testSessionId = decodeURIComponent(studyTestMatch[1]);
+    const { session, state, persistence } = await getStateContext(req, { scope: "test_session", entityId: testSessionId });
     requireDashboardActive(state);
-    const testSession = findStudyTestSession(state, { sessionId: decodeURIComponent(studyTestMatch[1]) });
+    const testSession = findStudyTestSession(state, { sessionId: testSessionId });
     if (!testSession) {
       const error = new Error("This test is no longer available.");
       error.status = 404;

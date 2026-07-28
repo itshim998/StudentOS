@@ -61,7 +61,12 @@ const ACADEMIC_CONTEXT_COLLECTIONS = Object.freeze([
 const TEST_SESSION_COLLECTIONS = Object.freeze([
   "courses",
   "topics",
+  "syllabi",
+  "exams",
   "assignments",
+  "timetable",
+  "notes",
+  "sourceMaterials",
   "testSessions",
   "testResults",
   "creditLedger",
@@ -69,6 +74,13 @@ const TEST_SESSION_COLLECTIONS = Object.freeze([
   "revisionEvents",
   "tutorLessons",
   "assignmentAutomationContracts",
+  "memoryItems",
+  "backgroundJobs",
+  "billingSubscriptions",
+  "dataExportRequests",
+  "dataExportJobs",
+  "accountDeletionRequests",
+  "classroomItems",
   "auditLog",
 ]);
 

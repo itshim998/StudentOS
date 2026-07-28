@@ -76,6 +76,8 @@ assert.doesNotMatch(repositorySource.slice(repositorySource.indexOf("class Supab
 const serverSource = await readFile(new URL("./server.js", import.meta.url), "utf8");
 assert.match(serverSource, /requestStateScope\(req\)/);
 assert.match(serverSource, /repository\.loadDashboardState/);
+assert.match(serverSource, /repository\.loadTestSession/);
+assert.match(serverSource, /scope: "test_session", entityId: testSessionId/);
 assert.match(serverSource, /repository\.loadAccountLifecycle/);
 assert.match(serverSource, /repository\.loadRecoveryState/);
 assert.match(serverSource, /repository\.loadAcademicContext/);

@@ -7,3 +7,5 @@ Multi-collection writes use `persist_studentos_state_patch`, so the profile and 
 Source-artifact database deletion is performed by a dedicated transactional RPC. Private object storage remains an external system and is deleted separately after the database transaction.
 
 Apply `202607280001_h02_narrow_state_repositories.sql` identically to every StudentOS data shard before relying on transactional multi-collection writes in Supabase mode.
+
+Path-addressed test start, finish, evaluation, answer-save, and read operations now call `loadTestSession` with the server-decoded session ID. The test scope preserves the public workspace fields returned by those endpoints while filtering the test session and result rows to that entity and excluding AI, consent/legal, and recovery histories.
