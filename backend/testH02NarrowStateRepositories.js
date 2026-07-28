@@ -87,5 +87,9 @@ assert.match(migration, /load_studentos_state_scope/);
 assert.match(migration, /persist_studentos_state_patch/);
 assert.match(migration, /delete_studentos_source_artifacts/);
 assert.match(migration, /jsonb_populate_recordset/);
+const testSessionScopeSql = migration.match(/when 'test_session' then scope_keys := array\[([^\]]+)\]/)?.[1] || "";
+for (const key of STATE_SCOPE_COLLECTIONS.test_session) {
+  assert.match(testSessionScopeSql, new RegExp(`'${key}'`), `migration test_session scope missing ${key}`);
+}
 
 console.log("PASS | H-02 narrow state repositories and transactional mutation tests passed");
