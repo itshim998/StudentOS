@@ -51,6 +51,7 @@ jobs:
           path.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
           python scripts/applyH03BackgroundEmbeddingBoundary.py 2>&1 | tee h03-patch.log
+          python scripts/applyH03RecoveryScopePatch.py 2>&1 | tee -a h03-patch.log
           python - <<'PY'
           from pathlib import Path
           path = Path("scripts/smokeCoreFlows.js")
@@ -91,6 +92,7 @@ jobs:
             npm run test:jobs
             npm run test:embeddings
             npm run test:h02-state-repositories
+            npm run test:recovery
           } 2>&1 | tee h03-focused.log
 
       - name: Check syntax and core smoke flow
@@ -138,6 +140,7 @@ jobs:
           grep -q 'executionBoundary: "background_jobs_only"' backend/embeddings/embeddingProcessingStatus.js
           grep -q 'repository.saveBackgroundJobs' backend/jobs/workerRuntime.js
           grep -q 'async saveJobQueue' backend/repository/studentOsRepository.js
+          grep -q "when 'recovery' then scope_keys := array\['courses','topics','exams'" supabase/migrations/202607280001_h02_narrow_state_repositories.sql
           git diff --check
 
       - name: Commit validated remediation
@@ -145,6 +148,7 @@ jobs:
         run: |
           rm -f .github/workflows/h03-background-embedding-boundary.yml
           rm -f scripts/applyH03BackgroundEmbeddingBoundary.py
+          rm -f scripts/applyH03RecoveryScopePatch.py
           rm -f h03-patch.log h03-focused.log h03-smoke.log h03-regression.log
           git config user.name "StudentOS Security Remediation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
