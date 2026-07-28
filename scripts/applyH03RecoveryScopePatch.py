@@ -59,7 +59,7 @@ test = replace_once(
     test,
     '''assert.match(dto, /"embeddingProcessing"/);
 ''',
-    '''assert.match(dto, /"embeddingProcessing"/);
+    r'''assert.match(dto, /"embeddingProcessing"/);
 const h02Migration = await readFile(new URL("../supabase/migrations/202607280001_h02_narrow_state_repositories.sql", import.meta.url), "utf8");
 assert.match(h02Migration, /when 'recovery' then scope_keys := array\[[^\n]*'exams'[^\n]*'creditLedger'[^\n]*'billingSubscriptions'/);
 ''',
