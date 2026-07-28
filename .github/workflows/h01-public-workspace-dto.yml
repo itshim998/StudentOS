@@ -1,9 +1,9 @@
 name: H-01 Public Workspace DTO
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/h01-public-workspace-dto
+      - main
 
 permissions:
   contents: write
@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   validate-and-commit:
+    if: github.head_ref == 'fix/h01-public-workspace-dto'
     runs-on: ubuntu-latest
     timeout-minutes: 70
     steps:
