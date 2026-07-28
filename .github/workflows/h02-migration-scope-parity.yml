@@ -1,0 +1,64 @@
+name: H-02 Migration Scope Parity
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  validate-and-commit:
+    if: github.head_ref == 'fix/h02-migration-scope-parity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - name: Checkout parity branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/h02-migration-scope-parity
+          fetch-depth: 0
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run focused H-02 tests
+        run: npm run test:h02-state-repositories
+
+      - name: Check syntax and core smoke flow
+        run: npm run check:syntax && npm run smoke:core
+
+      - name: Run complete regression suite
+        run: npm test
+
+      - name: Run production and Azure preflights
+        run: npm run preflight:production && npm run preflight:azure
+
+      - name: Validate migration parity and whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "when 'test_session'.*'sourceMaterials'.*'accountDeletionRequests'.*'classroomItems'" supabase/migrations/202607280001_h02_narrow_state_repositories.sql
+          grep -q 'STATE_SCOPE_COLLECTIONS.test_session' backend/testH02NarrowStateRepositories.js
+          git diff --check
+
+      - name: Commit validated parity fix
+        shell: bash
+        run: |
+          rm -f .github/workflows/h02-migration-scope-parity.yml
+          git config user.name "StudentOS Security Remediation"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Validate H-02 migration scope parity"
+          git push origin HEAD:fix/h02-migration-scope-parity
