@@ -85,9 +85,14 @@ for (const invalid of [
   const validation = validateRecoveryRolloutEnvironment(invalid);
   assert.equal(validation.ok, false);
   const config = getRecoveryConfig(invalid);
-  assert.equal(config.enabled, false);
-  assert.equal(config.uiEnabled, false);
+  assert.equal(config.rolloutConfigValid, false);
   assert.equal(config.rolloutMode, RECOVERY_ROLLOUT_MODES.OFF);
+  assert.equal(config.rolloutUserIds.length, 0);
+  assert.equal(getPublicRecoveryCapability(activeState(USER_ID), config).status, "disabled");
+  assert.throws(
+    () => assertRecoveryRouteAccess(activeState(USER_ID), config),
+    (error) => [RECOVERY_FAILURES.ENGINE_DISABLED, RECOVERY_FAILURES.UI_DISABLED].includes(error?.code),
+  );
 }
 
 const parsed = parseRecoveryRolloutUserIds(` ${USER_ID.toUpperCase()} , ${OTHER_USER_ID} `);
@@ -114,6 +119,7 @@ assert.equal(isRecoveryRolloutUserEligible("00000000-0000-4000-8000-000000000777
 const safeStatus = getSafeRecoveryStatus(allowlistConfig);
 assert.equal(safeStatus.cohortRestricted, true);
 assert.equal(safeStatus.rolloutMode, RECOVERY_ROLLOUT_MODES.ALLOWLIST);
+assert.equal(safeStatus.rolloutConfigValid, true);
 assert.doesNotMatch(JSON.stringify(safeStatus), new RegExp(USER_ID, "i"));
 
 const eligibleState = activeState(USER_ID, "plus");
