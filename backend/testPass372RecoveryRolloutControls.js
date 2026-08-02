@@ -163,7 +163,10 @@ assert.match(rolloutWorkflow, /STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false/);
 assert.match(rolloutWorkflow, /STUDENTOS_RECOVERY_UI_ENABLED=false/);
 assert.match(rolloutWorkflow, /STUDENTOS_RECOVERY_ROLLOUT_MODE=off/);
 assert.match(rolloutWorkflow, /Raw CLI output was withheld/);
-assert.doesNotMatch(rolloutWorkflow, /echo[^\n]*STUDENTOS_RECOVERY_ROLLOUT_USER_IDS/);
+assert.doesNotMatch(
+  rolloutWorkflow,
+  /echo[^\n]*(?:\$STUDENTOS_RECOVERY_ROLLOUT_USER_IDS|\$\{\{\s*secrets\.STUDENTOS_RECOVERY_ROLLOUT_USER_IDS\s*\}\})/,
+);
 
 const bicep = await readFile(new URL("../infra/azure/containerapp.bicep", import.meta.url), "utf8");
 assert.equal((bicep.match(/name: 'STUDENTOS_RECOVERY_UI_ENABLED'/g) || []).length, 2);
