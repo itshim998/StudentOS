@@ -51,7 +51,7 @@ STUDENTOS_RECOVERY_UI_ENABLED=false
 STUDENTOS_RECOVERY_ROLLOUT_MODE=off
 ```
 
-The ordinary deployment workflow no longer accepts an Adaptive Recovery enable input. Deploying new StudentOS code therefore cannot enable Recovery accidentally.
+The ordinary deployment workflow no longer accepts an Adaptive Recovery enable input. Deploying new StudentOS code therefore cannot enable Recovery accidentally. A later ordinary deployment also returns Recovery to the dark state, which is the safe fallback during this controlled phase.
 
 `infra/azure/containerapp.bicep` carries the same dark defaults for both Container Apps.
 
@@ -59,7 +59,7 @@ The ordinary deployment workflow no longer accepts an Adaptive Recovery enable i
 
 `.github/workflows/adaptive-recovery-rollout.yml` is the only checked-in workflow allowed to change Recovery rollout state.
 
-It is manual-only and uses the existing protected `azure-dev` environment. It supports:
+It is manual-only, may run only from `main`, and uses the existing protected `azure-dev` environment. It supports:
 
 - `disable`
 - `enable_allowlist`
@@ -76,13 +76,16 @@ Before allowlist enablement, the workflow:
 1. validates the cohort configuration without printing UUIDs;
 2. verifies the hardened Recovery schema live on every data shard;
 3. verifies the existing worker has no ingress, fixed 1–1 scale, the expected command, and a ready latest revision;
-4. verifies API and worker image parity;
-5. stores the cohort as an Azure Container Apps secret;
-6. maps the cohort through a secret reference to both API and worker;
-7. updates the engine, UI, and rollout mode together;
-8. waits for ready revisions and verifies API/worker rollout parity.
+4. requires API and worker to use the same image;
+5. requires that image to be the current `main` commit deployed through the dark deployment workflow;
+6. stores the cohort as an Azure Container Apps secret;
+7. enables the worker first and waits for readiness;
+8. enables the API only after the worker is ready;
+9. verifies both revisions and API/worker rollout parity.
 
-The disable action sets both feature flags false and the rollout mode to `off`. It preserves Recovery history and the stored cohort secret so rollback is non-destructive and does not print identifiers.
+The disable action does not depend on the currently deployed image version. It hides the API surface first, then disables worker-side Recovery processing. It sets both feature flags false and the rollout mode to `off` while preserving Recovery history and the stored cohort secret.
+
+A failed enable attempt triggers an emergency disable of both apps. Raw Azure CLI output remains withheld throughout enable, disable, and emergency rollback operations.
 
 ## Required GitHub environment secret
 
@@ -131,8 +134,11 @@ For the first rollout, use one approved Plus or Pro test account only.
 - safe public status;
 - non-cohort denial;
 - deployment/rollout workflow separation;
+- main-branch and current-image requirements;
 - manual confirmations;
 - schema gate presence;
+- worker-first enable and API-first disable ordering;
+- automatic failed-enable rollback;
 - paired enable/disable behavior;
 - redacted Azure operations;
 - Bicep defaults.
@@ -146,17 +152,19 @@ Part B must not redesign the rollout architecture. It should:
 1. pull this branch locally and review the entire diff;
 2. run syntax, Recovery, preflight, Cloudflare, and full test suites;
 3. correct only defects discovered by those validations;
-4. verify migrations `202607190001` and `202607190002` read-only across data shards;
-5. verify the live API/worker topology without printing secret values;
-6. merge the Part A PR only after CI and local validation are green;
-7. deploy the merged code dark through the normal Azure workflow;
-8. verify ordinary StudentOS behavior while Recovery remains absent;
-9. add one approved Plus or Pro account UUID to the protected GitHub environment secret;
-10. run the dedicated rollout workflow with `enable_allowlist`;
-11. exercise analyze → preview → reject and analyze → preview → apply;
-12. verify stale/expired/superseded handling and idempotent replays;
-13. run the dedicated workflow with `disable` and confirm the entry point disappears while Today continues normally;
-14. leave Recovery disabled after the rehearsal unless a separate explicit launch decision is made.
+4. reconcile older Azure documentation that still describes the removed deployment-time enable input;
+5. verify migrations `202607190001` and `202607190002` read-only across data shards;
+6. verify the live API/worker topology without printing secret values;
+7. merge the Part A PR only after CI and local validation are green;
+8. deploy the exact merged `main` commit dark through the normal Azure workflow;
+9. verify ordinary StudentOS behavior while Recovery remains absent;
+10. confirm no stale or unexpected Recovery jobs are queued before enablement;
+11. add one approved Plus or Pro account UUID to the protected GitHub environment secret;
+12. run the dedicated rollout workflow with `enable_allowlist`;
+13. exercise analyze → preview → reject and analyze → preview → apply;
+14. verify stale/expired/superseded handling and idempotent replays;
+15. run the dedicated workflow with `disable` and confirm the entry point disappears while Today continues normally;
+16. leave Recovery disabled after the rehearsal unless a separate explicit launch decision is made.
 
 ## Preserved boundaries
 
