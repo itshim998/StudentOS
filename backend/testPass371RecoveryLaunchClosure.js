@@ -79,7 +79,7 @@ expectRecoveryCode(
 );
 expectRecoveryCode(
   () => assertRecoveryRouteAccess(activePlanState("plus"), getRecoveryConfig({ STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: "true" })),
-  RECOVERY_FAILURES.ENGINE_DISABLED,
+  RECOVERY_FAILURES.UI_DISABLED,
 );
 
 const planExpectations = [
