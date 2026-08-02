@@ -153,9 +153,9 @@ jobs:
             wait_ready() {
               app_name="$1"
               for attempt in $(seq 1 30); do
-                app_json="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "$app_name" --output json)"
-                latest="$(jq -r '.properties.latestRevisionName // ""' <<<"$app_json")"
-                ready="$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$app_json")"
+                app_json="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "$app_name" --output json 2>/dev/null || true)"
+                latest="$(jq -r '.properties.latestRevisionName // ""' <<<"${app_json:-{}}")"
+                ready="$(jq -r '.properties.latestReadyRevisionName // ""' <<<"${app_json:-{}}")"
                 if [ -n "$latest" ] && [ "$latest" = "$ready" ]; then
                   return 0
                 fi
@@ -209,10 +209,22 @@ jobs:
               wait_ready "$api_app"
             else
               # Hide the API surface first, then stop worker-side Recovery processing.
-              set_disabled "$api_app"
-              wait_ready "$api_app"
-              set_disabled "$worker_app"
-              wait_ready "$worker_app"
+              api_disable_failed=0
+              worker_disable_failed=0
+              if set_disabled "$api_app"; then
+                wait_ready "$api_app" || api_disable_failed=1
+              else
+                api_disable_failed=1
+              fi
+              if set_disabled "$worker_app"; then
+                wait_ready "$worker_app" || worker_disable_failed=1
+              else
+                worker_disable_failed=1
+              fi
+              if [ "$api_disable_failed" -ne 0 ] || [ "$worker_disable_failed" -ne 0 ]; then
+                echo "Recovery disable was not confirmed on both applications." >&2
+                exit 1
+              fi
             fi
 
       - name: Verify rollout state and ready revisions
