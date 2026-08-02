@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>StudentOS</title>
   <link rel="stylesheet" href="/styles/main.css">
+  <link rel="stylesheet" href="/styles/recovery.css">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css">
 </head>
 <body>
@@ -175,6 +176,8 @@
               </div>
             </article>
           </div>
+
+          <div id="recovery-entry" class="recovery-entry" hidden></div>
 
           <div id="today-dashboard-panels" class="overview-grid today-grid">
             <section class="focus-board today-board today-study-board">
@@ -752,6 +755,19 @@
         <div id="contract-result" class="result-box"></div>
       </div>
     </aside>
+
+    <dialog id="recovery-dialog" class="recovery-dialog" aria-labelledby="recovery-dialog-title">
+      <div class="recovery-dialog-shell">
+        <header class="recovery-dialog-header">
+          <div>
+            <p class="eyebrow">Today</p>
+            <h2 id="recovery-dialog-title" tabindex="-1">Adjust today’s plan</h2>
+          </div>
+          <button id="recovery-close-btn" class="icon-button" type="button" aria-label="Close plan review">X</button>
+        </header>
+        <div id="recovery-content" class="recovery-content" aria-live="polite"></div>
+      </div>
+    </dialog>
 
     <dialog id="academic-context-delete-dialog" class="academic-context-delete-dialog" aria-labelledby="academic-context-delete-title" aria-describedby="academic-context-delete-copy">
       <div class="delete-dialog-content">

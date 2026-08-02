@@ -61,7 +61,7 @@
     "test:multi-provider": "node backend/testMultiProviderRouting.js",
     "test:router-v2": "node backend/testProviderRouterV2.js",
     "test:router-v2-db": "node scripts/testAiRouterV2DatabaseConcurrency.js",
-    "test:recovery": "node backend/testAdaptiveRecoveryEngine.js && node backend/testAdaptiveRecoveryRemediation.js",
+    "test:recovery": "node backend/testAdaptiveRecoveryEngine.js && node backend/testAdaptiveRecoveryRemediation.js && node backend/testPass371RecoveryLaunchClosure.js",
     "check:syntax": "node scripts/checkNodeSyntax.js",
     "eval:recovery": "node scripts/runRecoveryEvaluation.js",
     "test:pass36-planning": "node backend/testPass36EvidenceBasedPlanning.js",

@@ -45,6 +45,7 @@ export const FEATURE_KEYS = Object.freeze({
   ASSIGNMENT_COACH: "assignment_coach.enabled",
   ASSIGNMENT_REVIEW: "assignment_review.enabled",
   ASSIGNMENT_WRITEBACK: "assignment_writeback.enabled",
+  ADAPTIVE_RECOVERY: "adaptive_recovery.enabled",
 });
 
 export const CLASSROOM_WRITE_ACTIONS = Object.freeze([
@@ -181,6 +182,7 @@ function featurePolicy(overrides = {}) {
     [FEATURE_KEYS.ASSIGNMENT_COACH]: false,
     [FEATURE_KEYS.ASSIGNMENT_REVIEW]: false,
     [FEATURE_KEYS.ASSIGNMENT_WRITEBACK]: false,
+    [FEATURE_KEYS.ADAPTIVE_RECOVERY]: false,
     ...overrides,
   };
 }
@@ -364,6 +366,7 @@ const PLAN_ENTITLEMENTS = deepFreeze({
       [FEATURE_KEYS.LEARNING_LEVEL]: true,
       [FEATURE_KEYS.LEARNING_LEVEL_ADAPTIVE_DIFFICULTY]: true,
       [FEATURE_KEYS.ASSIGNMENT_COACH]: true,
+      [FEATURE_KEYS.ADAPTIVE_RECOVERY]: true,
     }),
     limits: hiddenLimits({
       maxSyllabusTimelineUpdatesPerMonth: 14,
@@ -409,6 +412,7 @@ const PLAN_ENTITLEMENTS = deepFreeze({
       [FEATURE_KEYS.CONSISTENCY_POINTS]: true,
       [FEATURE_KEYS.ASSIGNMENT_COACH]: true,
       [FEATURE_KEYS.ASSIGNMENT_REVIEW]: true,
+      [FEATURE_KEYS.ADAPTIVE_RECOVERY]: true,
     }),
     limits: hiddenLimits({
       maxSyllabusTimelineUpdatesPerMonth: 24,
@@ -586,6 +590,7 @@ export function getPublicEntitlementSummary(planKey) {
       consistencyPoints: canUseFeature(planKey, FEATURE_KEYS.CONSISTENCY_POINTS),
       assignmentCoach: canUseFeature(planKey, FEATURE_KEYS.ASSIGNMENT_COACH),
       assignmentReview: canUseFeature(planKey, FEATURE_KEYS.ASSIGNMENT_REVIEW),
+      adaptiveRecovery: canUseFeature(planKey, FEATURE_KEYS.ADAPTIVE_RECOVERY),
     },
     learningLevelEnabled: canUseFeature(planKey, FEATURE_KEYS.LEARNING_LEVEL),
     consistencyPointsEnabled: canUseFeature(planKey, FEATURE_KEYS.CONSISTENCY_POINTS),

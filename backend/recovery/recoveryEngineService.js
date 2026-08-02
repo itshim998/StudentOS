@@ -619,43 +619,135 @@ export async function rejectRecoveryPreview({ repository, session, state, previe
   return { preview, replayed: false };
 }
 
+const SAFE_RUN_STATUSES = Object.freeze({
+  queued: "queued",
+  retrying: "preparing",
+  building_state: "preparing",
+  reasoning: "reviewing",
+  validating: "reviewing",
+  planning: "planning",
+  ready_for_review: "ready_for_review",
+  applying: "applying",
+  applied: "applied",
+  rejected: "rejected",
+  failed: "failed",
+  superseded: "superseded",
+});
+
+function safeFailureCode(value) {
+  return Object.values(RECOVERY_FAILURES).includes(value) ? value : RECOVERY_FAILURES.PROVIDER_FAILED;
+}
+
+function safePublicExplanation(value, fallback) {
+  const text = clean(value, 500);
+  if (!text || /\b(?:groq|gemini|pollinations|openai|anthropic|provider|model|prompt|tokens?|leases?|snapshots?|rpc|job payload|chain[- ]of[- ]thought)\b/i.test(text)) {
+    return fallback;
+  }
+  return text;
+}
+
+function safePlanItem(item) {
+  if (!item || typeof item !== "object") return null;
+  const priority = ["low", "medium", "high", "critical"].includes(String(item.priority || "").toLowerCase())
+    ? String(item.priority).toLowerCase()
+    : null;
+  const status = ["not_started", "studying", "done", "completed"].includes(String(item.study_status || item.studyStatus || "").toLowerCase())
+    ? String(item.study_status || item.studyStatus).toLowerCase()
+    : null;
+  return {
+    title: clean(item.title || item.topicTitle || "Study task", 180),
+    course: clean(item.related_course || item.courseTitle || "", 120) || null,
+    topic: clean(item.topicTitle || "", 120) || null,
+    scheduledStart: clean(item.scheduled_start || item.scheduledStart || "", 80) || null,
+    durationMinutes: Math.max(0, Number(item.duration_minutes || item.durationMinutes || 0)),
+    priority,
+    status,
+  };
+}
+
+function safePlanChange(change) {
+  const before = safePlanItem(change?.before);
+  const after = safePlanItem(change?.after);
+  return {
+    type: clean(change?.changeType || "plan_adjusted", 50),
+    title: after?.title || before?.title || "Study task",
+    before,
+    after,
+    explanation: safePublicExplanation(change?.explanation, "This change keeps today’s plan focused."),
+    supportingEvidenceCount: Array.isArray(change?.supportingEvidenceIds) ? change.supportingEvidenceIds.length : 0,
+  };
+}
+
+function safePlanSummary(plan, items = []) {
+  const rows = Array.isArray(plan?.items) ? plan.items : items;
+  return {
+    date: /^\d{4}-\d{2}-\d{2}$/.test(String(plan?.date || "")) ? plan.date : null,
+    summary: clean(plan?.summary || "", 300) || null,
+    taskCount: rows.length,
+    completedTaskCount: rows.filter((item) => ["done", "completed"].includes(String(item?.study_status || item?.studyStatus || "").toLowerCase())).length,
+    totalMinutes: rows.reduce((sum, item) => sum + Math.max(0, Number(item?.duration_minutes || item?.durationMinutes || 0)), 0),
+  };
+}
+
+function groupedPublicChanges(changes = []) {
+  const groups = { added: [], moved: [], adjusted: [], reassessments: [], deferred: [], warnings: [] };
+  for (const raw of changes) {
+    const change = safePlanChange(raw);
+    if (change.type === "reassessment_added") groups.reassessments.push(change);
+    else if (change.type === "task_added") groups.added.push(change);
+    else if (change.type === "task_moved") groups.moved.push(change);
+    else if (["duration_changed", "priority_changed"].includes(change.type)) groups.adjusted.push(change);
+    else if (change.type === "task_deferred") groups.deferred.push(change);
+    else if (change.type === "task_removed") groups.warnings.push(change);
+  }
+  return groups;
+}
+
 export function publicRecoveryRun(run) {
   if (!run) return null;
+  const status = SAFE_RUN_STATUSES[run.status] || "failed";
   return {
     id: run.id,
-    status: run.status,
-    triggerEventIds: run.triggerEventIds,
-    previousSnapshotId: run.previousSnapshotId,
-    currentSnapshotId: run.currentSnapshotId,
-    previewId: run.previewId,
-    providerRouting: run.providerRouting,
-    failureCode: run.failureCode,
-    failureRetryable: run.failureRetryable,
-    correlationId: run.correlationId,
-    createdAt: run.createdAt,
-    updatedAt: run.updatedAt,
+    status,
+    progressStage: ["queued", "preparing", "reviewing", "planning"].includes(status) ? status : null,
+    previewId: run.previewId || null,
+    error: run.failureCode ? {
+      code: safeFailureCode(run.failureCode),
+      retryable: run.failureRetryable === true,
+    } : null,
+    correlationId: clean(run.correlationId, 180) || null,
+    createdAt: run.createdAt || null,
+    updatedAt: run.updatedAt || null,
   };
 }
 
 export function publicRecoveryPreview(preview, state, now = new Date()) {
   if (!preview) return null;
-  const userState = ensureRecoveryCollections(state);
-  const stale = preview.status === "ready_for_review" && (Date.parse(preview.expiresAt) <= now.getTime() || preview.academicRevision !== userState.academicRevision || preview.basePlanVersion !== userState.planVersion || preview.basePlanId !== userState.currentPlanId);
+  const userState = (state?.recoveryUserStates || []).find((item) => item.userId === preview.userId) || null;
+  const expired = preview.status === "ready_for_review" && Date.parse(preview.expiresAt) <= now.getTime();
+  const superseded = preview.status === "ready_for_review" && (!userState || preview.academicRevision !== userState.academicRevision || preview.basePlanVersion !== userState.planVersion || preview.basePlanId !== userState.currentPlanId);
+  const status = expired ? "expired" : superseded ? "superseded" : preview.status;
+  const rawChanges = preview.backendDiff || preview.planDiff || [];
+  const beforeItems = rawChanges.map((change) => change?.before).filter(Boolean);
+  const run = (state?.recoveryRuns || []).find((item) => item.id === preview.runId && item.userId === preview.userId) || null;
   return {
     id: preview.id,
     runId: preview.runId,
-    status: preview.status,
-    basePlan: { id: preview.basePlanId, version: preview.basePlanVersion },
-    academicState: { previousVersion: preview.previousAcademicStateVersion, proposedVersion: preview.proposedAcademicStateVersion },
-    proposedPlan: preview.proposedPlan,
-    planDiff: preview.backendDiff || preview.planDiff,
-    affectedTopicIds: preview.affectedTopicIds,
-    affectedCourseIds: preview.affectedCourseIds,
-    evidenceIds: preview.evidenceIds,
-    deferredWork: preview.deferredWork,
-    summary: preview.summary,
-    expiresAt: preview.expiresAt,
-    stale,
-    appliedPlanId: preview.appliedPlanId,
+    status,
+    summary: safePublicExplanation(preview.summary, "A focused update is ready for review."),
+    evidenceSummary: {
+      topicCount: new Set(preview.affectedTopicIds || []).size,
+      courseCount: new Set(preview.affectedCourseIds || []).size,
+      supportingItemCount: new Set(preview.evidenceIds || []).size,
+    },
+    currentPlan: safePlanSummary(null, beforeItems),
+    proposedPlan: safePlanSummary(preview.proposedPlan),
+    changes: groupedPublicChanges(rawChanges),
+    expiresAt: preview.expiresAt || null,
+    createdAt: preview.createdAt || null,
+    updatedAt: preview.updatedAt || null,
+    applyAvailable: status === "ready_for_review",
+    rejectAvailable: status === "ready_for_review",
+    correlationId: clean(run?.correlationId, 180) || null,
   };
 }

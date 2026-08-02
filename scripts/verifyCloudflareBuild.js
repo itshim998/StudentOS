@@ -12,6 +12,10 @@ const runtimeConfigPath = join(frontendRoot, "runtime-config.js");
 const authRedesignCssPath = join(frontendRoot, "styles", "auth-redesign.css");
 const authRedesignJsPath = join(frontendRoot, "scripts", "auth-redesign.js");
 const studentOsLogoPath = join(frontendRoot, "assets", "studentos-logo.png");
+const recoveryCssPath = join(frontendRoot, "styles", "recovery.css");
+const recoveryJsPath = join(frontendRoot, "scripts", "features", "recovery.js");
+const apiClientJsPath = join(frontendRoot, "scripts", "core", "api-client.js");
+const featureAccessJsPath = join(frontendRoot, "scripts", "core", "feature-access.js");
 
 function requireNonEmptyFile(path, label) {
   if (!existsSync(path) || !statSync(path).isFile() || statSync(path).size === 0) {
@@ -25,6 +29,10 @@ requireNonEmptyFile(runtimeConfigPath, "frontend/runtime-config.js");
 requireNonEmptyFile(authRedesignCssPath, "frontend/styles/auth-redesign.css");
 requireNonEmptyFile(authRedesignJsPath, "frontend/scripts/auth-redesign.js");
 requireNonEmptyFile(studentOsLogoPath, "frontend/assets/studentos-logo.png");
+requireNonEmptyFile(recoveryCssPath, "frontend/styles/recovery.css");
+requireNonEmptyFile(recoveryJsPath, "frontend/scripts/features/recovery.js");
+requireNonEmptyFile(apiClientJsPath, "frontend/scripts/core/api-client.js");
+requireNonEmptyFile(featureAccessJsPath, "frontend/scripts/core/feature-access.js");
 
 const logoSignature = readFileSync(studentOsLogoPath).subarray(0, 8).toString("hex");
 if (logoSignature !== "89504e470d0a1a0a") {
@@ -45,6 +53,9 @@ const indexHtml = readFileSync(indexPath, "utf8");
 if (!indexHtml.includes('href="/vendor/katex/katex.min.css"')) {
   throw new Error("frontend/index.html does not reference the vendored KaTeX stylesheet.");
 }
+if (!indexHtml.includes('href="/styles/recovery.css"') || !indexHtml.includes('id="recovery-dialog"')) {
+  throw new Error("frontend/index.html does not contain the Adaptive Recovery frontend boundary.");
+}
 
 const runtimeConfig = readFileSync(runtimeConfigPath, "utf8");
 if (!runtimeConfig.includes("/styles/auth-redesign.css") || !runtimeConfig.includes("/scripts/auth-redesign.js")) {
@@ -58,6 +69,8 @@ console.log(JSON.stringify({
   authRedesignCss: "frontend/styles/auth-redesign.css",
   authRedesignJs: "frontend/scripts/auth-redesign.js",
   studentOsLogo: "frontend/assets/studentos-logo.png",
+  recoveryCss: "frontend/styles/recovery.css",
+  recoveryJs: "frontend/scripts/features/recovery.js",
   fontCount: fonts.length,
   htmlFallback: false,
   secretsPrinted: false,

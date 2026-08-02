@@ -1,4 +1,7 @@
 import { purgeLegacyAcademicCache } from "./migrations/legacyAcademicCache.js";
+import { readJsonResponse, requestJson } from "./core/api-client.js";
+import { getRecoveryAccess } from "./core/feature-access.js";
+import { createRecoveryFeature } from "./features/recovery.js";
 
 const API_BASE = window.StudentOSConfig?.apiBase || "";
 const PUBLIC_FRONTEND_HOSTS = new Set([
@@ -40,6 +43,7 @@ let studyTestGenerating = false;
 let studyTestCountdown = null;
 let studyTestExpiryRefreshPending = false;
 let academicPdfObjectUrl = null;
+let recoveryFeature = null;
 const productUploadResults = new Map();
 const studyTestSaveFlows = new Map();
 const studyTestActionsInFlight = new Map();
@@ -82,6 +86,10 @@ const els = {
   classroomDisconnectBtn: document.getElementById("classroom-disconnect-btn"),
   dashboardSummary: document.getElementById("dashboard-summary"),
   todayDashboardPanels: document.getElementById("today-dashboard-panels"),
+  recoveryEntry: document.getElementById("recovery-entry"),
+  recoveryDialog: document.getElementById("recovery-dialog"),
+  recoveryContent: document.getElementById("recovery-content"),
+  recoveryCloseBtn: document.getElementById("recovery-close-btn"),
   onboardingForm: document.getElementById("onboarding-form"),
   onboardingResult: document.getElementById("onboarding-result"),
   derivedWeakTopics: document.getElementById("derived-weak-topics"),
@@ -225,6 +233,7 @@ function storeSession(session) {
     sessionStorage.removeItem("studentos.auth.session");
     if (previousUserId) clearStudyTestStorageForUser(previousUserId);
   }
+  recoveryFeature?.update();
 }
 
 function decodeAuthUser(accessToken) {
@@ -775,43 +784,20 @@ function apiUrl(path) {
   return `${API_BASE}${path}`;
 }
 
-async function readJsonResponse(response, fallbackMessage) {
-  const contentType = response.headers.get("content-type") || "";
-  const text = await response.text();
-  const looksHtml = contentType.includes("text/html") || /^\s*<!doctype\s+html/i.test(text) || /^\s*<html[\s>]/i.test(text);
-  if (looksHtml) {
-    throw apiBaseMisconfiguredError();
-  }
-  try {
-    return text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(fallbackMessage || "StudentOS API returned an invalid JSON response.");
-  }
-}
-
 async function api(path, options = {}) {
-  const isFormData = options.body instanceof FormData;
-  const headers = isFormData
-    ? { ...(options.headers || {}) }
-    : {
-        "Content-Type": "application/json",
-        ...(options.headers || {}),
-      };
-  if (authSession?.access_token) {
-    headers.Authorization = `Bearer ${authSession.access_token}`;
+  try {
+    return await requestJson({
+      url: apiUrl(path),
+      options,
+      accessToken: authSession?.access_token || "",
+      onUnauthorized: handleSessionExpiry,
+      invalidResponseMessage: `StudentOS API returned invalid JSON for ${path}.`,
+    });
+  } catch (error) {
+    if (error?.invalidResponse) throw apiBaseMisconfiguredError();
+    error.message = studentFacingRequestError(error?.message, error?.status);
+    throw error;
   }
-  const response = await fetch(apiUrl(path), {
-    ...options,
-    headers,
-  });
-  const body = await readJsonResponse(response, `StudentOS API returned invalid JSON for ${path}.`);
-  if (!response.ok) {
-    if (response.status === 401) {
-      handleSessionExpiry();
-    }
-    throw new Error(studentFacingRequestError(body.error || `HTTP ${response.status}`, response.status));
-  }
-  return body;
 }
 
 function aiActionIdempotencyKey() {
@@ -2376,6 +2362,7 @@ function render() {
   renderSelects();
   renderAccount();
   updateProductFeatureControls();
+  recoveryFeature?.update();
 }
 
 function currentActivePlanKey() {
@@ -7553,6 +7540,16 @@ function wireEvents() {
 captureAuthReturnSession();
 updateShellVisibility();
 wireEvents();
+recoveryFeature = createRecoveryFeature({
+  entryRoot: els.recoveryEntry,
+  dialog: els.recoveryDialog,
+  contentRoot: els.recoveryContent,
+  closeButton: els.recoveryCloseBtn,
+  api,
+  getAccess: () => getRecoveryAccess(state),
+  getContextKey: () => authenticatedStudyTestUserId(authSession) || state?.studentProfile?.id || "",
+  onApplied: () => loadBootstrap(),
+});
 loadRuntimeConfig()
   .then(() => {
     if (authGateActive()) {
