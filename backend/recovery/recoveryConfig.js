@@ -96,8 +96,11 @@ export function getRecoveryConfig(env = process.env) {
     : [];
 
   return Object.freeze({
-    enabled: rollout.ok && rollout.engineEnabled,
-    uiEnabled: rollout.ok && rollout.uiEnabled,
+    // Low-level Recovery jobs still honor the dedicated engine switch so existing
+    // deterministic tests and already-queued work retain their service boundary.
+    // Public capability and route access additionally require a valid allowlist.
+    enabled: rollout.engineEnabled,
+    uiEnabled: rollout.uiEnabled,
     rolloutMode,
     rolloutUserIds: Object.freeze(rolloutUserIds),
     rolloutConfigValid: rollout.ok,
@@ -121,6 +124,7 @@ export function getSafeRecoveryStatus(config = getRecoveryConfig()) {
     enabled: config.enabled === true,
     uiEnabled: config.uiEnabled === true,
     rolloutMode: config.rolloutMode || RECOVERY_ROLLOUT_MODES.OFF,
+    rolloutConfigValid: config.rolloutConfigValid === true,
     cohortRestricted: config.rolloutMode === RECOVERY_ROLLOUT_MODES.ALLOWLIST,
     asynchronous: true,
     reviewRequired: true,
