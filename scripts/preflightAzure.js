@@ -104,11 +104,21 @@ addCheck("Azure disables backend frontend serving", server.includes("const SERVE
 addCheck("Cloudflare runtime config scaffold exists", exists("frontend/runtime-config.js") && exists("scripts/writeCloudflareFrontendConfig.js"));
 addCheck("Cloudflare KaTeX build verification exists", exists("scripts/vendorKatex.js") && exists("scripts/verifyCloudflareBuild.js"));
 addCheck("frontend API config reads runtime config", read("frontend/scripts/config.js").includes("StudentOSRuntimeConfig") && read("frontend/index.html").includes("runtime-config.js"));
+const frontendApp = read("frontend/scripts/app.js");
+const frontendApiClient = exists("frontend/scripts/core/api-client.js")
+  ? read("frontend/scripts/core/api-client.js")
+  : "";
 addCheck(
   "frontend detects Cloudflare API base misconfiguration",
-  read("frontend/scripts/app.js").includes("API_BASE_MISCONFIGURED_MESSAGE") &&
-    read("frontend/scripts/app.js").includes("apiBaseMisconfiguredError") &&
-    read("frontend/scripts/app.js").includes("text/html"),
+  frontendApp.includes("API_BASE_MISCONFIGURED_MESSAGE") &&
+    frontendApp.includes("apiBaseMisconfiguredError") &&
+    frontendApp.includes('from "./core/api-client.js"') &&
+    frontendApp.includes("requestJson({") &&
+    frontendApp.includes("error?.invalidResponse") &&
+    frontendApp.includes("throw apiBaseMisconfiguredError()") &&
+    frontendApiClient.includes("text/html") &&
+    frontendApiClient.includes("looksHtml") &&
+    frontendApiClient.includes("invalidResponse: true"),
 );
 const redirects = exists("frontend/_redirects") ? read("frontend/_redirects") : "";
 const authCompleteHtml = read("frontend/auth-complete.html");
@@ -156,6 +166,7 @@ const dangerousDefaults = [
   ["STUDENTOS_BILLING_LIVE_CHARGES_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_BACKGROUND_WORKERS_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false", envExample, envTemplate],
+  ["STUDENTOS_RECOVERY_UI_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_AI_PROVIDER_CYCLE_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT=0", envExample, envTemplate],
   ["STUDENTOS_AI_ROUTER_V2_ENABLED=false", envExample, envTemplate],
@@ -259,7 +270,7 @@ addCheck(
   "workflow exposes independent provider kill switches",
   ["GROQ", "GEMINI", "POLLINATIONS"].every((provider) =>
     workflow.includes(`STUDENTOS_AI_${provider}_ENABLED: \${{ vars.STUDENTOS_AI_${provider}_ENABLED || 'true' }}`) &&
-    workflow.includes(`STUDENTOS_AI_${provider}_ENABLED="$STUDENTOS_AI_${provider}_ENABLED"`)),
+    workflow.includes(`STUDENTOS_AI_${provider}_ENABLED=\"$STUDENTOS_AI_${provider}_ENABLED\"`)),
 );
 addCheck(
   "workflow exposes NVIDIA fallback kill switch disabled by default",
