@@ -54,6 +54,10 @@ jobs:
         run: |
           action="${{ inputs.action }}"
           confirmation="${{ inputs.confirmation }}"
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Adaptive Recovery rollout controls may run only from the main branch." >&2
+            exit 1
+          fi
           if [ -z "${{ secrets.AZURE_RESOURCE_GROUP }}" ] || [ -z "${{ secrets.AZURE_CONTAINER_APP_NAME }}" ] || [ -z "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}" ]; then
             echo "Azure resource group, API app name, and worker app name are required." >&2
             exit 1
@@ -94,7 +98,8 @@ jobs:
           STUDENTOS_SUPABASE_JWT_SECRET: ${{ secrets.STUDENTOS_SUPABASE_JWT_SECRET }}
         run: node scripts/verifyAdaptiveRecoverySchemaLive.js
 
-      - name: Validate deployed revision and worker topology
+      - name: Validate current dark deployment and worker topology
+        if: ${{ inputs.action == 'enable_allowlist' }}
         shell: bash
         run: |
           api_json="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" --output json)"
