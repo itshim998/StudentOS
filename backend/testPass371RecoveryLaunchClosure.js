@@ -247,10 +247,32 @@ for (const content of [example, template]) {
 }
 
 const azureWorkflow = await readFile(new URL("../.github/workflows/azure-container-apps-studentos.yml", import.meta.url), "utf8");
+assert.match(
+  azureWorkflow,
+  /enable_adaptive_recovery:[\s\S]*?default:\s*false/,
+  "Recovery enable input must remain opt-in",
+);
+assert.match(
+  azureWorkflow,
+  /STUDENTOS_ADAPTIVE_RECOVERY_ENABLED:\s*['"]false['"]/,
+  "Normal deployment wiring must keep Recovery disabled",
+);
 assert.doesNotMatch(
   azureWorkflow,
-  /STUDENTOS_ADAPTIVE_RECOVERY_ENABLED(?:=|:\s*['"]?)true\b/i,
-  "Recovery must not be enabled by the Azure deployment workflow",
+  /STUDENTOS_ADAPTIVE_RECOVERY_ENABLED:\s*['"]?true\b/i,
+  "Recovery must not be enabled in normal deployment environment wiring",
+);
+const enableStepStart = azureWorkflow.indexOf("- name: Enable recovery after topology and schema gates");
+const enableStepEnd = azureWorkflow.indexOf("- name: Show safe deployment summary", enableStepStart);
+assert(enableStepStart >= 0 && enableStepEnd > enableStepStart, "Explicit Recovery enable step must remain present");
+const enableStep = azureWorkflow.slice(enableStepStart, enableStepEnd);
+assert.match(enableStep, /if:\s*\$\{\{\s*inputs\.enable_adaptive_recovery\s*\}\}/);
+assert.match(enableStep, /STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=true\b/);
+assert.doesNotMatch(enableStep, /STUDENTOS_RECOVERY_UI_ENABLED=true\b/);
+assert.equal(
+  (azureWorkflow.match(/STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=true\b/g) || []).length,
+  1,
+  "Only the explicit gated enable step may set the Recovery engine flag true",
 );
 
 console.log("PASS | PASS 37.1 Recovery launch authorization, projection, idempotency, and default-off checks passed");
