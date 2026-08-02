@@ -1,0 +1,226 @@
+name: Adaptive Recovery - Controlled Rollout
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Enable an allowlisted cohort or disable Recovery immediately.
+        required: true
+        default: disable
+        type: choice
+        options:
+          - disable
+          - enable_allowlist
+      confirmation:
+        description: Type ENABLE-RECOVERY-ALLOWLIST or DISABLE-RECOVERY exactly.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: studentos-adaptive-recovery-rollout
+  cancel-in-progress: false
+
+jobs:
+  control-rollout:
+    runs-on: ubuntu-latest
+    environment: azure-dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Select Azure subscription
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      - name: Validate rollout request
+        shell: bash
+        run: |
+          action="${{ inputs.action }}"
+          confirmation="${{ inputs.confirmation }}"
+          if [ -z "${{ secrets.AZURE_RESOURCE_GROUP }}" ] || [ -z "${{ secrets.AZURE_CONTAINER_APP_NAME }}" ] || [ -z "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}" ]; then
+            echo "Azure resource group, API app name, and worker app name are required." >&2
+            exit 1
+          fi
+          if [ "$action" = "enable_allowlist" ] && [ "$confirmation" != "ENABLE-RECOVERY-ALLOWLIST" ]; then
+            echo "The enable confirmation phrase does not match." >&2
+            exit 1
+          fi
+          if [ "$action" = "disable" ] && [ "$confirmation" != "DISABLE-RECOVERY" ]; then
+            echo "The disable confirmation phrase does not match." >&2
+            exit 1
+          fi
+
+      - name: Validate allowlist configuration
+        if: ${{ inputs.action == 'enable_allowlist' }}
+        shell: bash
+        env:
+          STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: "true"
+          STUDENTOS_RECOVERY_UI_ENABLED: "true"
+          STUDENTOS_RECOVERY_ROLLOUT_MODE: allowlist
+          STUDENTOS_RECOVERY_ROLLOUT_USER_IDS: ${{ secrets.STUDENTOS_RECOVERY_ROLLOUT_USER_IDS }}
+        run: node scripts/verifyRecoveryRolloutConfig.js
+
+      - name: Verify Recovery schema before enable
+        if: ${{ inputs.action == 'enable_allowlist' }}
+        shell: bash
+        env:
+          STUDENTOS_MODE: supabase
+          STUDENTOS_SUPABASE_URL_1: ${{ secrets.STUDENTOS_SUPABASE_URL_1 }}
+          STUDENTOS_SUPABASE_ANON_KEY_1: ${{ secrets.STUDENTOS_SUPABASE_ANON_KEY_1 }}
+          STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1 }}
+          STUDENTOS_SUPABASE_URL_2: ${{ secrets.STUDENTOS_SUPABASE_URL_2 }}
+          STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2 }}
+          STUDENTOS_SUPABASE_URL_3: ${{ secrets.STUDENTOS_SUPABASE_URL_3 }}
+          STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3 }}
+          STUDENTOS_SUPABASE_URL_4: ${{ secrets.STUDENTOS_SUPABASE_URL_4 }}
+          STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4 }}
+          STUDENTOS_SUPABASE_JWT_SECRET: ${{ secrets.STUDENTOS_SUPABASE_JWT_SECRET }}
+        run: node scripts/verifyAdaptiveRecoverySchemaLive.js
+
+      - name: Validate existing API and worker topology
+        shell: bash
+        run: |
+          api_json="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" --output json)"
+          worker_json="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}" --output json)"
+          jq -e '
+            .properties.configuration.ingress == null and
+            .properties.template.scale.minReplicas == 1 and
+            .properties.template.scale.maxReplicas == 1 and
+            .properties.template.containers[0].command == ["npm"] and
+            .properties.template.containers[0].args == ["run", "jobs:dev"] and
+            (.properties.latestRevisionName == .properties.latestReadyRevisionName)
+          ' <<<"$worker_json" >/dev/null
+          api_image="$(jq -r '.properties.template.containers[0].image // ""' <<<"$api_json")"
+          worker_image="$(jq -r '.properties.template.containers[0].image // ""' <<<"$worker_json")"
+          if [ -z "$api_image" ] || [ "$api_image" != "$worker_image" ]; then
+            echo "API and worker must use the same non-empty image before Recovery rollout changes." >&2
+            exit 1
+          fi
+          echo "Existing API and dedicated worker topology verified."
+
+      - name: Apply controlled rollout action
+        uses: azure/cli@v2
+        env:
+          STUDENTOS_RECOVERY_ROLLOUT_USER_IDS: ${{ secrets.STUDENTOS_RECOVERY_ROLLOUT_USER_IDS }}
+        with:
+          inlineScript: |
+            action="${{ inputs.action }}"
+
+            run_redacted_az_step() {
+              category="$1"
+              shift
+              log_path="/tmp/${category}.log"
+              set +e
+              "$@" >"$log_path" 2>&1
+              exit_code=$?
+              set -e
+              if [ "$exit_code" -ne 0 ]; then
+                echo "Azure rollout operation failed (category=${category}, exit_code=${exit_code}). Raw CLI output was withheld." >&2
+                return "$exit_code"
+              fi
+              echo "Azure rollout operation succeeded (category=${category}, exit_code=0)."
+            }
+
+            for app_name in "${{ secrets.AZURE_CONTAINER_APP_NAME }}" "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"; do
+              if [ "$action" = "enable_allowlist" ]; then
+                if [ -z "$STUDENTOS_RECOVERY_ROLLOUT_USER_IDS" ]; then
+                  echo "STUDENTOS_RECOVERY_ROLLOUT_USER_IDS is required for allowlist enablement." >&2
+                  exit 1
+                fi
+                run_redacted_az_step "recovery_allowlist_secret_${app_name}" az containerapp secret set \
+                  --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+                  --name "$app_name" \
+                  --secrets studentos-recovery-rollout-user-ids="$STUDENTOS_RECOVERY_ROLLOUT_USER_IDS" \
+                  --output none
+                run_redacted_az_step "recovery_allowlist_enable_${app_name}" az containerapp update \
+                  --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+                  --name "$app_name" \
+                  --set-env-vars \
+                    STUDENTOS_BACKGROUND_WORKERS_ENABLED=true \
+                    STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=true \
+                    STUDENTOS_RECOVERY_UI_ENABLED=true \
+                    STUDENTOS_RECOVERY_ROLLOUT_MODE=allowlist \
+                    STUDENTOS_RECOVERY_ROLLOUT_USER_IDS=secretref:studentos-recovery-rollout-user-ids \
+                  --output none
+              else
+                run_redacted_az_step "recovery_disable_${app_name}" az containerapp update \
+                  --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+                  --name "$app_name" \
+                  --set-env-vars \
+                    STUDENTOS_BACKGROUND_WORKERS_ENABLED=true \
+                    STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false \
+                    STUDENTOS_RECOVERY_UI_ENABLED=false \
+                    STUDENTOS_RECOVERY_ROLLOUT_MODE=off \
+                  --output none
+              fi
+            done
+
+      - name: Verify rollout state and ready revisions
+        shell: bash
+        run: |
+          action="${{ inputs.action }}"
+          for attempt in $(seq 1 30); do
+            api_json="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" --output json)"
+            worker_json="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}" --output json)"
+            api_latest="$(jq -r '.properties.latestRevisionName // ""' <<<"$api_json")"
+            api_ready="$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$api_json")"
+            worker_latest="$(jq -r '.properties.latestRevisionName // ""' <<<"$worker_json")"
+            worker_ready="$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$worker_json")"
+            if [ -n "$api_latest" ] && [ "$api_latest" = "$api_ready" ] && [ -n "$worker_latest" ] && [ "$worker_latest" = "$worker_ready" ]; then
+              break
+            fi
+            if [ "$attempt" = "30" ]; then
+              echo "API or worker did not reach a ready latest revision after the rollout action." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          if [ "$action" = "enable_allowlist" ]; then
+            expected_engine=true
+            expected_ui=true
+            expected_mode=allowlist
+          else
+            expected_engine=false
+            expected_ui=false
+            expected_mode=off
+          fi
+
+          for json in "$api_json" "$worker_json"; do
+            jq -e \
+              --arg engine "$expected_engine" \
+              --arg ui "$expected_ui" \
+              --arg mode "$expected_mode" \
+              --arg action "$action" '
+                (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_ADAPTIVE_RECOVERY_ENABLED" and .value == $engine)) and
+                (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_RECOVERY_UI_ENABLED" and .value == $ui)) and
+                (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_RECOVERY_ROLLOUT_MODE" and .value == $mode)) and
+                ($action != "enable_allowlist" or any(.properties.template.containers[0].env[]; .name == "STUDENTOS_RECOVERY_ROLLOUT_USER_IDS" and .secretRef == "studentos-recovery-rollout-user-ids")) and
+                (.properties.latestRevisionName == .properties.latestReadyRevisionName)
+              ' <<<"$json" >/dev/null
+          done
+
+          api_rollout="$(jq -c '[.properties.template.containers[0].env[] | select(.name | startswith("STUDENTOS_RECOVERY_")) | {name, value, secretRef}] | sort_by(.name)' <<<"$api_json")"
+          worker_rollout="$(jq -c '[.properties.template.containers[0].env[] | select(.name | startswith("STUDENTOS_RECOVERY_")) | {name, value, secretRef}] | sort_by(.name)' <<<"$worker_json")"
+          if [ "$api_rollout" != "$worker_rollout" ]; then
+            echo "API and worker Recovery rollout wiring differs." >&2
+            exit 1
+          fi
+          echo "Adaptive Recovery rollout action verified without printing cohort identifiers."
