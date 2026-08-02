@@ -95,6 +95,7 @@ addCheck("package preflight exists", pkg.scripts?.preflight === "npm run preflig
 addCheck("package preflight:azure exists", pkg.scripts?.["preflight:azure"] === "node scripts/preflightAzure.js");
 addCheck("package verify:azure-deployment exists", pkg.scripts?.["verify:azure-deployment"] === "node scripts/verifyAzureDeployment.js");
 addCheck("package verify:recovery-rollout exists", pkg.scripts?.["verify:recovery-rollout"] === "node scripts/verifyRecoveryRolloutConfig.js");
+addCheck("package verify:recovery-operational-state exists", pkg.scripts?.["verify:recovery-operational-state"] === "node scripts/verifyRecoveryOperationalState.js");
 addCheck("package repository syntax check exists", pkg.scripts?.["check:syntax"] === "node scripts/checkNodeSyntax.js");
 addCheck("package Router V2 database concurrency test exists", pkg.scripts?.["test:router-v2-db"] === "node scripts/testAiRouterV2DatabaseConcurrency.js");
 addCheck("package cloudflare:config exists", pkg.scripts?.["cloudflare:config"] === "node scripts/writeCloudflareFrontendConfig.js");
@@ -191,6 +192,7 @@ for (const file of [
   "infra/azure/containerapp-secrets.example.ps1",
   "scripts/verifyAzureDeployment.js",
   "scripts/verifyRecoveryRolloutConfig.js",
+  "scripts/verifyRecoveryOperationalState.js",
   ".github/workflows/azure-container-apps-studentos.yml",
   ".github/workflows/adaptive-recovery-rollout.yml",
 ]) {

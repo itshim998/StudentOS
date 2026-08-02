@@ -12,6 +12,7 @@ import {
 import { RECOVERY_FAILURES } from "./recovery/recoveryErrors.js";
 import { createRecoveryEvaluationState } from "./recovery/recoveryEvaluationCases.js";
 import { ONBOARDING_STEPS } from "./domain/productLifecycleService.js";
+import { buildRecoveryOperationalVerdict } from "../scripts/verifyRecoveryOperationalState.js";
 
 const USER_ID = "00000000-0000-4000-8000-000000000001";
 const OTHER_USER_ID = "00000000-0000-4000-8000-000000000099";
@@ -122,6 +123,14 @@ assert.equal(safeStatus.rolloutMode, RECOVERY_ROLLOUT_MODES.ALLOWLIST);
 assert.equal(safeStatus.rolloutConfigValid, true);
 assert.doesNotMatch(JSON.stringify(safeStatus), new RegExp(USER_ID, "i"));
 
+const clearOperationalState = buildRecoveryOperationalVerdict({ queuedRuns: 0, retryingJobs: 0 });
+assert.equal(clearOperationalState.unexpectedActiveWork, false);
+assert.equal(clearOperationalState.activeRecordCount, 0);
+const activeOperationalState = buildRecoveryOperationalVerdict({ queuedRuns: 1, staleMutationLeases: 1 });
+assert.equal(activeOperationalState.unexpectedActiveWork, true);
+assert.equal(activeOperationalState.activeRecordCount, 2);
+assert.doesNotMatch(JSON.stringify(activeOperationalState), /userId|runId|jobId|payload|prompt|evidence|provider/i);
+
 const eligibleState = activeState(USER_ID, "plus");
 assert.equal(getPublicRecoveryCapability(eligibleState, allowlistConfig).status, "available");
 assert.doesNotThrow(() => assertRecoveryRouteAccess(eligibleState, allowlistConfig));
@@ -178,6 +187,13 @@ assert.doesNotMatch(
   rolloutWorkflow,
   /echo[^\n]*(?:\$STUDENTOS_RECOVERY_ROLLOUT_USER_IDS|\$\{\{\s*secrets\.STUDENTOS_RECOVERY_ROLLOUT_USER_IDS\s*\}\})/,
 );
+
+const operationalVerifier = await readFile(new URL("../scripts/verifyRecoveryOperationalState.js", import.meta.url), "utf8");
+assert.match(operationalVerifier, /Prefer: "count=exact"/);
+assert.match(operationalVerifier, /url\.searchParams\.set\("select", "id"\)/);
+assert.match(operationalVerifier, /identifiersPrinted: false/);
+assert.match(operationalVerifier, /payloadsPrinted: false/);
+assert.doesNotMatch(operationalVerifier, /console\.(?:log|error)\([^\n]*(?:user_id|payload->>|mutationLeaseToken)/);
 
 const bicep = await readFile(new URL("../infra/azure/containerapp.bicep", import.meta.url), "utf8");
 assert.equal((bicep.match(/name: 'STUDENTOS_RECOVERY_UI_ENABLED'/g) || []).length, 2);

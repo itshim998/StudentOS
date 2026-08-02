@@ -279,6 +279,7 @@ npm.cmd run smoke:core
 npm.cmd run test:e2e
 npm.cmd run test:recovery
 npm.cmd run eval:recovery
+npm.cmd run verify:recovery-operational-state
 npm.cmd run migration:plan
 npm.cmd run preflight:production
 npm.cmd run preflight:azure
@@ -286,7 +287,7 @@ npm.cmd run check:syntax
 git diff --check
 ```
 
-The push/pull-request validation workflow runs these static/local gates plus the full test suite on Node 22 and installs Playwright Chromium. It does not deploy and does not run live Supabase verification. Before enablement, run the read-only hardened verifier with `npm.cmd run verify:recovery-schema` and require migrations 001 and 002 to be present on every data shard. Do not reapply a migration merely because verification cannot confirm it.
+The push/pull-request validation workflow runs the static/local gates plus the full test suite on Node 22 and installs Playwright Chromium. It does not deploy and does not run live Supabase verification. Before enablement, run the read-only hardened verifier with `npm.cmd run verify:recovery-schema` and require migrations 001 and 002 to be present on every data shard. Then run `npm.cmd run verify:recovery-operational-state` and require zero queued, retrying, running, applying, or stale-leased Recovery work on every shard. The operational verifier reports aggregate counts only. Do not reapply a migration merely because verification cannot confirm it.
 
 ## First Deploy Checklist
 

@@ -94,6 +94,7 @@
     "verify:recovery-schema": "node scripts/verifyAdaptiveRecoverySchemaLive.js",
     "verify:recovery-schema:baseline": "node scripts/verifyAdaptiveRecoverySchemaLive.js --baseline-001",
     "verify:recovery-rollout": "node scripts/verifyRecoveryRolloutConfig.js",
+    "verify:recovery-operational-state": "node scripts/verifyRecoveryOperationalState.js",
     "verify:billing-schema": "node scripts/verifyPass16BillingLive.js",
     "verify:lifecycle-schema": "node scripts/verifyPass17LifecycleLive.js",
     "verify:export-schema": "node scripts/verifyPass18ExportSchemaLive.js",
