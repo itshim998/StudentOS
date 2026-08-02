@@ -115,6 +115,7 @@ export function isRecoveryRolloutUserEligible(userId, config = getRecoveryConfig
   const normalizedUserId = String(userId ?? "").trim().toLowerCase();
   return config.rolloutConfigValid === true
     && config.rolloutMode === RECOVERY_ROLLOUT_MODES.ALLOWLIST
+    && Array.isArray(config.rolloutUserIds)
     && UUID_PATTERN.test(normalizedUserId)
     && config.rolloutUserIds.includes(normalizedUserId);
 }
