@@ -308,6 +308,8 @@ jobs:
             add_optional_provider_secret NVIDIA_API_KEY_3 nvidia-api-key-3
             add_optional_provider_secret POLLINATIONS_API_KEY pollinations-api-key
 
+            # run_redacted_az_step containerapp_secret_set is applied independently to both apps.
+            # run_redacted_az_step containerapp_env_update is applied independently to both apps.
             for app_name in "${{ secrets.AZURE_CONTAINER_APP_NAME }}" "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"; do
             run_redacted_az_step "containerapp_secret_set_${app_name}" az containerapp secret set \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
