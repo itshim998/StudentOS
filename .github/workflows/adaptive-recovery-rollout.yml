@@ -51,9 +51,12 @@ jobs:
 
       - name: Validate rollout request
         shell: bash
+        env:
+          REQUESTED_ACTION: ${{ inputs.action }}
+          REQUEST_CONFIRMATION: ${{ inputs.confirmation }}
         run: |
-          action="${{ inputs.action }}"
-          confirmation="${{ inputs.confirmation }}"
+          action="$REQUESTED_ACTION"
+          confirmation="$REQUEST_CONFIRMATION"
           if [ "$GITHUB_REF" != "refs/heads/main" ]; then
             echo "Adaptive Recovery rollout controls may run only from the main branch." >&2
             exit 1
@@ -112,6 +115,14 @@ jobs:
             .properties.template.containers[0].args == ["run", "jobs:dev"] and
             (.properties.latestRevisionName == .properties.latestReadyRevisionName)
           ' <<<"$worker_json" >/dev/null
+          for json in "$api_json" "$worker_json"; do
+            jq -e '
+              (.properties.latestRevisionName == .properties.latestReadyRevisionName) and
+              (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_ADAPTIVE_RECOVERY_ENABLED" and .value == "false")) and
+              (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_RECOVERY_UI_ENABLED" and .value == "false")) and
+              (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_RECOVERY_ROLLOUT_MODE" and .value == "off"))
+            ' <<<"$json" >/dev/null
+          done
           api_image="$(jq -r '.properties.template.containers[0].image // ""' <<<"$api_json")"
           worker_image="$(jq -r '.properties.template.containers[0].image // ""' <<<"$worker_json")"
           expected_image="ghcr.io/${{ github.repository_owner }}/studentos-api:${GITHUB_SHA}"
@@ -128,10 +139,11 @@ jobs:
       - name: Apply controlled rollout action
         uses: azure/cli@v2
         env:
+          REQUESTED_ACTION: ${{ inputs.action }}
           STUDENTOS_RECOVERY_ROLLOUT_USER_IDS: ${{ secrets.STUDENTOS_RECOVERY_ROLLOUT_USER_IDS }}
         with:
           inlineScript: |
-            action="${{ inputs.action }}"
+            action="$REQUESTED_ACTION"
             api_app="${{ secrets.AZURE_CONTAINER_APP_NAME }}"
             worker_app="${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"
 
@@ -229,8 +241,10 @@ jobs:
 
       - name: Verify rollout state and ready revisions
         shell: bash
+        env:
+          REQUESTED_ACTION: ${{ inputs.action }}
         run: |
-          action="${{ inputs.action }}"
+          action="$REQUESTED_ACTION"
           api_json="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" --output json)"
           worker_json="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}" --output json)"
 
