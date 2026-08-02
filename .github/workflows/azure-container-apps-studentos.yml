@@ -12,11 +12,6 @@ on:
         required: false
         default: centralindia
         type: string
-      enable_adaptive_recovery:
-        description: Enable recovery only after migration 002 and worker validation succeed.
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -150,6 +145,8 @@ jobs:
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
           STUDENTOS_BACKGROUND_WORKERS_ENABLED: 'true'
           STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: 'false'
+          STUDENTOS_RECOVERY_UI_ENABLED: 'false'
+          STUDENTOS_RECOVERY_ROLLOUT_MODE: 'off'
           STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ENABLED || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_SHADOW: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_SHADOW || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT || '0' }}
@@ -250,6 +247,8 @@ jobs:
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
           STUDENTOS_BACKGROUND_WORKERS_ENABLED: 'true'
           STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: 'false'
+          STUDENTOS_RECOVERY_UI_ENABLED: 'false'
+          STUDENTOS_RECOVERY_ROLLOUT_MODE: 'off'
           STUDENTOS_AI_PROVIDER_CYCLE_ENABLED: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ENABLED || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_SHADOW: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_SHADOW || 'false' }}
           STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT: ${{ vars.STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT || '0' }}
@@ -309,8 +308,6 @@ jobs:
             add_optional_provider_secret NVIDIA_API_KEY_3 nvidia-api-key-3
             add_optional_provider_secret POLLINATIONS_API_KEY pollinations-api-key
 
-            # run_redacted_az_step containerapp_secret_set is applied independently to both apps.
-            # run_redacted_az_step containerapp_env_update is applied independently to both apps.
             for app_name in "${{ secrets.AZURE_CONTAINER_APP_NAME }}" "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"; do
             run_redacted_az_step "containerapp_secret_set_${app_name}" az containerapp secret set \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
@@ -346,6 +343,8 @@ jobs:
                 STUDENTOS_AI_MODE=auto \
                 STUDENTOS_BACKGROUND_WORKERS_ENABLED="$STUDENTOS_BACKGROUND_WORKERS_ENABLED" \
                 STUDENTOS_ADAPTIVE_RECOVERY_ENABLED="$STUDENTOS_ADAPTIVE_RECOVERY_ENABLED" \
+                STUDENTOS_RECOVERY_UI_ENABLED="$STUDENTOS_RECOVERY_UI_ENABLED" \
+                STUDENTOS_RECOVERY_ROLLOUT_MODE="$STUDENTOS_RECOVERY_ROLLOUT_MODE" \
                 STUDENTOS_RECOVERY_PREVIEW_TTL_HOURS=24 \
                 STUDENTOS_AI_PROVIDER_CYCLE_ENABLED="$STUDENTOS_AI_PROVIDER_CYCLE_ENABLED" \
                 STUDENTOS_AI_PROVIDER_CYCLE_SHADOW="$STUDENTOS_AI_PROVIDER_CYCLE_SHADOW" \
@@ -395,6 +394,8 @@ jobs:
             .properties.template.containers[0].args == ["run", "jobs:dev"] and
             (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_BACKGROUND_WORKERS_ENABLED" and .value == "true")) and
             (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_ADAPTIVE_RECOVERY_ENABLED" and .value == "false")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_RECOVERY_UI_ENABLED" and .value == "false")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_RECOVERY_ROLLOUT_MODE" and .value == "off")) and
             (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_URL_1" and .secretRef == "studentos-supabase-url-1")) and
             (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_ANON_KEY_1" and .secretRef == "studentos-supabase-anon-key-1")) and
             (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1" and .secretRef == "studentos-supabase-service-role-key-1")) and
@@ -416,37 +417,7 @@ jobs:
             echo "API and worker backend/provider secret wiring differs." >&2
             exit 1
           fi
-          echo "Dedicated worker topology verified: image, command, no ingress, fixed replica, backend authority, recovery disabled, and ready revision."
-
-      - name: Verify migration 002 before an enable request
-        if: ${{ inputs.enable_adaptive_recovery }}
-        shell: bash
-        env:
-          STUDENTOS_MODE: supabase
-          STUDENTOS_SUPABASE_URL_1: ${{ secrets.STUDENTOS_SUPABASE_URL_1 }}
-          STUDENTOS_SUPABASE_ANON_KEY_1: ${{ secrets.STUDENTOS_SUPABASE_ANON_KEY_1 }}
-          STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1 }}
-          STUDENTOS_SUPABASE_URL_2: ${{ secrets.STUDENTOS_SUPABASE_URL_2 }}
-          STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2 }}
-          STUDENTOS_SUPABASE_URL_3: ${{ secrets.STUDENTOS_SUPABASE_URL_3 }}
-          STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3 }}
-          STUDENTOS_SUPABASE_URL_4: ${{ secrets.STUDENTOS_SUPABASE_URL_4 }}
-          STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4 }}
-          STUDENTOS_SUPABASE_JWT_SECRET: ${{ secrets.STUDENTOS_SUPABASE_JWT_SECRET }}
-        run: node scripts/verifyAdaptiveRecoverySchemaLive.js
-
-      - name: Enable recovery after topology and schema gates
-        if: ${{ inputs.enable_adaptive_recovery }}
-        uses: azure/cli@v2
-        with:
-          inlineScript: |
-            for app_name in "${{ secrets.AZURE_CONTAINER_APP_NAME }}" "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"; do
-              az containerapp update \
-                --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-                --name "$app_name" \
-                --set-env-vars STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=true STUDENTOS_BACKGROUND_WORKERS_ENABLED=true \
-                --output none
-            done
+          echo "Dedicated worker topology verified: image, command, no ingress, fixed replica, backend authority, Recovery disabled, and ready revision."
 
       - name: Show safe deployment summary
         uses: azure/cli@v2
