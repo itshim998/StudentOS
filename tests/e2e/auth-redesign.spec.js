@@ -7,11 +7,6 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "../..");
-const TRANSPARENT_PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-  "base64",
-);
-
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -95,22 +90,26 @@ test.afterAll(async () => {
 
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/config", fulfillPublicAuthConfig);
-  await page.route("https://i.ibb.co/**", (route) => route.fulfill({
-    status: 200,
-    contentType: "image/png",
-    body: TRANSPARENT_PNG,
-  }));
 });
 
 test("presents the new brand-led sign-in and sign-up states", async ({ page }) => {
+  const requestedUrls = [];
+  page.on("request", (request) => requestedUrls.push(request.url()));
+  const logoResponsePromise = page.waitForResponse((response) => response.url() === `${baseUrl}/assets/studentos-logo.png`);
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  const logoResponse = await logoResponsePromise;
 
   const shell = page.locator("#public-auth-shell");
   await expect(shell).toBeVisible({ timeout: 5000 });
   await expect(shell).toHaveAttribute("data-auth-redesign-ready", "true");
   await expect(page.getByRole("heading", { name: "Know what to study next." })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
-  await expect(page.locator(".auth-logo-image")).toHaveAttribute("src", "https://i.ibb.co/Y7q4YRF9/Student-OS-logo.png");
+  const logo = page.locator(".auth-logo-image");
+  await expect(logo).toHaveAttribute("src", "/assets/studentos-logo.png");
+  await expect(logo.locator("xpath=..")).toHaveClass(/has-image/);
+  expect(logoResponse.ok()).toBe(true);
+  expect(new URL(logoResponse.url()).origin).toBe(new URL(baseUrl).origin);
+  expect(requestedUrls.some((url) => new URL(url).hostname === "i.ibb.co")).toBe(false);
 
   const signInTab = page.getByRole("tab", { name: "Sign in" });
   const signUpTab = page.getByRole("tab", { name: "Create account" });
@@ -128,6 +127,21 @@ test("presents the new brand-led sign-in and sign-up states", async ({ page }) =
   await signInTab.click();
   await expect(page).toHaveURL(/#login$/);
   await expect(page.locator("#auth-password")).toHaveAttribute("autocomplete", "current-password");
+});
+
+test("keeps the local logo fallback safe when the asset is unavailable", async ({ page }) => {
+  await page.route(`${baseUrl}/assets/studentos-logo.png`, (route) => route.fulfill({
+    status: 404,
+    contentType: "text/plain",
+    body: "Not found",
+  }));
+
+  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+
+  const logoFrame = page.locator(".auth-logo-frame");
+  await expect(logoFrame).toHaveClass(/image-failed/);
+  await expect(logoFrame).not.toHaveClass(/has-image/);
+  await expect(page.locator(".auth-logo-fallback")).toBeVisible();
 });
 
 test("supports password reveal, inline validation, and mobile restraint", async ({ page }) => {

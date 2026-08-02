@@ -9,6 +9,8 @@ import {
   getPublicEntitlementSummary,
 } from "./planEntitlementService.js";
 import { isAcademicContextRecord, isClassroomRecord } from "../connectors/googleClassroom/mapper.js";
+import { getRecoveryConfig } from "../recovery/recoveryConfig.js";
+import { getPublicRecoveryCapability } from "../recovery/recoveryAccessService.js";
 
 export const ACADEMIC_CONTEXT_COPY = Object.freeze({
   pending: "Plan setup pending. Finish setup before adding academic material.",
@@ -167,7 +169,7 @@ export function getProductClassroomPolicy(state = {}) {
   };
 }
 
-export function getPublicProductCapabilities(state = {}) {
+export function getPublicProductCapabilities(state = {}, { recoveryConfig = getRecoveryConfig() } = {}) {
   const access = getResolvedProductAccess(state);
   const summary = getPublicEntitlementSummary(access.activePlanKey);
   const enabled = (featureKey) => access.workspaceReady && canUseFeature(access.activePlanKey, featureKey);
@@ -201,5 +203,6 @@ export function getPublicProductCapabilities(state = {}) {
       writebackEnabled: false,
       automaticSubmissionEnabled: false,
     },
+    recovery: getPublicRecoveryCapability(state, recoveryConfig),
   };
 }

@@ -3,6 +3,11 @@ export const RECOVERY_FAILURES = Object.freeze({
   IDEMPOTENCY_REQUIRED: "RECOVERY_IDEMPOTENCY_KEY_REQUIRED",
   IDEMPOTENCY_CONFLICT: "RECOVERY_IDEMPOTENCY_CONFLICT",
   ENGINE_DISABLED: "RECOVERY_ENGINE_DISABLED",
+  UI_DISABLED: "RECOVERY_UI_DISABLED",
+  SETUP_REQUIRED: "RECOVERY_SETUP_REQUIRED",
+  PLAN_UNAVAILABLE: "RECOVERY_PLAN_UNAVAILABLE",
+  SESSION_REQUIRED: "RECOVERY_SESSION_REQUIRED",
+  RATE_LIMITED: "RECOVERY_RATE_LIMITED",
   CONTEXT_INSUFFICIENT: "RECOVERY_CONTEXT_INSUFFICIENT",
   EVIDENCE_INVALID: "RECOVERY_EVIDENCE_INVALID",
   PROVIDER_FAILED: "RECOVERY_PROVIDER_FAILED",
@@ -21,6 +26,11 @@ const DEFAULT_STATUS = Object.freeze({
   [RECOVERY_FAILURES.IDEMPOTENCY_REQUIRED]: 400,
   [RECOVERY_FAILURES.IDEMPOTENCY_CONFLICT]: 409,
   [RECOVERY_FAILURES.ENGINE_DISABLED]: 404,
+  [RECOVERY_FAILURES.UI_DISABLED]: 404,
+  [RECOVERY_FAILURES.SETUP_REQUIRED]: 403,
+  [RECOVERY_FAILURES.PLAN_UNAVAILABLE]: 403,
+  [RECOVERY_FAILURES.SESSION_REQUIRED]: 401,
+  [RECOVERY_FAILURES.RATE_LIMITED]: 429,
   [RECOVERY_FAILURES.CONTEXT_INSUFFICIENT]: 422,
   [RECOVERY_FAILURES.EVIDENCE_INVALID]: 422,
   [RECOVERY_FAILURES.PROVIDER_FAILED]: 503,
@@ -61,10 +71,24 @@ export function assertRecoveryEnabled(config, correlationId = null) {
 
 export function recoveryErrorEnvelope(error, fallbackCorrelationId = null) {
   const recovery = error instanceof RecoveryError || Object.values(RECOVERY_FAILURES).includes(error?.code);
+  const sessionRequired = !recovery && Number(error?.status || 0) === 401;
+  const rateLimited = !recovery && Number(error?.status || 0) === 429;
   return {
-    error: recovery ? error.message : "Recovery analysis could not be completed.",
-    code: recovery ? error.code : RECOVERY_FAILURES.PROVIDER_FAILED,
-    retryable: recovery ? error.retryable : false,
+    error: recovery
+      ? error.message
+      : sessionRequired
+        ? "Sign in to review a recovery plan."
+        : rateLimited
+          ? "Too many plan review attempts. Please wait a minute and try again."
+          : "Recovery analysis could not be completed.",
+    code: recovery
+      ? error.code
+      : sessionRequired
+        ? RECOVERY_FAILURES.SESSION_REQUIRED
+        : rateLimited
+          ? RECOVERY_FAILURES.RATE_LIMITED
+          : RECOVERY_FAILURES.PROVIDER_FAILED,
+    retryable: recovery ? error.retryable : rateLimited,
     correlationId: error?.correlationId || fallbackCorrelationId || null,
   };
 }

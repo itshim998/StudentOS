@@ -1,5 +1,5 @@
 (() => {
-  const LOGO_URL = "https://i.ibb.co/Y7q4YRF9/Student-OS-logo.png";
+  const LOGO_URL = "/assets/studentos-logo.png";
   const SIGNIN_COPY = {
     title: "Welcome back",
     body: "Sign in to continue to your academic workspace.",

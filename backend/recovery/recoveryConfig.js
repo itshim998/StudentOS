@@ -12,6 +12,7 @@ function readPositiveInteger(env, key, fallback) {
 export function getRecoveryConfig(env = process.env) {
   return Object.freeze({
     enabled: readBoolean(env, "STUDENTOS_ADAPTIVE_RECOVERY_ENABLED", false),
+    uiEnabled: readBoolean(env, "STUDENTOS_RECOVERY_UI_ENABLED", false),
     previewTtlHours: Math.min(readPositiveInteger(env, "STUDENTOS_RECOVERY_PREVIEW_TTL_HOURS", 24), 168),
     maxEventsPerRun: Math.min(readPositiveInteger(env, "STUDENTOS_RECOVERY_MAX_EVENTS_PER_RUN", 50), 200),
     maxTopics: Math.min(readPositiveInteger(env, "STUDENTOS_RECOVERY_MAX_TOPICS", 40), 100),
@@ -22,9 +23,10 @@ export function getRecoveryConfig(env = process.env) {
 export function getSafeRecoveryStatus(config = getRecoveryConfig()) {
   return {
     enabled: config.enabled === true,
-    previewTtlHours: config.previewTtlHours,
+    uiEnabled: config.uiEnabled === true,
     asynchronous: true,
-    providerOrder: ["groq", "gemini", "pollinations"],
+    reviewRequired: true,
+    automaticApply: false,
     providerOutputPersisted: false,
   };
 }

@@ -147,7 +147,12 @@ import {
   rejectRecoveryPreview,
 } from "./recovery/recoveryEngineService.js";
 import { RecoveryAnalyzeInputSchema, EmptyRecoveryMutationSchema } from "./recovery/recoverySchemas.js";
-import { RECOVERY_FAILURES, RecoveryError, assertRecoveryEnabled, recoveryErrorEnvelope } from "./recovery/recoveryErrors.js";
+import { RECOVERY_FAILURES, RecoveryError, recoveryErrorEnvelope } from "./recovery/recoveryErrors.js";
+import {
+  assertRecoveryRouteAccess,
+  requireOwnedRecoveryPreview,
+  requireOwnedRecoveryRun,
+} from "./recovery/recoveryAccessService.js";
 import { ensureRecoveryCollections, recordAcademicEvent } from "./recovery/academicStateBuilder.js";
 import { markRecoveryTaskProgress } from "./recovery/recoveryPolicy.js";
 import {
@@ -727,7 +732,7 @@ function publicState(state, persistence) {
       accessMode: productLifecycle.accessMode || null,
       selectedPlan: getPublicPlanSummary(selectedPlanKey),
       entitlements: getPublicEntitlementSummary(activePlanKey),
-      capabilities: getPublicProductCapabilities(state),
+      capabilities: getPublicProductCapabilities(state, { recoveryConfig }),
       academicContext: getPublicAcademicContextCapacity(state),
       dashboardAccess: productLifecycle.dashboardActive === true && Boolean(activePlanKey),
     },
@@ -1345,10 +1350,11 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/recovery/analyze") {
-    assertRecoveryEnabled(recoveryConfig, req.requestId);
-    const body = await readRecoveryBody(req, RecoveryAnalyzeInputSchema);
     const { session, state } = await getStateContext(req);
     requireAccountSession(session);
+    assertRecoveryRouteAccess(state, recoveryConfig, req.requestId);
+    enforceRateLimit(req, session, "ai_call");
+    const body = await readRecoveryBody(req, RecoveryAnalyzeInputSchema);
     const queued = await queueRecoveryAnalysis({
       repository,
       session,
@@ -1370,34 +1376,32 @@ async function handleApi(req, res, url) {
 
   const recoveryRunMatch = url.pathname.match(/^\/api\/recovery\/runs\/([^/]+)$/);
   if (req.method === "GET" && recoveryRunMatch) {
-    assertRecoveryEnabled(recoveryConfig, req.requestId);
     const { session, state } = await getStateContext(req);
     requireAccountSession(session);
+    assertRecoveryRouteAccess(state, recoveryConfig, req.requestId);
     const id = decodeURIComponent(recoveryRunMatch[1]);
-    const run = (state.recoveryRuns || []).find((item) => item.id === id && item.userId === session.user.id);
-    if (!run) throw new RecoveryError("RECOVERY_UNAUTHORIZED", "Recovery run is not available for this account.", { correlationId: req.requestId });
+    const run = requireOwnedRecoveryRun(state, id, session.user.id, req.requestId);
     sendJson(res, 200, { run: publicRecoveryRun(run), correlationId: req.requestId, secretsPrinted: false });
     return;
   }
 
   const recoveryPreviewMatch = url.pathname.match(/^\/api\/recovery\/previews\/([^/]+)$/);
   if (req.method === "GET" && recoveryPreviewMatch) {
-    assertRecoveryEnabled(recoveryConfig, req.requestId);
     const { session, state } = await getStateContext(req);
     requireAccountSession(session);
+    assertRecoveryRouteAccess(state, recoveryConfig, req.requestId);
     const id = decodeURIComponent(recoveryPreviewMatch[1]);
-    const preview = (state.recoveryPreviews || []).find((item) => item.id === id && item.userId === session.user.id);
-    if (!preview) throw new RecoveryError("RECOVERY_UNAUTHORIZED", "Recovery preview is not available for this account.", { correlationId: req.requestId });
+    const preview = requireOwnedRecoveryPreview(state, id, session.user.id, req.requestId);
     sendJson(res, 200, { preview: publicRecoveryPreview(preview, state), correlationId: req.requestId, secretsPrinted: false });
     return;
   }
 
   const recoveryApplyMatch = url.pathname.match(/^\/api\/recovery\/previews\/([^/]+)\/apply$/);
   if (req.method === "POST" && recoveryApplyMatch) {
-    assertRecoveryEnabled(recoveryConfig, req.requestId);
-    await readRecoveryBody(req, EmptyRecoveryMutationSchema);
     const { session, state } = await getStateContext(req);
     requireAccountSession(session);
+    assertRecoveryRouteAccess(state, recoveryConfig, req.requestId);
+    await readRecoveryBody(req, EmptyRecoveryMutationSchema);
     const result = await applyRecoveryPreview({
       repository,
       session,
@@ -1419,10 +1423,10 @@ async function handleApi(req, res, url) {
 
   const recoveryRejectMatch = url.pathname.match(/^\/api\/recovery\/previews\/([^/]+)\/reject$/);
   if (req.method === "POST" && recoveryRejectMatch) {
-    assertRecoveryEnabled(recoveryConfig, req.requestId);
-    await readRecoveryBody(req, EmptyRecoveryMutationSchema);
     const { session, state } = await getStateContext(req);
     requireAccountSession(session);
+    assertRecoveryRouteAccess(state, recoveryConfig, req.requestId);
+    await readRecoveryBody(req, EmptyRecoveryMutationSchema);
     const result = await rejectRecoveryPreview({
       repository,
       session,
