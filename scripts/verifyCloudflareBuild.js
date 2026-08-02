@@ -11,6 +11,7 @@ const indexPath = join(frontendRoot, "index.html");
 const runtimeConfigPath = join(frontendRoot, "runtime-config.js");
 const authRedesignCssPath = join(frontendRoot, "styles", "auth-redesign.css");
 const authRedesignJsPath = join(frontendRoot, "scripts", "auth-redesign.js");
+const studentOsLogoPath = join(frontendRoot, "assets", "studentos-logo.png");
 
 function requireNonEmptyFile(path, label) {
   if (!existsSync(path) || !statSync(path).isFile() || statSync(path).size === 0) {
@@ -23,6 +24,12 @@ requireNonEmptyFile(jsPath, "frontend/vendor/katex/katex.min.js");
 requireNonEmptyFile(runtimeConfigPath, "frontend/runtime-config.js");
 requireNonEmptyFile(authRedesignCssPath, "frontend/styles/auth-redesign.css");
 requireNonEmptyFile(authRedesignJsPath, "frontend/scripts/auth-redesign.js");
+requireNonEmptyFile(studentOsLogoPath, "frontend/assets/studentos-logo.png");
+
+const logoSignature = readFileSync(studentOsLogoPath).subarray(0, 8).toString("hex");
+if (logoSignature !== "89504e470d0a1a0a") {
+  throw new Error("The StudentOS logo asset is not a valid PNG.");
+}
 
 if (!existsSync(fontsPath) || !statSync(fontsPath).isDirectory()) {
   throw new Error("Cloudflare build is missing the KaTeX fonts directory.");
@@ -50,6 +57,7 @@ console.log(JSON.stringify({
   js: "frontend/vendor/katex/katex.min.js",
   authRedesignCss: "frontend/styles/auth-redesign.css",
   authRedesignJs: "frontend/scripts/auth-redesign.js",
+  studentOsLogo: "frontend/assets/studentos-logo.png",
   fontCount: fonts.length,
   htmlFallback: false,
   secretsPrinted: false,
