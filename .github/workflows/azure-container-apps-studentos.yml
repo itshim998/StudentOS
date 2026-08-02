@@ -444,7 +444,7 @@ jobs:
               az containerapp update \
                 --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
                 --name "$app_name" \
-                --set-env-vars STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false STUDENTOS_BACKGROUND_WORKERS_ENABLED=true \
+                --set-env-vars STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=true STUDENTOS_BACKGROUND_WORKERS_ENABLED=true \
                 --output none
             done
 
