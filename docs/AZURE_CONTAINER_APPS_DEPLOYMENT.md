@@ -25,6 +25,7 @@ Remediation status on 2026-07-19: the Azure workflow had not been run when remed
 - `infra/azure/deploy-containerapp.ps1`
 - `infra/azure/deploy-containerapp.sh`
 - `.github/workflows/azure-container-apps-studentos.yml`
+- `.github/workflows/adaptive-recovery-rollout.yml`
 
 
 ## Backend Image Boundary
@@ -67,7 +68,11 @@ on:
   workflow_dispatch:
 ```
 
-It builds one Docker image, pushes it to GHCR, and deploys/updates both the API (0–1) and worker (1–1). It first configures recovery false on both, validates the actual worker resource and ready revision, and only accepts an explicit future `enable_adaptive_recovery` request after hardened live schema verification succeeds.
+It builds one Docker image, pushes it to GHCR, and deploys/updates both the API (0–1) and worker (1–1). Every ordinary deployment is dark: it writes `STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false`, `STUDENTOS_RECOVERY_UI_ENABLED=false`, and `STUDENTOS_RECOVERY_ROLLOUT_MODE=off` to both apps and validates the actual worker resource and ready revision. It has no Recovery enable input. An ordinary future deployment also returns Recovery to this dark state.
+
+Controlled enablement uses the separate manual-only workflow `Adaptive Recovery - Controlled Rollout` from `.github/workflows/adaptive-recovery-rollout.yml`. It runs only from `main`, requires the exact current-main image already deployed dark to both apps, verifies the live hardened schema and worker topology, and supports allowlist enablement only. The initial cohort must be exactly one explicitly approved existing Plus/Pro test account. Cohort identifiers belong in the protected `azure-dev` environment secret `STUDENTOS_RECOVERY_ROLLOUT_USER_IDS`; never place them in source, workflow inputs, comments, or logs.
+
+The same dedicated workflow's `disable` action is the operational rollback mechanism. It hides the API first, disables the worker second, and restores all three dark values. No global or plan-wide Recovery launch has occurred.
 
 ## Required GitHub Secrets
 
@@ -82,6 +87,7 @@ Do not commit values. Configure these in GitHub repository secrets or environmen
 - `AZURE_CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP`
 - `AZURE_LOCATION`
 - `GHCR_PULL_TOKEN`
+- `STUDENTOS_RECOVERY_ROLLOUT_USER_IDS` in the protected `azure-dev` environment only, before an approved controlled exercise
 
 `GHCR_PULL_TOKEN` should be a low-scope token with package read access so Azure Container Apps can pull the private GHCR image after the workflow finishes. The workflow uses `GITHUB_TOKEN` only to push the image during the workflow run.
 
@@ -101,7 +107,9 @@ Non-secret runtime values:
 - `STUDENTOS_SERVE_FRONTEND=false`
 - `STUDENTOS_MODE=supabase`
 - `STUDENTOS_BACKGROUND_WORKERS_ENABLED=true` only in the deployed API-plus-dedicated-worker topology
-- `STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false` until migration 002, hardened live verification, API behavior, and the actual worker resource have been validated on all data shards
+- `STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false` in every ordinary deployment
+- `STUDENTOS_RECOVERY_UI_ENABLED=false` in every ordinary deployment
+- `STUDENTOS_RECOVERY_ROLLOUT_MODE=off` in every ordinary deployment
 - `STUDENTOS_RECOVERY_PREVIEW_TTL_HOURS=24`
 - `STUDENTOS_DEMO_SEED_ENABLED=false`
 - `STUDENTOS_GOOGLE_CLASSROOM_MODE=disabled`
@@ -124,6 +132,7 @@ Backend-only secret values:
 - `STUDENTOS_SUPABASE_URL_4`
 - `STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4`
 - `STUDENTOS_SUPABASE_JWT_SECRET`
+- `STUDENTOS_RECOVERY_ROLLOUT_USER_IDS` for the dedicated controlled-rollout workflow only; Azure maps it through the `studentos-recovery-rollout-user-ids` secret reference and public status never returns its value
 - `STUDENTOS_STORAGE_BUCKET`
 - `STUDENTOS_EXPORT_STORAGE_BUCKET`
 - `STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET` if Classroom OAuth is later enabled
@@ -142,7 +151,7 @@ Backend-only secret values:
 - billing provider secrets only after a billing launch review
 - operator/internal/deletion secrets only after an internal-ops launch review
 
-The `Azure Container Apps - StudentOS API` GitHub Actions workflow validates and maps the required Supabase values plus every configured provider key into Azure Container Apps as backend-only secret refs after the Bicep deployment. With cyclic routing disabled, validation keeps the existing requirement of at least one Groq key. With cyclic routing enabled, it fails closed unless Groq, all five distinct numbered Gemini slots, and authenticated Pollinations are configured. Missing required secret names cause the workflow to fail before deployment output is shown. Provider and service-role keys stay in GitHub Actions and Azure Container Apps only; do not add them to Cloudflare Pages or any frontend runtime config.
+The `Azure Container Apps - StudentOS API and Worker` GitHub Actions workflow validates and maps the required Supabase values plus every configured provider key into Azure Container Apps as backend-only secret refs after the Bicep deployment. With cyclic routing disabled, validation keeps the existing requirement of at least one Groq key. With cyclic routing enabled, it fails closed unless Groq, all five distinct numbered Gemini slots, and authenticated Pollinations are configured. Missing required secret names cause the workflow to fail before deployment output is shown. Provider and service-role keys stay in GitHub Actions and Azure Container Apps only; do not add them to Cloudflare Pages or any frontend runtime config.
 
 The GitHub environment variables `STUDENTOS_AI_GROQ_ENABLED`, `STUDENTOS_AI_GEMINI_ENABLED`, `STUDENTOS_AI_NVIDIA_ENABLED`, and `STUDENTOS_AI_POLLINATIONS_ENABLED` are independent emergency kill switches. Router V2 deploys disabled with rollout zero; `STUDENTOS_AI_ROUTER_V2_ENABLED=false` is its immediate rollback.
 
@@ -233,9 +242,9 @@ View worker logs without printing environment values:
 az containerapp logs show --resource-group rg-studentos-dev --name studentos-worker-dev --follow
 ```
 
-For restart, inspect the failed job and logs first, then create a new worker revision or update/restart the app through the controlled deployment workflow. Database job claims recover stale `processing` locks after the configured lock timeout, so do not manually duplicate a queued recovery run or background job. A retry reuses its durable run/job and allowance request.
+For restart, inspect the failed job and logs first, then create a new worker revision or update/restart the app through the ordinary deployment workflow. Database job claims recover stale `processing` locks after the configured lock timeout, so do not manually duplicate a queued recovery run or background job. A retry reuses its durable run/job and allowance request.
 
-Rollback disables `STUDENTOS_ADAPTIVE_RECOVERY_ENABLED` on both apps first and then stops recovery job processing if necessary. Keep additive recovery tables and immutable versions. Do not delete migration-002 audit/state records during operational rollback.
+Recovery rollback uses `Adaptive Recovery - Controlled Rollout` with `action=disable` and the exact confirmation `DISABLE-RECOVERY`. It restores the engine and UI flags to `false` and rollout mode to `off` on both apps while preserving additive Recovery tables and immutable versions. A normal deployment also returns both apps to dark. Do not delete migration-002 audit/state records during operational rollback.
 
 ## CORS and Domains
 
@@ -263,13 +272,14 @@ Update Google OAuth redirect URIs only after choosing the public API domain.
 
 ## Validation
 
-Run before enabling the manual workflow:
+Run before any approved allowlist enablement:
 
 ```powershell
 npm.cmd run smoke:core
 npm.cmd run test:e2e
 npm.cmd run test:recovery
 npm.cmd run eval:recovery
+npm.cmd run verify:recovery-operational-state
 npm.cmd run migration:plan
 npm.cmd run preflight:production
 npm.cmd run preflight:azure
@@ -277,7 +287,7 @@ npm.cmd run check:syntax
 git diff --check
 ```
 
-The push/pull-request validation workflow runs these static/local gates plus the full test suite on Node 22 and installs Playwright Chromium. It does not deploy and does not run live Supabase verification. Migration 001 was already verified successfully; do not run the default hardened recovery verifier until migration 002 is applied to all data shards.
+The push/pull-request validation workflow runs the static/local gates plus the full test suite on Node 22 and installs Playwright Chromium. It does not deploy and does not run live Supabase verification. Before enablement, run the read-only hardened verifier with `npm.cmd run verify:recovery-schema` and require migrations 001 and 002 to be present on every data shard. Then run `npm.cmd run verify:recovery-operational-state` and require zero queued, retrying, running, applying, or stale-leased Recovery work on every shard. The operational verifier reports aggregate counts only. Do not reapply a migration merely because verification cannot confirm it.
 
 ## First Deploy Checklist
 

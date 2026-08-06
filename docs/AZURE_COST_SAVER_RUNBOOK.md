@@ -14,6 +14,7 @@ This runbook keeps the first StudentOS backend deployment cheap and reversible.
 - Do not add Azure SQL.
 - Do not duplicate Supabase Storage into Azure Storage.
 - Keep production log verbosity low.
+- Keep ordinary deployments Recovery-dark. Any temporary Recovery exercise must use the dedicated main-only allowlist workflow with one approved Plus/Pro test account; no global launch has occurred.
 
 ## Budget Alert Checklist
 
@@ -84,6 +85,8 @@ az group delete --name rg-studentos-dev --yes
 ## Worker Cost Policy
 
 Do not run `jobs:dev`, `jobs:work`, `exports:dev`, or `exports:work` continuously in the web/API app. The only approved continuously running process is the dedicated `studentos-worker` Container App at `0.25` CPU, `0.5Gi`, and fixed 1–1 scale. Export workers and any additional scheduled jobs still require separate review.
+
+Disabling Recovery is the rollback mechanism and does not require scaling the worker down. Use `Adaptive Recovery - Controlled Rollout` with `action=disable`; it restores both flags to false and rollout mode to off while preserving Recovery history. An ordinary deployment also returns Recovery to dark.
 
 ## No Cron or Warmup Policy
 

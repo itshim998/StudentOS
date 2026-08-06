@@ -84,6 +84,10 @@ export function runProductionPreflight(env = process.env) {
       if (aiConfig.pollinations.textModel !== "gpt-oss") readiness.errors.push("pollinations_required_model_must_be_gpt_oss");
       if (readiness.errors.length) readiness.ok = false;
     }
+    if (!recoveryConfig.rolloutConfigValid) {
+      readiness.errors.push("adaptive_recovery_rollout_configuration_invalid");
+      readiness.ok = false;
+    }
     if (recoveryConfig.enabled && String(env.STUDENTOS_BACKGROUND_WORKERS_ENABLED || "").toLowerCase() !== "true") {
       readiness.errors.push("adaptive_recovery_requires_background_workers");
       readiness.ok = false;

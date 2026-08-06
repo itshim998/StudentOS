@@ -126,7 +126,7 @@ Do not make the repository public for this. Do not bake the token into the Docke
 
 Use `infra/azure/containerapp-secrets.example.ps1` as a placeholder-only guide.
 
-Runtime secrets and env vars belong in Azure Container Apps, not in the image and not in GitHub source. Map the same Supabase service-role and optional provider secrets to the API and worker. The deployed topology sets `STUDENTOS_BACKGROUND_WORKERS_ENABLED=true` and initially sets `STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false` on both.
+Runtime secrets and env vars belong in Azure Container Apps, not in the image and not in GitHub source. Map the same Supabase service-role and optional provider secrets to the API and worker. Every ordinary deployment sets `STUDENTOS_BACKGROUND_WORKERS_ENABLED=true`, `STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false`, `STUDENTOS_RECOVERY_UI_ENABLED=false`, and `STUDENTOS_RECOVERY_ROLLOUT_MODE=off` on both apps.
 
 ## 9. Post-Deploy Health Checks
 
@@ -154,7 +154,7 @@ Inspect worker logs when needed:
 az containerapp logs show --resource-group rg-studentos-dev --name studentos-worker-dev --follow
 ```
 
-Do not enable recovery based only on an environment variable. Migration 002 must be applied to all data shards, `npm.cmd run verify:recovery-schema` must pass, and the actual worker checks above must succeed. The workflow always deploys recovery false before evaluating a future explicit enable request.
+Do not enable Recovery based only on an environment variable. Migration 002 must be present on all data shards, `npm.cmd run verify:recovery-schema` must pass read-only, and the actual worker checks above must succeed. Deploy the exact current `main` image dark through `Azure Container Apps - StudentOS API and Worker`, then use `Adaptive Recovery - Controlled Rollout` for allowlist-only enablement. The initial cohort is one explicitly approved existing Plus/Pro test account, stored only in the protected `azure-dev` environment secret. No global launch has occurred.
 
 ## 10. Cloudflare Frontend Wiring
 
@@ -205,11 +205,9 @@ Remove-Item Env:STUDENTOS_AZURE_API_URL
 
 ## 11. Rollback and Scale-to-Zero
 
-Disable recovery on both apps first. To stop queue processing during an incident, then scale the worker to zero; database stale-job lock recovery permits a later controlled restart without creating replacement runs/jobs:
+Disable Recovery first with the `Adaptive Recovery - Controlled Rollout` workflow using `action=disable` and confirmation `DISABLE-RECOVERY`. Verify both apps report engine false, UI false, and rollout mode off. A normal deployment also returns Recovery to dark. To stop all queue processing during a broader incident, then scale the worker to zero; database stale-job lock recovery permits a later controlled restart without creating replacement runs/jobs:
 
 ```powershell
-az containerapp update --resource-group rg-studentos-dev --name studentos-api-dev --set-env-vars STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false
-az containerapp update --resource-group rg-studentos-dev --name studentos-worker-dev --set-env-vars STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false
 az containerapp update --resource-group rg-studentos-dev --name studentos-worker-dev --min-replicas 0 --max-replicas 1
 ```
 

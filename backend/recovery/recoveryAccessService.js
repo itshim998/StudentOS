@@ -1,6 +1,7 @@
 import { resolveEntitlements } from "../billing/billingService.js";
 import { FEATURE_KEYS, canUseFeature } from "../domain/planEntitlementService.js";
 import { getProductLifecycleSnapshot } from "../domain/productLifecycleService.js";
+import { isRecoveryRolloutUserEligible } from "./recoveryConfig.js";
 import { RECOVERY_FAILURES, RecoveryError, assertRecoveryEnabled } from "./recoveryErrors.js";
 
 export const RECOVERY_CAPABILITY_STATUSES = Object.freeze({
@@ -10,8 +11,14 @@ export const RECOVERY_CAPABILITY_STATUSES = Object.freeze({
   AVAILABLE: "available",
 });
 
+function getRecoveryUserId(state = {}) {
+  return state.studentProfile?.id || state.studentProfile?.userId || null;
+}
+
 export function getPublicRecoveryCapability(state = {}, config = {}) {
-  const disabled = config.enabled !== true || config.uiEnabled !== true;
+  const disabled = config.enabled !== true
+    || config.uiEnabled !== true
+    || !isRecoveryRolloutUserEligible(getRecoveryUserId(state), config);
   if (disabled) {
     return {
       status: RECOVERY_CAPABILITY_STATUSES.DISABLED,
@@ -57,6 +64,13 @@ export function assertRecoveryRouteAccess(state = {}, config = {}, correlationId
     );
   }
   const capability = getPublicRecoveryCapability(state, config);
+  if (capability.status === RECOVERY_CAPABILITY_STATUSES.DISABLED) {
+    throw new RecoveryError(
+      RECOVERY_FAILURES.UI_DISABLED,
+      "Adaptive Recovery is not available.",
+      { retryable: false, correlationId },
+    );
+  }
   if (capability.status === RECOVERY_CAPABILITY_STATUSES.SETUP_REQUIRED) {
     throw new RecoveryError(
       RECOVERY_FAILURES.SETUP_REQUIRED,

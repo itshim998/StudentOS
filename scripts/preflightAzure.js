@@ -66,6 +66,9 @@ const server = read("backend/server.js");
 const workflow = exists(".github/workflows/azure-container-apps-studentos.yml")
   ? read(".github/workflows/azure-container-apps-studentos.yml")
   : "";
+const recoveryRolloutWorkflow = exists(".github/workflows/adaptive-recovery-rollout.yml")
+  ? read(".github/workflows/adaptive-recovery-rollout.yml")
+  : "";
 const envExample = exists(".env.example") ? read(".env.example") : "";
 const envTemplate = exists(".env.template") ? read(".env.template") : "";
 const frontendText = listFiles("frontend")
@@ -91,6 +94,8 @@ addCheck("package start exists", pkg.scripts?.start === "node backend/server.js"
 addCheck("package preflight exists", pkg.scripts?.preflight === "npm run preflight:azure && npm run preflight:production");
 addCheck("package preflight:azure exists", pkg.scripts?.["preflight:azure"] === "node scripts/preflightAzure.js");
 addCheck("package verify:azure-deployment exists", pkg.scripts?.["verify:azure-deployment"] === "node scripts/verifyAzureDeployment.js");
+addCheck("package verify:recovery-rollout exists", pkg.scripts?.["verify:recovery-rollout"] === "node scripts/verifyRecoveryRolloutConfig.js");
+addCheck("package verify:recovery-operational-state exists", pkg.scripts?.["verify:recovery-operational-state"] === "node scripts/verifyRecoveryOperationalState.js");
 addCheck("package repository syntax check exists", pkg.scripts?.["check:syntax"] === "node scripts/checkNodeSyntax.js");
 addCheck("package Router V2 database concurrency test exists", pkg.scripts?.["test:router-v2-db"] === "node scripts/testAiRouterV2DatabaseConcurrency.js");
 addCheck("package cloudflare:config exists", pkg.scripts?.["cloudflare:config"] === "node scripts/writeCloudflareFrontendConfig.js");
@@ -167,6 +172,7 @@ const dangerousDefaults = [
   ["STUDENTOS_BACKGROUND_WORKERS_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_RECOVERY_UI_ENABLED=false", envExample, envTemplate],
+  ["STUDENTOS_RECOVERY_ROLLOUT_MODE=off", envExample, envTemplate],
   ["STUDENTOS_AI_PROVIDER_CYCLE_ENABLED=false", envExample, envTemplate],
   ["STUDENTOS_AI_PROVIDER_CYCLE_ROLLOUT_PERCENT=0", envExample, envTemplate],
   ["STUDENTOS_AI_ROUTER_V2_ENABLED=false", envExample, envTemplate],
@@ -185,7 +191,10 @@ for (const file of [
   "docs/AZURE_FIRST_DEPLOY_CHECKLIST.md",
   "infra/azure/containerapp-secrets.example.ps1",
   "scripts/verifyAzureDeployment.js",
+  "scripts/verifyRecoveryRolloutConfig.js",
+  "scripts/verifyRecoveryOperationalState.js",
   ".github/workflows/azure-container-apps-studentos.yml",
+  ".github/workflows/adaptive-recovery-rollout.yml",
 ]) {
   addCheck(`${file} exists`, exists(file));
 }
@@ -380,6 +389,7 @@ addCheck("Dedicated worker uses the API image without ingress", bicep.includes("
 addCheck("Dedicated worker command and fixed scale configured", bicep.includes("'jobs:dev'") && bicep.slice(bicep.indexOf("resource workerContainerApp")).includes("minReplicas: 1") && bicep.slice(bicep.indexOf("resource workerContainerApp")).includes("maxReplicas: 1"));
 addCheck("Dedicated worker has constrained resources", bicep.slice(bicep.indexOf("resource workerContainerApp")).includes("cpu: json('0.25')") && bicep.slice(bicep.indexOf("resource workerContainerApp")).includes("memory: '0.5Gi'"));
 addCheck("Bicep disables backend frontend serving", bicep.includes("name: 'STUDENTOS_SERVE_FRONTEND'") && bicep.includes("value: 'false'"));
+addCheck("Bicep keeps Recovery dark for API and worker", (bicep.match(/name: 'STUDENTOS_RECOVERY_UI_ENABLED'/g) || []).length === 2 && (bicep.match(/name: 'STUDENTOS_RECOVERY_ROLLOUT_MODE'/g) || []).length === 2);
 addCheck("Bicep can reuse existing ACA environment", bicep.includes("param useExistingEnvironment bool = true") && bicep.includes("existingEnvironmentResourceGroup") && bicep.includes("resourceId(existingEnvironmentResourceGroup") && bicep.includes("if (!useExistingEnvironment)"));
 const psDeploy = read("infra/azure/deploy-containerapp.ps1");
 const shDeploy = read("infra/azure/deploy-containerapp.sh");
@@ -387,8 +397,15 @@ addCheck("deploy scripts refuse unsafe replica settings", psDeploy.includes("Min
 addCheck("deploy scripts include the dedicated worker", psDeploy.includes("WorkerContainerAppName") && psDeploy.includes("min=1 max=1") && shDeploy.includes("WORKER_CONTAINER_APP_NAME") && shDeploy.includes("min=1 max=1"));
 addCheck("deploy scripts show safe final URL summary", psDeploy.includes("Safe deployment summary") && shDeploy.includes("Safe deployment summary"));
 addCheck("deploy scripts support existing ACA environment", psDeploy.includes("ExistingEnvironmentResourceGroup") && psDeploy.includes("useExistingEnvironment=$UseExistingEnvironment") && shDeploy.includes("EXISTING_ENVIRONMENT_RESOURCE_GROUP") && shDeploy.includes("useExistingEnvironment=\"$USE_EXISTING_ENVIRONMENT\""));
-addCheck("workflow validates actual worker topology before enable", workflow.includes("Validate dedicated worker resource") && workflow.includes("latestReadyRevisionName") && workflow.includes(".properties.configuration.ingress == null") && workflow.includes("Verify migration 002 before an enable request"));
-addCheck("workflow maps backend authority to both apps", workflow.includes('for app_name in "${{ secrets.AZURE_CONTAINER_APP_NAME }}" "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"') && workflow.includes("STUDENTOS_BACKGROUND_WORKERS_ENABLED: 'true'") && workflow.includes("STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: 'false'"));
+addCheck("deployment workflow validates dark worker topology", workflow.includes("Validate dedicated worker resource") && workflow.includes("latestReadyRevisionName") && workflow.includes(".properties.configuration.ingress == null") && !workflow.includes("enable_adaptive_recovery:"));
+addCheck("deployment workflow maps dark Recovery state to both apps", workflow.includes('for app_name in "${{ secrets.AZURE_CONTAINER_APP_NAME }}" "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"') && workflow.includes("STUDENTOS_BACKGROUND_WORKERS_ENABLED: 'true'") && workflow.includes("STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: 'false'") && workflow.includes("STUDENTOS_RECOVERY_UI_ENABLED: 'false'") && workflow.includes("STUDENTOS_RECOVERY_ROLLOUT_MODE: 'off'"));
+addCheck("Recovery rollout workflow is manual-only", recoveryRolloutWorkflow.includes("workflow_dispatch:") && !/^  push:/m.test(recoveryRolloutWorkflow) && !/^  pull_request:/m.test(recoveryRolloutWorkflow));
+addCheck("Recovery rollout workflow requires explicit confirmations", recoveryRolloutWorkflow.includes("ENABLE-RECOVERY-ALLOWLIST") && recoveryRolloutWorkflow.includes("DISABLE-RECOVERY"));
+addCheck("Recovery rollout workflow passes free-form confirmation through env", recoveryRolloutWorkflow.includes("REQUEST_CONFIRMATION: ${{ inputs.confirmation }}") && !recoveryRolloutWorkflow.includes('confirmation="${{ inputs.confirmation }}"'));
+addCheck("Recovery rollout workflow verifies schema and allowlist", recoveryRolloutWorkflow.includes("verifyAdaptiveRecoverySchemaLive.js") && recoveryRolloutWorkflow.includes("verifyRecoveryRolloutConfig.js") && recoveryRolloutWorkflow.includes("STUDENTOS_RECOVERY_ROLLOUT_USER_IDS"));
+addCheck("Recovery rollout workflow verifies both apps are dark and ready before enable", recoveryRolloutWorkflow.includes('for json in "$api_json" "$worker_json"') && recoveryRolloutWorkflow.includes('STUDENTOS_RECOVERY_UI_ENABLED" and .value == "false"') && recoveryRolloutWorkflow.includes('STUDENTOS_RECOVERY_ROLLOUT_MODE" and .value == "off"'));
+addCheck("Recovery rollout workflow supports paired enable and disable", recoveryRolloutWorkflow.includes("STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=true") && recoveryRolloutWorkflow.includes("STUDENTOS_RECOVERY_UI_ENABLED=true") && recoveryRolloutWorkflow.includes("STUDENTOS_RECOVERY_ROLLOUT_MODE=allowlist") && recoveryRolloutWorkflow.includes("STUDENTOS_ADAPTIVE_RECOVERY_ENABLED=false") && recoveryRolloutWorkflow.includes("STUDENTOS_RECOVERY_UI_ENABLED=false") && recoveryRolloutWorkflow.includes("STUDENTOS_RECOVERY_ROLLOUT_MODE=off"));
+addCheck("Recovery rollout workflow hides raw Azure output", recoveryRolloutWorkflow.includes("Raw CLI output was withheld") && !/cat\s+["']?\$?log_path/.test(recoveryRolloutWorkflow));
 const verifier = read("scripts/verifyAzureDeployment.js");
 const cloudflareVerifier = read("scripts/verifyCloudflareAzureWiring.js");
 addCheck("verify script checks health and config", verifier.includes("/api/health") && verifier.includes("/api/config"));
@@ -402,7 +419,7 @@ const result = {
   ok: failed.length === 0,
   product: "StudentOS",
   target: "Azure Container Apps Consumption",
-  workflow: "Azure Container Apps - StudentOS API and Worker",
+  workflow: "Azure Container Apps deployment plus controlled Recovery rollout",
   scale: { api: { minReplicas: 0, maxReplicas: 1 }, worker: { minReplicas: 1, maxReplicas: 1 } },
   checkedAt: new Date().toISOString(),
   checks,

@@ -138,6 +138,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: 'false'
             }
             {
+              name: 'STUDENTOS_RECOVERY_UI_ENABLED'
+              value: 'false'
+            }
+            {
+              name: 'STUDENTOS_RECOVERY_ROLLOUT_MODE'
+              value: 'off'
+            }
+            {
               name: 'STUDENTOS_RECOVERY_PREVIEW_TTL_HOURS'
               value: '24'
             }
@@ -246,6 +254,14 @@ resource workerContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'STUDENTOS_ADAPTIVE_RECOVERY_ENABLED'
               value: 'false'
+            }
+            {
+              name: 'STUDENTOS_RECOVERY_UI_ENABLED'
+              value: 'false'
+            }
+            {
+              name: 'STUDENTOS_RECOVERY_ROLLOUT_MODE'
+              value: 'off'
             }
             {
               name: 'STUDENTOS_RECOVERY_PREVIEW_TTL_HOURS'
