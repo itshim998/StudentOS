@@ -409,6 +409,8 @@ addCheck("Recovery rollout workflow hides raw Azure output", recoveryRolloutWork
 const verifier = read("scripts/verifyAzureDeployment.js");
 const cloudflareVerifier = read("scripts/verifyCloudflareAzureWiring.js");
 addCheck("verify script checks health and config", verifier.includes("/api/health") && verifier.includes("/api/config"));
+addCheck("verify script excludes only the public auth anon key from JWT secret matching", verifier.includes('publicAnonKey: config.body?.auth?.anonKey') && verifier.includes('raw.split(publicAnonKey).join("[redacted.public-anon-key]")'));
+addCheck("verify script accepts the public Supabase persistence projection", verifier.includes('"private_cloud_sync"'));
 addCheck("verify script checks AI JSON wiring", cloudflareVerifier.includes("/api/ai/verb") && cloudflareVerifier.includes("aiReturnedHtml"));
 addCheck("verify script rejects missing Azure URL", verifier.includes("STUDENTOS_AZURE_API_URL"));
 addCheck("verify script checks deployment target", verifier.includes("azure-container-apps"));
