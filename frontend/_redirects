@@ -2,3 +2,7 @@
 /auth/complete/ /auth-complete 200
 /auth/callback /index.html 200
 /auth/callback/ /index.html 200
+/privacy-policy /privacy-policy/index.html 200
+/privacy-policy/ /privacy-policy/index.html 200
+/terms-of-service /terms-of-service/index.html 200
+/terms-of-service/ /terms-of-service/index.html 200
