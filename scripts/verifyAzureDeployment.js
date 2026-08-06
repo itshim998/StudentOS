@@ -14,8 +14,8 @@ const SECRET_MARKERS = [
   /AZURE_CREDENTIALS/i,
   /PRIVATE KEY/i,
   /BEGIN RSA/i,
-  /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/,
 ];
+const JWT_SECRET_MARKER = /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/;
 
 function normalizeBaseUrl(value) {
   const raw = String(value || "").trim().replace(/\/+$/, "");
@@ -42,8 +42,12 @@ async function getJson(baseUrl, path) {
   return { status: response.status, elapsedMs, body, raw: text };
 }
 
-function assertNoSecrets(label, raw) {
+function assertNoSecrets(label, raw, { publicAnonKey = "" } = {}) {
   const hits = SECRET_MARKERS.filter((pattern) => pattern.test(raw));
+  const jwtScanTarget = publicAnonKey
+    ? raw.split(publicAnonKey).join("[redacted.public-anon-key]")
+    : raw;
+  if (JWT_SECRET_MARKER.test(jwtScanTarget)) hits.push(JWT_SECRET_MARKER);
   if (hits.length) throw new Error(`${label} response contains secret-like markers`);
 }
 
@@ -65,7 +69,7 @@ const health = await getJson(baseUrl, "/api/health");
 const config = await getJson(baseUrl, "/api/config");
 
 assertNoSecrets("/api/health", health.raw);
-assertNoSecrets("/api/config", config.raw);
+assertNoSecrets("/api/config", config.raw, { publicAnonKey: config.body?.auth?.anonKey });
 
 const errors = [];
 if (health.body?.ok !== true) errors.push("/api/health did not return ok=true");
@@ -74,8 +78,8 @@ if (config.body?.aiProviders?.configured !== true) errors.push("/api/config repo
 if (config.body?.aiProviders?.fallbackAvailable !== true || Number(config.body?.aiProviders?.configuredProviderCount || 0) < 2) {
   errors.push("/api/config reports fewer than two configured production AI providers");
 }
-if (!["supabase", "mock"].includes(config.body?.persistence?.mode || config.body?.supabase?.mode || "")) {
-  errors.push("/api/config persistence mode is neither supabase nor mock");
+if (!["private_cloud_sync", "supabase", "mock"].includes(config.body?.persistence?.mode || config.body?.supabase?.mode || "")) {
+  errors.push("/api/config persistence mode is not an expected private persistence mode");
 }
 const toggles = dangerousToggles(config.body || {});
 errors.push(...toggles);
