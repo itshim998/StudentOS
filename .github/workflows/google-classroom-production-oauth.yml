@@ -1,0 +1,226 @@
+name: Google Classroom - Production OAuth Activation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studentos-google-classroom-production-oauth
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    environment: azure-dev
+    env:
+      PRODUCTION_CALLBACK: https://api.studentos.sentiqlabs.com/api/classroom/oauth/callback
+      PRODUCTION_API_HOST: api.studentos.sentiqlabs.com
+      GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET: ${{ secrets.STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET }}
+      STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET: ${{ secrets.STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate production OAuth inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for name in \
+            GOOGLE_CLIENT_ID \
+            GOOGLE_CLIENT_SECRET \
+            STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET \
+            STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing required azure-dev environment secret: %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
+
+          if [[ "$GOOGLE_CLIENT_ID" != *.apps.googleusercontent.com ]] || \
+             [[ "$GOOGLE_CLIENT_ID" == http://* ]] || \
+             [[ "$GOOGLE_CLIENT_ID" == https://* ]] || \
+             [[ "$GOOGLE_CLIENT_ID" == */* ]]; then
+            echo "GOOGLE_CLIENT_ID is malformed; expected only the Web OAuth client ID." >&2
+            exit 1
+          fi
+
+          if [ "${#STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET}" -lt 32 ] || \
+             [ "${#STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET}" -lt 32 ]; then
+            echo "Classroom state and token-encryption secrets must each be at least 32 characters." >&2
+            exit 1
+          fi
+
+          if [ "$STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET" = "$STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET" ]; then
+            echo "Classroom state and token-encryption secrets must be distinct." >&2
+            exit 1
+          fi
+
+          STUDENTOS_GOOGLE_CLASSROOM_MODE=oauth \
+          GOOGLE_REDIRECT_URI="$PRODUCTION_CALLBACK" \
+          node --input-type=module <<'NODE'
+          import {
+            assertNoGoogleClassroomWriteScopes,
+            getGoogleClassroomConfig,
+            validateGoogleClassroomOAuthConfig,
+          } from './backend/connectors/googleClassroom/config.js';
+
+          const config = getGoogleClassroomConfig(process.env);
+          validateGoogleClassroomOAuthConfig(config);
+          assertNoGoogleClassroomWriteScopes(config.scopes);
+          if (config.redirectUri !== process.env.PRODUCTION_CALLBACK) {
+            throw new Error('Production Google Classroom redirect URI mismatch.');
+          }
+          if (config.tokenPersistence !== 'encrypted_shard_storage') {
+            throw new Error('Production Google Classroom tokens must use encrypted shard storage.');
+          }
+          console.log('Production Google Classroom OAuth inputs validated without printing credentials.');
+          NODE
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Select Azure subscription
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      - name: Preflight live API and custom domain
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+
+            resource_group="${{ secrets.AZURE_RESOURCE_GROUP }}"
+            api_app="${{ secrets.AZURE_CONTAINER_APP_NAME }}"
+            worker_app="${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"
+
+            if [ -z "$resource_group" ] || [ -z "$api_app" ] || [ -z "$worker_app" ]; then
+              echo "Azure resource group, API app name, and worker app name must be configured in azure-dev." >&2
+              exit 1
+            fi
+
+            api_json="$(az containerapp show --resource-group "$resource_group" --name "$api_app" --output json)"
+            worker_json="$(az containerapp show --resource-group "$resource_group" --name "$worker_app" --output json)"
+
+            jq -e --arg host "$PRODUCTION_API_HOST" '
+              .properties.configuration.ingress.external == true and
+              .properties.configuration.ingress.targetPort == 3101 and
+              any(.properties.configuration.ingress.customDomains[]?;
+                .name == $host and
+                (.certificateId // "") != "" and
+                ((.bindingType // "") | ascii_downcase) != "disabled")
+            ' <<<"$api_json" >/dev/null
+
+            jq -e '.properties.configuration.ingress == null' <<<"$worker_json" >/dev/null
+
+            echo "Live topology preflight passed: production API custom domain is bound and worker has no ingress."
+
+      - name: Map Google Classroom OAuth secrets and runtime configuration
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+
+            resource_group="${{ secrets.AZURE_RESOURCE_GROUP }}"
+
+            run_redacted() {
+              category="$1"
+              shift
+              log_path="/tmp/${category}.log"
+              set +e
+              "$@" >"$log_path" 2>&1
+              exit_code=$?
+              set -e
+              if [ "$exit_code" -ne 0 ]; then
+                echo "Azure OAuth configuration failed (category=${category}, exit_code=${exit_code}). Raw output withheld because commands contain secret values." >&2
+                return "$exit_code"
+              fi
+              echo "Azure OAuth configuration succeeded (category=${category})."
+            }
+
+            for app_name in "${{ secrets.AZURE_CONTAINER_APP_NAME }}" "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"; do
+              run_redacted "classroom_secret_set_${app_name}" az containerapp secret set \
+                --resource-group "$resource_group" \
+                --name "$app_name" \
+                --secrets \
+                  google-client-id="$GOOGLE_CLIENT_ID" \
+                  google-client-secret="$GOOGLE_CLIENT_SECRET" \
+                  studentos-google-classroom-oauth-state-secret="$STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET" \
+                  studentos-google-classroom-token-encryption-secret="$STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET" \
+                --output none
+
+              run_redacted "classroom_env_update_${app_name}" az containerapp update \
+                --resource-group "$resource_group" \
+                --name "$app_name" \
+                --set-env-vars \
+                  STUDENTOS_GOOGLE_CLASSROOM_MODE=oauth \
+                  GOOGLE_CLIENT_ID=secretref:google-client-id \
+                  GOOGLE_CLIENT_SECRET=secretref:google-client-secret \
+                  GOOGLE_REDIRECT_URI="$PRODUCTION_CALLBACK" \
+                  STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET=secretref:studentos-google-classroom-oauth-state-secret \
+                  STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET=secretref:studentos-google-classroom-token-encryption-secret \
+                --output none
+            done
+
+      - name: Verify live OAuth wiring and domain preservation
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+
+            resource_group="${{ secrets.AZURE_RESOURCE_GROUP }}"
+
+            for app_name in "${{ secrets.AZURE_CONTAINER_APP_NAME }}" "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}"; do
+              app_json="$(az containerapp show --resource-group "$resource_group" --name "$app_name" --output json)"
+              jq -e --arg callback "$PRODUCTION_CALLBACK" '
+                any(.properties.template.containers[0].env[]; .name == "STUDENTOS_GOOGLE_CLASSROOM_MODE" and .value == "oauth") and
+                any(.properties.template.containers[0].env[]; .name == "GOOGLE_CLIENT_ID" and .secretRef == "google-client-id") and
+                any(.properties.template.containers[0].env[]; .name == "GOOGLE_CLIENT_SECRET" and .secretRef == "google-client-secret") and
+                any(.properties.template.containers[0].env[]; .name == "GOOGLE_REDIRECT_URI" and .value == $callback) and
+                any(.properties.template.containers[0].env[]; .name == "STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET" and .secretRef == "studentos-google-classroom-oauth-state-secret") and
+                any(.properties.template.containers[0].env[]; .name == "STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET" and .secretRef == "studentos-google-classroom-token-encryption-secret")
+              ' <<<"$app_json" >/dev/null
+            done
+
+            api_json="$(az containerapp show --resource-group "$resource_group" --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" --output json)"
+            jq -e --arg host "$PRODUCTION_API_HOST" '
+              any(.properties.configuration.ingress.customDomains[]?;
+                .name == $host and
+                (.certificateId // "") != "" and
+                ((.bindingType // "") | ascii_downcase) != "disabled")
+            ' <<<"$api_json" >/dev/null
+
+            worker_json="$(az containerapp show --resource-group "$resource_group" --name "${{ secrets.AZURE_WORKER_CONTAINER_APP_NAME }}" --output json)"
+            jq -e '.properties.configuration.ingress == null' <<<"$worker_json" >/dev/null
+
+            echo "Google Classroom OAuth is wired on API and worker; production custom domain remains bound; no credentials were printed."
+
+      - name: Verify production HTTPS endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 8 --retry-delay 5 \
+            "https://${PRODUCTION_API_HOST}/api/health" \
+            --output /tmp/studentos-health.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const health = JSON.parse(fs.readFileSync('/tmp/studentos-health.json', 'utf8'));
+          if (health?.ok !== true || health?.product !== 'StudentOS') {
+            throw new Error('StudentOS production health endpoint did not return the expected healthy identity.');
+          }
+          console.log('Production HTTPS health endpoint verified.');
+          NODE
