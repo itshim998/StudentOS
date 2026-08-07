@@ -141,6 +141,49 @@ jobs:
           console.log('Classroom token and sync persistence tables are accessible on all data shards.');
           NODE
 
+      - name: Infer callback progress from recent persistence markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const shards = [2, 3, 4].map((number) => ({
+            number,
+            url: process.env[`STUDENTOS_SUPABASE_URL_${number}`],
+            key: process.env[`STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_${number}`],
+          }));
+          const since = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+
+          async function recentCount(shard, table, timeColumn) {
+            const params = new URLSearchParams({
+              select: timeColumn,
+              [timeColumn]: `gte.${since}`,
+              limit: '100',
+            });
+            const response = await fetch(`${shard.url.replace(/\/+$/, '')}/rest/v1/${table}?${params}`, {
+              headers: {
+                apikey: shard.key,
+                Authorization: `Bearer ${shard.key}`,
+                Accept: 'application/json',
+              },
+            });
+            if (!response.ok) throw new Error(`Recent-marker read failed for shard ${shard.number}, table ${table}, HTTP ${response.status}.`);
+            const rows = await response.json();
+            return Array.isArray(rows) ? rows.length : 0;
+          }
+
+          let totalTokens = 0;
+          let totalSyncRuns = 0;
+          for (const shard of shards) {
+            const tokens = await recentCount(shard, 'classroom_tokens', 'token_updated_at');
+            const syncRuns = await recentCount(shard, 'classroom_sync_runs', 'started_at');
+            totalTokens += tokens;
+            totalSyncRuns += syncRuns;
+            console.log(`Shard ${shard.number}: recent Classroom token rows=${tokens}; recent Classroom sync runs=${syncRuns}.`);
+          }
+          console.log(`Recent callback persistence markers across all shards: token rows=${totalTokens}; sync runs=${totalSyncRuns}.`);
+          console.log('Only counts and shard numbers are printed; no user IDs, emails, tokens, or Classroom content are exposed.');
+          NODE
+
       - name: Azure login
         uses: azure/login@v2
         with:
