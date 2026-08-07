@@ -2,6 +2,9 @@ name: Google Classroom - Production OAuth Diagnostic
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/google-classroom-oauth-diagnostic.yml
 
 permissions:
   contents: read
