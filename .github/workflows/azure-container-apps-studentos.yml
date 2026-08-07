@@ -1,4 +1,4 @@
-﻿name: Azure Container Apps - StudentOS API and Worker
+name: Azure Container Apps - StudentOS API and Worker
 
 on:
   workflow_dispatch:
@@ -143,6 +143,12 @@ jobs:
           NVIDIA_API_KEY_2: ${{ secrets.NVIDIA_API_KEY_2 }}
           NVIDIA_API_KEY_3: ${{ secrets.NVIDIA_API_KEY_3 }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET: ${{ secrets.STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET }}
+          STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET: ${{ secrets.STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET }}
+          STUDENTOS_GOOGLE_CLASSROOM_MODE: oauth
+          GOOGLE_REDIRECT_URI: https://api.studentos.sentiqlabs.com/api/classroom/oauth/callback
           STUDENTOS_BACKGROUND_WORKERS_ENABLED: 'true'
           STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: 'false'
           STUDENTOS_RECOVERY_UI_ENABLED: 'false'
@@ -168,7 +174,11 @@ jobs:
             STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3 \
             STUDENTOS_SUPABASE_URL_4 \
             STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4 \
-            STUDENTOS_SUPABASE_JWT_SECRET; do
+            STUDENTOS_SUPABASE_JWT_SECRET \
+            GOOGLE_CLIENT_ID \
+            GOOGLE_CLIENT_SECRET \
+            STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET \
+            STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET; do
             if [ -z "${!name}" ]; then
               missing+=("$name")
             fi
@@ -178,6 +188,43 @@ jobs:
             exit 1
           fi
           echo "Required backend runtime secret names are configured."
+
+          if [[ "$GOOGLE_CLIENT_ID" != *.apps.googleusercontent.com ]] || [[ "$GOOGLE_CLIENT_ID" == http://* ]] || [[ "$GOOGLE_CLIENT_ID" == https://* ]] || [[ "$GOOGLE_CLIENT_ID" == */* ]]; then
+            echo "GOOGLE_CLIENT_ID is malformed; expected the Web OAuth client ID only." >&2
+            exit 1
+          fi
+          if [ "$GOOGLE_REDIRECT_URI" != "https://api.studentos.sentiqlabs.com/api/classroom/oauth/callback" ]; then
+            echo "GOOGLE_REDIRECT_URI does not match the production callback." >&2
+            exit 1
+          fi
+          if [ "${#STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET}" -lt 32 ] || [ "${#STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET}" -lt 32 ]; then
+            echo "Google Classroom state and token-encryption secrets must each be at least 32 characters." >&2
+            exit 1
+          fi
+          if [ "$STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET" = "$STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET" ]; then
+            echo "Google Classroom state and token-encryption secrets must be distinct." >&2
+            exit 1
+          fi
+
+          node --input-type=module <<'NODE'
+          import {
+            assertNoGoogleClassroomWriteScopes,
+            getGoogleClassroomConfig,
+            validateGoogleClassroomOAuthConfig,
+          } from './backend/connectors/googleClassroom/config.js';
+
+          const config = getGoogleClassroomConfig(process.env);
+          validateGoogleClassroomOAuthConfig(config);
+          assertNoGoogleClassroomWriteScopes(config.scopes);
+          if (config.redirectUri !== 'https://api.studentos.sentiqlabs.com/api/classroom/oauth/callback') {
+            throw new Error('Production Google Classroom redirect URI mismatch.');
+          }
+          if (config.tokenPersistence !== 'encrypted_shard_storage') {
+            throw new Error('Production Google Classroom tokens must use encrypted shard storage.');
+          }
+          console.log('Google Classroom OAuth configuration validated without printing credentials.');
+          NODE
+
           node scripts/validateAzureAiProviderSecrets.js
           if [ "$STUDENTOS_AI_ROUTER_V2_ENABLED" = "true" ]; then
             node scripts/verifyAiRouterV2Config.js --live-registries
@@ -245,6 +292,12 @@ jobs:
           NVIDIA_API_KEY_2: ${{ secrets.NVIDIA_API_KEY_2 }}
           NVIDIA_API_KEY_3: ${{ secrets.NVIDIA_API_KEY_3 }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET: ${{ secrets.STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET }}
+          STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET: ${{ secrets.STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET }}
+          STUDENTOS_GOOGLE_CLASSROOM_MODE: oauth
+          GOOGLE_REDIRECT_URI: https://api.studentos.sentiqlabs.com/api/classroom/oauth/callback
           STUDENTOS_BACKGROUND_WORKERS_ENABLED: 'true'
           STUDENTOS_ADAPTIVE_RECOVERY_ENABLED: 'false'
           STUDENTOS_RECOVERY_UI_ENABLED: 'false'
@@ -325,6 +378,10 @@ jobs:
                 studentos-supabase-url-4="$STUDENTOS_SUPABASE_URL_4" \
                 studentos-supabase-service-role-key-4="$STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4" \
                 studentos-supabase-jwt-secret="$STUDENTOS_SUPABASE_JWT_SECRET" \
+                google-client-id="$GOOGLE_CLIENT_ID" \
+                google-client-secret="$GOOGLE_CLIENT_SECRET" \
+                studentos-google-classroom-oauth-state-secret="$STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET" \
+                studentos-google-classroom-token-encryption-secret="$STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET" \
                 $optional_secret_args \
               --output none
 
@@ -342,6 +399,12 @@ jobs:
                 STUDENTOS_SUPABASE_URL_4=secretref:studentos-supabase-url-4 \
                 STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4=secretref:studentos-supabase-service-role-key-4 \
                 STUDENTOS_SUPABASE_JWT_SECRET=secretref:studentos-supabase-jwt-secret \
+                STUDENTOS_GOOGLE_CLASSROOM_MODE="$STUDENTOS_GOOGLE_CLASSROOM_MODE" \
+                GOOGLE_CLIENT_ID=secretref:google-client-id \
+                GOOGLE_CLIENT_SECRET=secretref:google-client-secret \
+                GOOGLE_REDIRECT_URI="$GOOGLE_REDIRECT_URI" \
+                STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET=secretref:studentos-google-classroom-oauth-state-secret \
+                STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET=secretref:studentos-google-classroom-token-encryption-secret \
                 STUDENTOS_AI_MODE=auto \
                 STUDENTOS_BACKGROUND_WORKERS_ENABLED="$STUDENTOS_BACKGROUND_WORKERS_ENABLED" \
                 STUDENTOS_ADAPTIVE_RECOVERY_ENABLED="$STUDENTOS_ADAPTIVE_RECOVERY_ENABLED" \
@@ -387,7 +450,7 @@ jobs:
             fi
             sleep 10
           done
-          jq -e --arg image "${{ steps.image.outputs.image }}" '
+          jq -e --arg image "${{ steps.image.outputs.image }}" --arg googleRedirect "https://api.studentos.sentiqlabs.com/api/classroom/oauth/callback" '
             .properties.configuration.ingress == null and
             .properties.template.scale.minReplicas == 1 and
             .properties.template.scale.maxReplicas == 1 and
@@ -398,6 +461,12 @@ jobs:
             (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_ADAPTIVE_RECOVERY_ENABLED" and .value == "false")) and
             (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_RECOVERY_UI_ENABLED" and .value == "false")) and
             (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_RECOVERY_ROLLOUT_MODE" and .value == "off")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_GOOGLE_CLASSROOM_MODE" and .value == "oauth")) and
+            (any(.properties.template.containers[0].env[]; .name == "GOOGLE_CLIENT_ID" and .secretRef == "google-client-id")) and
+            (any(.properties.template.containers[0].env[]; .name == "GOOGLE_CLIENT_SECRET" and .secretRef == "google-client-secret")) and
+            (any(.properties.template.containers[0].env[]; .name == "GOOGLE_REDIRECT_URI" and .value == $googleRedirect)) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET" and .secretRef == "studentos-google-classroom-oauth-state-secret")) and
+            (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET" and .secretRef == "studentos-google-classroom-token-encryption-secret")) and
             (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_URL_1" and .secretRef == "studentos-supabase-url-1")) and
             (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_ANON_KEY_1" and .secretRef == "studentos-supabase-anon-key-1")) and
             (any(.properties.template.containers[0].env[]; .name == "STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_1" and .secretRef == "studentos-supabase-service-role-key-1")) and
@@ -419,7 +488,7 @@ jobs:
             echo "API and worker backend/provider secret wiring differs." >&2
             exit 1
           fi
-          echo "Dedicated worker topology verified: image, command, no ingress, fixed replica, backend authority, Recovery disabled, and ready revision."
+          echo "Dedicated worker topology verified: image, command, no ingress, fixed replica, backend authority, Google Classroom OAuth, Recovery disabled, and ready revision."
 
       - name: Show safe deployment summary
         uses: azure/cli@v2
@@ -428,7 +497,7 @@ jobs:
             az containerapp show \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
               --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
-              --query "{name:name, fqdn:properties.configuration.ingress.fqdn, min:properties.template.scale.minReplicas, max:properties.template.scale.maxReplicas, latestRevision:properties.latestRevisionName}" \
+              --query "{name:name, fqdn:properties.configuration.ingress.fqdn, min:properties.template.scale.minReplicas, max:properties.template.scale.maxReplicas, latestRevision:properties.latestRevisionName, classroomMode:properties.template.containers[0].env[?name=='STUDENTOS_GOOGLE_CLASSROOM_MODE'].value|[0], classroomRedirect:properties.template.containers[0].env[?name=='GOOGLE_REDIRECT_URI'].value|[0]}" \
               --output table
             az containerapp show \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
