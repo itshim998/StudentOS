@@ -1,0 +1,174 @@
+name: Google Classroom - Production OAuth Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: azure-dev
+    env:
+      PRODUCTION_CALLBACK: https://api.studentos.sentiqlabs.com/api/classroom/oauth/callback
+      PRODUCTION_API_HOST: api.studentos.sentiqlabs.com
+      GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET: ${{ secrets.STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET }}
+      STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET: ${{ secrets.STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET }}
+      STUDENTOS_SUPABASE_URL_2: ${{ secrets.STUDENTOS_SUPABASE_URL_2 }}
+      STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_2 }}
+      STUDENTOS_SUPABASE_URL_3: ${{ secrets.STUDENTOS_SUPABASE_URL_3 }}
+      STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_3 }}
+      STUDENTOS_SUPABASE_URL_4: ${{ secrets.STUDENTOS_SUPABASE_URL_4 }}
+      STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4: ${{ secrets.STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_4 }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate local OAuth configuration and state signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          STUDENTOS_GOOGLE_CLASSROOM_MODE=oauth \
+          GOOGLE_REDIRECT_URI="$PRODUCTION_CALLBACK" \
+          node --input-type=module <<'NODE'
+          import {
+            assertNoGoogleClassroomWriteScopes,
+            getGoogleClassroomConfig,
+            validateGoogleClassroomOAuthConfig,
+          } from './backend/connectors/googleClassroom/config.js';
+          import {
+            createClassroomOAuthState,
+            verifyClassroomOAuthState,
+          } from './backend/connectors/googleClassroom/oauth.js';
+
+          const config = getGoogleClassroomConfig(process.env);
+          validateGoogleClassroomOAuthConfig(config);
+          assertNoGoogleClassroomWriteScopes(config.scopes);
+          const state = createClassroomOAuthState({ userId: 'diagnostic-user', config });
+          const claims = verifyClassroomOAuthState(state, { config });
+          if (claims.sub !== 'diagnostic-user') throw new Error('OAuth state round-trip failed.');
+          if (config.redirectUri !== process.env.PRODUCTION_CALLBACK) throw new Error('Production redirect URI mismatch.');
+          if (config.tokenPersistence !== 'encrypted_shard_storage') throw new Error('Encrypted Classroom token storage is not enabled.');
+          console.log('OAuth config, read-only scope guard, state signing, and encrypted-token configuration passed.');
+          NODE
+
+      - name: Validate Google production client pair without issuing a token
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const response = await fetch('https://oauth2.googleapis.com/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              code: 'studentos-intentionally-invalid-diagnostic-code',
+              client_id: process.env.GOOGLE_CLIENT_ID,
+              client_secret: process.env.GOOGLE_CLIENT_SECRET,
+              redirect_uri: process.env.PRODUCTION_CALLBACK,
+              grant_type: 'authorization_code',
+            }),
+          });
+          const payload = await response.json().catch(() => ({}));
+          const errorCode = String(payload?.error || 'unknown_error');
+          if (response.ok) throw new Error('Diagnostic code unexpectedly produced a token.');
+          if (errorCode === 'invalid_client' || errorCode === 'unauthorized_client') {
+            throw new Error(`Google rejected the production OAuth client pair (${errorCode}).`);
+          }
+          if (errorCode !== 'invalid_grant') {
+            throw new Error(`Google production client diagnostic returned unexpected error code: ${errorCode}`);
+          }
+          console.log('Google accepted the production client identity/secret pair; the intentionally invalid code was rejected as invalid_grant, as expected.');
+          NODE
+
+      - name: Verify Classroom persistence tables on every data shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const shards = [2, 3, 4].map((number) => ({
+            number,
+            url: process.env[`STUDENTOS_SUPABASE_URL_${number}`],
+            key: process.env[`STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_${number}`],
+          }));
+          const tables = ['student_profiles', 'classroom_tokens', 'classroom_sync_runs'];
+          let failed = false;
+
+          function safeError(payload, status) {
+            const code = String(payload?.code || '');
+            const message = String(payload?.message || payload?.error || `HTTP ${status}`)
+              .replace(/https?:\/\/[^\s]+/g, '[redacted-url]')
+              .replace(/eyJ[A-Za-z0-9_.-]+/g, '[redacted-token]')
+              .slice(0, 240);
+            return { code, message };
+          }
+
+          for (const shard of shards) {
+            if (!shard.url || !shard.key) {
+              console.error(`Shard ${shard.number}: required Supabase URL/service-role secret is missing.`);
+              failed = true;
+              continue;
+            }
+            for (const table of tables) {
+              const response = await fetch(`${shard.url.replace(/\/+$/, '')}/rest/v1/${table}?select=id&limit=1`, {
+                headers: {
+                  apikey: shard.key,
+                  Authorization: `Bearer ${shard.key}`,
+                  Accept: 'application/json',
+                },
+              });
+              if (response.ok) {
+                console.log(`Shard ${shard.number}: ${table} accessible.`);
+                continue;
+              }
+              const payload = await response.json().catch(() => ({}));
+              const safe = safeError(payload, response.status);
+              console.error(`Shard ${shard.number}: ${table} FAILED (${response.status}${safe.code ? `, ${safe.code}` : ''}) ${safe.message}`);
+              failed = true;
+            }
+          }
+          if (failed) process.exit(1);
+          console.log('Classroom token and sync persistence tables are accessible on all data shards.');
+          NODE
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Verify live API OAuth wiring remains exact
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+            az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            app_json="$(az containerapp show --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" --output json)"
+            jq -e --arg callback "$PRODUCTION_CALLBACK" --arg host "$PRODUCTION_API_HOST" '
+              any(.properties.template.containers[0].env[]; .name == "STUDENTOS_GOOGLE_CLASSROOM_MODE" and .value == "oauth") and
+              any(.properties.template.containers[0].env[]; .name == "GOOGLE_CLIENT_ID" and .secretRef == "google-client-id") and
+              any(.properties.template.containers[0].env[]; .name == "GOOGLE_CLIENT_SECRET" and .secretRef == "google-client-secret") and
+              any(.properties.template.containers[0].env[]; .name == "GOOGLE_REDIRECT_URI" and .value == $callback) and
+              any(.properties.template.containers[0].env[]; .name == "STUDENTOS_GOOGLE_CLASSROOM_OAUTH_STATE_SECRET" and .secretRef == "studentos-google-classroom-oauth-state-secret") and
+              any(.properties.template.containers[0].env[]; .name == "STUDENTOS_GOOGLE_CLASSROOM_TOKEN_ENCRYPTION_SECRET" and .secretRef == "studentos-google-classroom-token-encryption-secret") and
+              any(.properties.configuration.ingress.customDomains[]?; .name == $host and (.certificateId // "") != "")
+            ' <<<"$app_json" >/dev/null
+            echo "Live Azure OAuth wiring and secured custom-domain binding are exact."
+
+      - name: Verify production HTTPS identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 6 --retry-delay 5 \
+            "https://$PRODUCTION_API_HOST/api/health" \
+            --output /tmp/studentos-health.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const health = JSON.parse(fs.readFileSync('/tmp/studentos-health.json', 'utf8'));
+          if (health?.ok !== true || health?.product !== 'StudentOS') {
+            throw new Error('Production health endpoint did not return the expected StudentOS identity.');
+          }
+          console.log('Production HTTPS identity passed.');
+          NODE
