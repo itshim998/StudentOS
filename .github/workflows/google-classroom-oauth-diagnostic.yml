@@ -94,7 +94,11 @@ jobs:
             url: process.env[`STUDENTOS_SUPABASE_URL_${number}`],
             key: process.env[`STUDENTOS_SUPABASE_SERVICE_ROLE_KEY_${number}`],
           }));
-          const tables = ['student_profiles', 'classroom_tokens', 'classroom_sync_runs'];
+          const tables = [
+            { name: 'student_profiles', select: 'user_id' },
+            { name: 'classroom_tokens', select: 'id' },
+            { name: 'classroom_sync_runs', select: 'id' },
+          ];
           let failed = false;
 
           function safeError(payload, status) {
@@ -113,7 +117,7 @@ jobs:
               continue;
             }
             for (const table of tables) {
-              const response = await fetch(`${shard.url.replace(/\/+$/, '')}/rest/v1/${table}?select=id&limit=1`, {
+              const response = await fetch(`${shard.url.replace(/\/+$/, '')}/rest/v1/${table.name}?select=${encodeURIComponent(table.select)}&limit=1`, {
                 headers: {
                   apikey: shard.key,
                   Authorization: `Bearer ${shard.key}`,
@@ -121,12 +125,12 @@ jobs:
                 },
               });
               if (response.ok) {
-                console.log(`Shard ${shard.number}: ${table} accessible.`);
+                console.log(`Shard ${shard.number}: ${table.name} accessible.`);
                 continue;
               }
               const payload = await response.json().catch(() => ({}));
               const safe = safeError(payload, response.status);
-              console.error(`Shard ${shard.number}: ${table} FAILED (${response.status}${safe.code ? `, ${safe.code}` : ''}) ${safe.message}`);
+              console.error(`Shard ${shard.number}: ${table.name} FAILED (${response.status}${safe.code ? `, ${safe.code}` : ''}) ${safe.message}`);
               failed = true;
             }
           }
