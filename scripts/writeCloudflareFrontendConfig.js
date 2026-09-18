@@ -1,8 +1,13 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { vendorKatex } from "./vendorKatex.js";
+
+// Ensure static KaTeX assets are vendored for any Cloudflare frontend build or config step
+vendorKatex();
 
 const rawApiBase = String(process.env.STUDENTOS_PUBLIC_API_BASE_URL || "").trim();
 const outputPath = path.join(process.cwd(), "frontend", "runtime-config.js");
+
 
 function normalizePublicApiBase(value) {
   if (!value) return "";

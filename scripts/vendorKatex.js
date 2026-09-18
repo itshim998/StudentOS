@@ -13,25 +13,37 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "node_modules", "katex", "dist");
 const DEST = join(ROOT, "frontend", "vendor", "katex");
 
-if (!existsSync(SRC)) {
-  console.error("KaTeX dist not found. Run `npm install` first.");
-  process.exit(1);
+export function vendorKatex() {
+  if (!existsSync(SRC)) {
+    console.error("KaTeX dist not found. Run `npm install` first.");
+    process.exit(1);
+  }
+
+  mkdirSync(DEST, { recursive: true });
+
+  // Copy core files
+  for (const file of ["katex.min.js", "katex.min.css"]) {
+    cpSync(join(SRC, file), join(DEST, file));
+    console.log(`  copied ${file}`);
+  }
+
+  // Copy fonts directory
+  const fontsSrc = join(SRC, "fonts");
+  const fontsDest = join(DEST, "fonts");
+  if (existsSync(fontsSrc)) {
+    cpSync(fontsSrc, fontsDest, { recursive: true });
+    console.log("  copied fonts/");
+  }
+
+  console.log("KaTeX vendor files ready in frontend/vendor/katex/");
 }
 
-mkdirSync(DEST, { recursive: true });
+const isDirectRun = Boolean(
+  process.argv[1] &&
+  (fileURLToPath(import.meta.url) === process.argv[1] || process.argv[1].replace(/\\/g, "/").endsWith("scripts/vendorKatex.js"))
+);
 
-// Copy core files
-for (const file of ["katex.min.js", "katex.min.css"]) {
-  cpSync(join(SRC, file), join(DEST, file));
-  console.log(`  copied ${file}`);
+if (isDirectRun) {
+  vendorKatex();
 }
 
-// Copy fonts directory
-const fontsSrc = join(SRC, "fonts");
-const fontsDest = join(DEST, "fonts");
-if (existsSync(fontsSrc)) {
-  cpSync(fontsSrc, fontsDest, { recursive: true });
-  console.log("  copied fonts/");
-}
-
-console.log("KaTeX vendor files ready in frontend/vendor/katex/");

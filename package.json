@@ -5,6 +5,7 @@
   "type": "module",
   "description": "StudentOS production foundation: AI-native academic operating layer powered by SentIQGPT patterns.",
   "scripts": {
+    "build": "npm run cloudflare:build",
     "dev": "node backend/server.js",
     "start": "node backend/server.js",
     "test:domain": "node backend/testDomain.js",
