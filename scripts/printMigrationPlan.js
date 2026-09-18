@@ -45,6 +45,7 @@ const additionalShardMigrations = [
   "supabase/migrations/202607270001_c02_embedding_space_integrity.sql",
   "supabase/migrations/202607280001_h02_narrow_state_repositories.sql",
   "supabase/migrations/202607290001_h02_authorization_repair.sql",
+  "supabase/migrations/202607300001_h02_persistence_created_at_repair.sql",
 ];
 
 const additionalAuthMigrations = [

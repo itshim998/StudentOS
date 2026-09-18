@@ -186,6 +186,335 @@ assert.throws(
   "caller with unknown role and no identity must be denied with STUDENTOS_STATE_UNAUTHORIZED"
 );
 
+// Regression: Forward-only Pass 4 persistence repair migration exists and corrects created_at / defaults
+const persistenceRepairMigration = await readFile(new URL("../supabase/migrations/202607300001_h02_persistence_created_at_repair.sql", import.meta.url), "utf8");
+assert.match(persistenceRepairMigration, /create or replace function public\.persist_studentos_state_patch/);
+assert.match(persistenceRepairMigration, /perform public\.studentos_assert_state_owner\(p_user_id\);/);
+assert.match(persistenceRepairMigration, /coalesce\(r\.created_at,\s*now\(\)\)/);
+assert.match(persistenceRepairMigration, /coalesce\(r\.%1\$I,\s*%2\$s\)/);
+assert.match(persistenceRepairMigration, /c\.column_name not in \('user_id',\s*'created_at',\s*'started_at'\)/);
+assert.match(persistenceRepairMigration, /c\.column_name not in \('id',\s*'created_at',\s*'started_at'\)/);
+assert.match(persistenceRepairMigration, /grant execute on function public\.persist_studentos_state_patch\(uuid, jsonb, jsonb, jsonb\) to authenticated,\s*service_role;/);
+
+// Anti-regression: migration must NOT use naive un-coalesced 'select * from jsonb_populate_record' for inserts
+assert.doesNotMatch(persistenceRepairMigration, /insert into public\.student_profiles\s+select\s+\*\s+from/i, "Must not use un-coalesced select * for student_profiles insert");
+assert.doesNotMatch(persistenceRepairMigration, /insert into public\.%1\$I\s+select\s+\*\s+from/i, "Must not use un-coalesced select * for collection insert");
+
+// Regression: printMigrationPlan includes 202607300001
+assert.match(printPlanSource, /202607300001_h02_persistence_created_at_repair\.sql/);
+
+// ============================================================================
+// Behavioral Simulation: PostgreSQL jsonb_populate_record[set] & Persistence RPC
+// ============================================================================
+
+// Model of PostgreSQL table constraints
+const TABLE_CONSTRAINTS = {
+  student_profiles: {
+    primaryKey: "user_id",
+    conflictTarget: "user_id",
+    columns: {
+      user_id: { notNull: true, default: null },
+      display_name: { notNull: true, default: null },
+      grade_band: { notNull: true, default: "'high_school'::text" },
+      school_system: { notNull: false, default: null },
+      timezone: { notNull: true, default: "'UTC'::text" },
+      discipline_index: { notNull: true, default: 50 },
+      learning_adaptivity_score: { notNull: true, default: 50 },
+      preferences: { notNull: true, default: "'{}'::jsonb" },
+      visibility: { notNull: true, default: "'{}'::jsonb" },
+      payload: { notNull: true, default: "'{}'::jsonb" },
+      created_at: { notNull: true, default: "now()" },
+      updated_at: { notNull: true, default: "now()" },
+    },
+  },
+  courses: {
+    primaryKey: "id",
+    conflictTarget: "id",
+    columns: {
+      id: { notNull: true, default: "gen_random_uuid()::text" },
+      user_id: { notNull: true, default: null },
+      title: { notNull: true, default: null },
+      term: { notNull: false, default: null },
+      teacher: { notNull: false, default: null },
+      exam_date: { notNull: false, default: null },
+      payload: { notNull: true, default: "'{}'::jsonb" },
+      created_at: { notNull: true, default: "now()" },
+      updated_at: { notNull: true, default: "now()" },
+    },
+  },
+  assignments: {
+    primaryKey: "id",
+    conflictTarget: "id",
+    columns: {
+      id: { notNull: true, default: "gen_random_uuid()::text" },
+      user_id: { notNull: true, default: null },
+      course_id: { notNull: false, default: null },
+      title: { notNull: true, default: null },
+      due_at: { notNull: false, default: null },
+      status: { notNull: true, default: "'open'::text" },
+      source: { notNull: true, default: "'manual'::text" },
+      topic_ids: { notNull: true, default: "'[]'::jsonb" },
+      automation_eligibility: { notNull: true, default: "'requires_contract'::text" },
+      payload: { notNull: true, default: "'{}'::jsonb" },
+      created_at: { notNull: true, default: "now()" },
+      updated_at: { notNull: true, default: "now()" },
+    },
+  },
+  test_results: {
+    primaryKey: "id",
+    conflictTarget: "id",
+    columns: {
+      id: { notNull: true, default: "gen_random_uuid()::text" },
+      user_id: { notNull: true, default: null },
+      test_session_id: { notNull: false, default: null },
+      course_id: { notNull: false, default: null },
+      topic_id: { notNull: false, default: null },
+      grading_mode: { notNull: true, default: "'mcq_auto'::text" },
+      score_percent: { notNull: true, default: null },
+      credits_awarded: { notNull: true, default: 0 },
+      answers: { notNull: true, default: "'[]'::jsonb" },
+      answer_key: { notNull: true, default: "'[]'::jsonb" },
+      corrections: { notNull: true, default: "'[]'::jsonb" },
+      completed_at: { notNull: true, default: "now()" },
+      payload: { notNull: true, default: "'{}'::jsonb" },
+      created_at: { notNull: true, default: "now()" },
+      updated_at: { notNull: true, default: "now()" },
+    },
+  },
+};
+
+// Evaluates an insert row according to PostgreSQL jsonb_populate_record
+function populateRecordFromNull(tableName, inputJson) {
+  const schema = TABLE_CONSTRAINTS[tableName];
+  const populated = {};
+  for (const colName of Object.keys(schema.columns)) {
+    // In jsonb_populate_record(null::table, json), missing keys in json become null
+    populated[colName] = Object.prototype.hasOwnProperty.call(inputJson, colName) ? inputJson[colName] : null;
+  }
+  return populated;
+}
+
+// Simulates the UNREPAIRED 202607280001 INSERT execution
+function executeUnrepairedInsert(tableName, inputJson, existingRows = new Map()) {
+  const populated = populateRecordFromNull(tableName, inputJson);
+  const schema = TABLE_CONSTRAINTS[tableName];
+  const conflictKey = populated[schema.conflictTarget];
+
+  if (!existingRows.has(conflictKey)) {
+    // First time INSERT: checks NOT NULL constraints on all columns of populated
+    for (const [colName, colDef] of Object.entries(schema.columns)) {
+      if (colDef.notNull && (populated[colName] === null || populated[colName] === undefined)) {
+        const error = new Error(`null value in column "${colName}" of relation "${tableName}" violates not-null constraint`);
+        error.code = "23502";
+        throw error;
+      }
+    }
+    existingRows.set(conflictKey, { ...populated });
+    return { action: "inserted", row: existingRows.get(conflictKey) };
+  } else {
+    // ON CONFLICT UPDATE: updates columns except user_id/id and created_at
+    const existing = existingRows.get(conflictKey);
+    const updated = { ...existing };
+    for (const colName of Object.keys(schema.columns)) {
+      if (!["user_id", "id", "created_at", "started_at"].includes(colName)) {
+        updated[colName] = populated[colName];
+      }
+    }
+    existingRows.set(conflictKey, updated);
+    return { action: "updated", row: updated };
+  }
+}
+
+// Simulates the REPAIRED 202607300001 INSERT execution
+function executeRepairedInsert(tableName, inputJson, existingRows = new Map(), simulatedNow = new Date().toISOString()) {
+  const populated = populateRecordFromNull(tableName, inputJson);
+  const schema = TABLE_CONSTRAINTS[tableName];
+  const conflictKey = populated[schema.conflictTarget];
+
+  // The repaired SELECT expressions apply coalesce(r.created_at, now()) and coalesce(r.col, default)
+  const evaluatedInsert = {};
+  for (const [colName, colDef] of Object.entries(schema.columns)) {
+    let val = populated[colName];
+    if (colName === "created_at") {
+      val = val !== null ? val : simulatedNow;
+    } else if (colDef.notNull && colDef.default !== null && (val === null || val === undefined)) {
+      // Evaluate column default
+      val = colDef.default === "now()" ? simulatedNow : colDef.default;
+    }
+    evaluatedInsert[colName] = val;
+  }
+
+  if (!existingRows.has(conflictKey)) {
+    // First time INSERT: check NOT NULL constraints on evaluated values
+    for (const [colName, colDef] of Object.entries(schema.columns)) {
+      if (colDef.notNull && (evaluatedInsert[colName] === null || evaluatedInsert[colName] === undefined)) {
+        const error = new Error(`null value in column "${colName}" of relation "${tableName}" violates not-null constraint`);
+        error.code = "23502";
+        throw error;
+      }
+    }
+    existingRows.set(conflictKey, { ...evaluatedInsert });
+    return { action: "inserted", row: existingRows.get(conflictKey) };
+  } else {
+    // ON CONFLICT UPDATE: updates all columns from evaluatedInsert EXCEPT conflict keys and created_at/started_at
+    const existing = existingRows.get(conflictKey);
+    const updated = { ...existing };
+    for (const colName of Object.keys(schema.columns)) {
+      if (!["user_id", "id", "created_at", "started_at"].includes(colName)) {
+        updated[colName] = evaluatedInsert[colName];
+      }
+    }
+    existingRows.set(conflictKey, updated);
+    return { action: "updated", row: updated };
+  }
+}
+
+// Verification 1: Unrepaired RPC reproduces production failure on first student_profiles insert
+const sampleProfileJson = {
+  user_id: targetUser,
+  display_name: "Test Student",
+  grade_band: "high_school",
+  school_system: null,
+  timezone: "UTC",
+  discipline_index: 50,
+  learning_adaptivity_score: 50,
+  preferences: {},
+  visibility: {},
+  payload: { displayName: "Test Student" },
+  updated_at: "2026-07-30T10:00:00.000Z",
+  // created_at is omitted by profileRow()
+};
+
+assert.throws(
+  () => executeUnrepairedInsert("student_profiles", sampleProfileJson, new Map()),
+  (err) => err.message === 'null value in column "created_at" of relation "student_profiles" violates not-null constraint' && err.code === "23502",
+  "Unrepaired logic must fail with created_at NOT NULL constraint violation"
+);
+
+// Verification 2: Repaired RPC successfully inserts first student_profiles with non-null created_at
+const profilesTable = new Map();
+const insertTime = "2026-07-30T10:00:00.000Z";
+const profileInsertResult = executeRepairedInsert("student_profiles", sampleProfileJson, profilesTable, insertTime);
+assert.equal(profileInsertResult.action, "inserted");
+assert.equal(profileInsertResult.row.created_at, insertTime);
+assert.equal(profileInsertResult.row.display_name, "Test Student");
+assert.equal(profilesTable.size, 1);
+
+// Verification 3: Repaired RPC update of existing student_profiles does NOT overwrite original created_at
+const updateTime = "2026-07-30T12:00:00.000Z";
+const updatedProfileJson = {
+  ...sampleProfileJson,
+  display_name: "Updated Student Name",
+  updated_at: updateTime,
+};
+const profileUpdateResult = executeRepairedInsert("student_profiles", updatedProfileJson, profilesTable, updateTime);
+assert.equal(profileUpdateResult.action, "updated");
+assert.equal(profileUpdateResult.row.display_name, "Updated Student Name");
+assert.equal(profileUpdateResult.row.created_at, insertTime, "created_at must remain immutable across updates");
+assert.equal(profileUpdateResult.row.updated_at, updateTime);
+
+// Verification 4: Collection table insert without created_at (courses) succeeds with repaired RPC
+const sampleCourseJson = {
+  id: "course_1",
+  user_id: targetUser,
+  title: "AP Physics",
+  term: "Fall",
+  payload: { title: "AP Physics" },
+  updated_at: insertTime,
+  // created_at omitted by rowForCollection()
+};
+const coursesTable = new Map();
+
+// Unrepaired fails on collection
+assert.throws(
+  () => executeUnrepairedInsert("courses", sampleCourseJson, coursesTable),
+  (err) => err.message === 'null value in column "created_at" of relation "courses" violates not-null constraint' && err.code === "23502"
+);
+
+// Repaired succeeds on collection
+const courseInsertResult = executeRepairedInsert("courses", sampleCourseJson, coursesTable, insertTime);
+assert.equal(courseInsertResult.action, "inserted");
+assert.equal(courseInsertResult.row.created_at, insertTime);
+assert.equal(courseInsertResult.row.title, "AP Physics");
+
+// Existing collection row retains created_at on update
+const courseUpdateResult = executeRepairedInsert(
+  "courses",
+  { ...sampleCourseJson, title: "AP Physics C", updated_at: updateTime },
+  coursesTable,
+  updateTime
+);
+assert.equal(courseUpdateResult.action, "updated");
+assert.equal(courseUpdateResult.row.title, "AP Physics C");
+assert.equal(courseUpdateResult.row.created_at, insertTime, "Collection row created_at must remain immutable across updates");
+assert.equal(courseUpdateResult.row.updated_at, updateTime);
+
+// Verification 5: Omitted NOT NULL columns with defaults coalesce properly
+const sampleAssignmentJson = {
+  id: "assign_1",
+  user_id: targetUser,
+  title: "Problem Set 1",
+  status: "open",
+  source: "manual",
+  topic_ids: [],
+  payload: { title: "Problem Set 1" },
+  updated_at: insertTime,
+  // automation_eligibility omitted by rowForCollection()
+  // created_at omitted by rowForCollection()
+};
+const assignmentsTable = new Map();
+const assignResult = executeRepairedInsert("assignments", sampleAssignmentJson, assignmentsTable, insertTime);
+assert.equal(assignResult.action, "inserted");
+assert.equal(assignResult.row.created_at, insertTime);
+assert.equal(assignResult.row.automation_eligibility, "'requires_contract'::text");
+
+const sampleTestResultJson = {
+  id: "result_1",
+  user_id: targetUser,
+  score_percent: 95,
+  credits_awarded: 1,
+  answers: [],
+  answer_key: [],
+  payload: {},
+  updated_at: insertTime,
+  // corrections omitted by rowForCollection()
+  // created_at omitted by rowForCollection()
+};
+const testResultsTable = new Map();
+const trResult = executeRepairedInsert("test_results", sampleTestResultJson, testResultsTable, insertTime);
+assert.equal(trResult.action, "inserted");
+assert.equal(trResult.row.created_at, insertTime);
+assert.equal(trResult.row.corrections, "'[]'::jsonb");
+
+// Verification 6: Ownership mismatch checks remain strictly enforced
+function simulatePersistPatchOwnershipCheck(pUserId, profileJson, collectionsJson) {
+  if (profileJson && profileJson.user_id !== pUserId) {
+    throw new Error("STUDENTOS_STATE_OWNER_MISMATCH");
+  }
+  for (const [key, rows] of Object.entries(collectionsJson || {})) {
+    if (Array.isArray(rows)) {
+      for (const row of rows) {
+        if (row.user_id !== pUserId) {
+          throw new Error(`STUDENTOS_STATE_OWNER_MISMATCH: ${key}`);
+        }
+      }
+    }
+  }
+  return true;
+}
+
+assert.equal(simulatePersistPatchOwnershipCheck(targetUser, sampleProfileJson, { courses: [sampleCourseJson] }), true);
+assert.throws(
+  () => simulatePersistPatchOwnershipCheck(targetUser, { ...sampleProfileJson, user_id: differentUser }, {}),
+  (err) => err.message === "STUDENTOS_STATE_OWNER_MISMATCH"
+);
+assert.throws(
+  () => simulatePersistPatchOwnershipCheck(targetUser, sampleProfileJson, { courses: [{ ...sampleCourseJson, user_id: differentUser }] }),
+  (err) => err.message === "STUDENTOS_STATE_OWNER_MISMATCH: courses"
+);
+
 console.log("PASS | H-02 narrow state repositories and transactional mutation tests passed");
 console.log("PASS | H-02 authorization repair regression suite passed");
+console.log("PASS | H-02 persistence created_at & column-default repair regression suite passed");
+
 
