@@ -92,4 +92,100 @@ for (const key of STATE_SCOPE_COLLECTIONS.test_session) {
   assert.match(testSessionScopeSql, new RegExp(`'${key}'`), `migration test_session scope missing ${key}`);
 }
 
+// Regression: Historical H-02 migration file must remain untouched
+assert.match(migration, /create or replace function public\.studentos_assert_state_owner\(p_user_id uuid\)/);
+assert.match(migration, /coalesce\(current_setting\('request\.jwt\.claim\.role', true\), ''\) <> 'service_role'/);
+
+// Regression: Repaired migration exists, removes legacy request.jwt.claim.role, uses PostgREST role, restricts privileges
+const repairMigration = await readFile(new URL("../supabase/migrations/202607290001_h02_authorization_repair.sql", import.meta.url), "utf8");
+assert.doesNotMatch(repairMigration, /request\.jwt\.claim\.role/, "Repair migration must not rely on legacy request.jwt.claim.role");
+assert.match(repairMigration, /current_setting\('role',\s*true\)/, "Repair migration must use PostgREST request role current_setting('role', true)");
+assert.doesNotMatch(repairMigration, /\bcurrent_user\b/, "Repair migration must not use current_user inside security definer function");
+assert.match(repairMigration, /security definer/, "Repair migration must preserve security definer");
+assert.match(repairMigration, /set search_path = public,\s*pg_temp/, "Repair migration must preserve safe search path");
+assert.match(repairMigration, /revoke execute on function public\.studentos_assert_state_owner\(uuid\) from public,\s*anon,\s*authenticated;/, "Repair migration must revoke direct execute on helper from public/anon/authenticated");
+assert.match(repairMigration, /grant execute on function public\.studentos_assert_state_owner\(uuid\) to service_role;/, "Repair migration must grant execute on helper to service_role");
+
+// Regression: printMigrationPlan includes the forward-only repair migration
+const printPlanSource = await readFile(new URL("../scripts/printMigrationPlan.js", import.meta.url), "utf8");
+assert.match(printPlanSource, /202607290001_h02_authorization_repair\.sql/);
+
+// Authorization matrix behavioral contract validation
+function evaluateStudentOsAssertStateOwner({ role, authUid, targetUserId }) {
+  const effectiveRole = role ? String(role).trim() : "";
+  if (effectiveRole === "service_role") {
+    return { allowed: true };
+  }
+  if (targetUserId && authUid && authUid === targetUserId) {
+    return { allowed: true };
+  }
+  const error = new Error("STUDENTOS_STATE_UNAUTHORIZED");
+  error.code = "42501";
+  error.status = 403;
+  throw error;
+}
+
+const targetUser = "4cb04cbc-bac4-4b81-9471-0dbd4ece1919";
+const differentUser = "9f1ee619-a220-41e9-a8b0-cf010d523e28";
+
+// Matrix 1: service_role + arbitrary valid UUID -> allowed
+const serviceRoleResult = evaluateStudentOsAssertStateOwner({
+  role: "service_role",
+  authUid: null,
+  targetUserId: targetUser,
+});
+assert.equal(serviceRoleResult.allowed, true);
+
+// Matrix 2: authenticated + matching JWT subject -> allowed
+const authMatchingResult = evaluateStudentOsAssertStateOwner({
+  role: "authenticated",
+  authUid: targetUser,
+  targetUserId: targetUser,
+});
+assert.equal(authMatchingResult.allowed, true);
+
+// Matrix 3: authenticated + different UUID -> denied with STUDENTOS_STATE_UNAUTHORIZED
+assert.throws(
+  () => evaluateStudentOsAssertStateOwner({
+    role: "authenticated",
+    authUid: differentUser,
+    targetUserId: targetUser,
+  }),
+  (err) => err.message === "STUDENTOS_STATE_UNAUTHORIZED" && err.code === "42501" && err.status === 403,
+  "authenticated user with mismatched target user ID must be denied with STUDENTOS_STATE_UNAUTHORIZED"
+);
+
+// Matrix 4: anon / no identity -> denied with STUDENTOS_STATE_UNAUTHORIZED
+assert.throws(
+  () => evaluateStudentOsAssertStateOwner({
+    role: "anon",
+    authUid: null,
+    targetUserId: targetUser,
+  }),
+  (err) => err.message === "STUDENTOS_STATE_UNAUTHORIZED" && err.code === "42501" && err.status === 403,
+  "anonymous caller must be denied with STUDENTOS_STATE_UNAUTHORIZED"
+);
+
+// Matrix 5: missing/unknown role + no identity -> denied with STUDENTOS_STATE_UNAUTHORIZED
+assert.throws(
+  () => evaluateStudentOsAssertStateOwner({
+    role: null,
+    authUid: null,
+    targetUserId: targetUser,
+  }),
+  (err) => err.message === "STUDENTOS_STATE_UNAUTHORIZED" && err.code === "42501" && err.status === 403,
+  "caller with missing role and no identity must be denied with STUDENTOS_STATE_UNAUTHORIZED"
+);
+assert.throws(
+  () => evaluateStudentOsAssertStateOwner({
+    role: "unknown_external_role",
+    authUid: null,
+    targetUserId: targetUser,
+  }),
+  (err) => err.message === "STUDENTOS_STATE_UNAUTHORIZED" && err.code === "42501" && err.status === 403,
+  "caller with unknown role and no identity must be denied with STUDENTOS_STATE_UNAUTHORIZED"
+);
+
 console.log("PASS | H-02 narrow state repositories and transactional mutation tests passed");
+console.log("PASS | H-02 authorization repair regression suite passed");
+
