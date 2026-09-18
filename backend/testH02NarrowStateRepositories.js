@@ -200,6 +200,13 @@ assert.match(persistenceRepairMigration, /grant execute on function public\.pers
 assert.doesNotMatch(persistenceRepairMigration, /insert into public\.student_profiles\s+select\s+\*\s+from/i, "Must not use un-coalesced select * for student_profiles insert");
 assert.doesNotMatch(persistenceRepairMigration, /insert into public\.%1\$I\s+select\s+\*\s+from/i, "Must not use un-coalesced select * for collection insert");
 
+// Pass 6 Anti-regression: migration must NOT declare variable 'table_name' or query 'c.table_name = table_name'
+assert.doesNotMatch(persistenceRepairMigration, /c\.table_name\s*=\s*table_name\b/, "Must not compare column c.table_name to PL/pgSQL variable named table_name (error 42702)");
+assert.doesNotMatch(persistenceRepairMigration, /declare[\s\S]*?\btable_name\s+text;/, "Variable must not be named table_name to avoid collision with information_schema.columns.table_name");
+assert.match(persistenceRepairMigration, /\btarget_table_name\s+text;/, "Variable must be renamed to target_table_name");
+assert.match(persistenceRepairMigration, /c\.table_schema\s*=\s*'public'\s+and\s+c\.table_name\s*=\s*target_table_name;/, "Dynamic SQL filter must use target_table_name");
+assert.match(persistenceRepairMigration, /target_table_name\s*:=\s*public\.studentos_collection_table\(collection_key\);/, "Collection loop must assign to target_table_name");
+
 // Regression: printMigrationPlan includes 202607300001
 assert.match(printPlanSource, /202607300001_h02_persistence_created_at_repair\.sql/);
 
@@ -513,8 +520,176 @@ assert.throws(
   (err) => err.message === "STUDENTOS_STATE_OWNER_MISMATCH: courses"
 );
 
+// ============================================================================
+// Verification 7: Full Patch Persistence Simulation & Transactional Atomicity
+// ============================================================================
+function simulateFullPersistPatch({ pUserId, role = "service_role", authUid = null, profile = null, collections = {}, deleteIds = {}, tables, now = new Date().toISOString() }) {
+  // 1. Authorization check
+  evaluateStudentOsAssertStateOwner({ role, authUid, targetUserId: pUserId });
+
+  // 2. Transaction snapshot for atomicity / rollback simulation
+  const snapshot = new Map();
+  for (const [tblName, rowsMap] of tables.entries()) {
+    snapshot.set(tblName, new Map(rowsMap));
+  }
+
+  try {
+    let affected = 0;
+
+    // 3. Profile processing
+    if (profile !== null && profile !== undefined) {
+      if (profile.user_id !== pUserId) {
+        throw new Error("STUDENTOS_STATE_OWNER_MISMATCH");
+      }
+      if (!tables.has("student_profiles")) tables.set("student_profiles", new Map());
+      executeRepairedInsert("student_profiles", profile, tables.get("student_profiles"), now);
+      affected++;
+    }
+
+    // 4. Collections processing
+    const SUPPORTED_COLLECTIONS = {
+      courses: "courses",
+      assignments: "assignments",
+      testResults: "test_results",
+    };
+
+    if (collections) {
+      for (const [collKey, rows] of Object.entries(collections)) {
+        const mappedTable = SUPPORTED_COLLECTIONS[collKey];
+        if (!mappedTable) {
+          throw new Error(`STUDENTOS_COLLECTION_INVALID: ${collKey}`);
+        }
+        if (!Array.isArray(rows)) {
+          throw new Error(`STUDENTOS_COLLECTION_ROWS_INVALID: ${collKey}`);
+        }
+        for (const r of rows) {
+          if (r.user_id !== pUserId) {
+            throw new Error(`STUDENTOS_STATE_OWNER_MISMATCH: ${collKey}`);
+          }
+        }
+        if (rows.length === 0) continue;
+
+        if (!tables.has(mappedTable)) tables.set(mappedTable, new Map());
+        const targetMap = tables.get(mappedTable);
+        for (const r of rows) {
+          executeRepairedInsert(mappedTable, r, targetMap, now);
+          affected++;
+        }
+      }
+    }
+
+    // 5. Deletes processing
+    if (deleteIds) {
+      for (const [collKey, ids] of Object.entries(deleteIds)) {
+        const mappedTable = SUPPORTED_COLLECTIONS[collKey];
+        if (!mappedTable) {
+          throw new Error(`STUDENTOS_COLLECTION_INVALID: ${collKey}`);
+        }
+        if (!Array.isArray(ids)) {
+          throw new Error(`STUDENTOS_DELETE_IDS_INVALID: ${collKey}`);
+        }
+        const targetMap = tables.get(mappedTable);
+        if (targetMap) {
+          for (const id of ids) {
+            const existing = targetMap.get(id);
+            if (existing && existing.user_id === pUserId) {
+              targetMap.delete(id);
+              affected++;
+            }
+          }
+        }
+      }
+    }
+
+    return { persisted: true, affected };
+  } catch (err) {
+    // Transaction rollback on any error
+    tables.clear();
+    for (const [tblName, rowsMap] of snapshot.entries()) {
+      tables.set(tblName, rowsMap);
+    }
+    throw err;
+  }
+}
+
+// 7a: Multi-collection batch persistence succeeds and assigns created_at & defaults
+const simulatedDb = new Map();
+const t0 = "2026-07-30T14:00:00.000Z";
+const batchPatchResult = simulateFullPersistPatch({
+  pUserId: targetUser,
+  profile: sampleProfileJson,
+  collections: {
+    courses: [sampleCourseJson],
+    assignments: [sampleAssignmentJson],
+    testResults: [sampleTestResultJson],
+  },
+  tables: simulatedDb,
+  now: t0,
+});
+
+assert.equal(batchPatchResult.persisted, true);
+assert.equal(batchPatchResult.affected, 4); // 1 profile + 1 course + 1 assignment + 1 testResult
+assert.equal(simulatedDb.get("student_profiles").get(targetUser).created_at, t0);
+assert.equal(simulatedDb.get("courses").get("course_1").created_at, t0);
+assert.equal(simulatedDb.get("assignments").get("assign_1").created_at, t0);
+assert.equal(simulatedDb.get("assignments").get("assign_1").automation_eligibility, "'requires_contract'::text");
+assert.equal(simulatedDb.get("test_results").get("result_1").created_at, t0);
+assert.equal(simulatedDb.get("test_results").get("result_1").corrections, "'[]'::jsonb");
+
+// 7b: Conflict update preserves created_at while updating mutable fields
+const t1 = "2026-07-30T16:00:00.000Z";
+const updatePatchResult = simulateFullPersistPatch({
+  pUserId: targetUser,
+  collections: {
+    courses: [{ ...sampleCourseJson, title: "Advanced AP Physics", updated_at: t1 }],
+  },
+  tables: simulatedDb,
+  now: t1,
+});
+assert.equal(updatePatchResult.persisted, true);
+assert.equal(simulatedDb.get("courses").get("course_1").title, "Advanced AP Physics");
+assert.equal(simulatedDb.get("courses").get("course_1").created_at, t0, "created_at must be preserved on update");
+assert.equal(simulatedDb.get("courses").get("course_1").updated_at, t1);
+
+// 7c: Transaction rollback: failure on any row rolls back the entire patch
+const preRollbackCourseTitle = simulatedDb.get("courses").get("course_1").title;
+const preRollbackAssignmentCount = simulatedDb.get("assignments").size;
+
+assert.throws(
+  () => simulateFullPersistPatch({
+    pUserId: targetUser,
+    collections: {
+      assignments: [{ id: "assign_2", user_id: targetUser, title: "New Assignment", status: "open", source: "manual", topic_ids: [], payload: {} }],
+      courses: [{ id: "course_rogue", user_id: differentUser, title: "Rogue Course", payload: {} }], // Owner mismatch!
+    },
+    tables: simulatedDb,
+    now: t1,
+  }),
+  (err) => err.message === "STUDENTOS_STATE_OWNER_MISMATCH: courses",
+  "Batch with owner mismatch in one collection must fail"
+);
+
+// Verify rollback: assign_2 was NOT persisted, course_1 title was NOT changed
+assert.equal(simulatedDb.get("assignments").size, preRollbackAssignmentCount, "Rolled back transaction must not persist any new rows");
+assert.equal(simulatedDb.get("assignments").has("assign_2"), false);
+assert.equal(simulatedDb.get("courses").get("course_1").title, preRollbackCourseTitle);
+
+// 7d: Delete processing in transaction
+const deletePatchResult = simulateFullPersistPatch({
+  pUserId: targetUser,
+  deleteIds: {
+    courses: ["course_1"],
+  },
+  tables: simulatedDb,
+  now: t1,
+});
+assert.equal(deletePatchResult.persisted, true);
+assert.equal(simulatedDb.get("courses").has("course_1"), false, "Deleted course must be removed");
+
 console.log("PASS | H-02 narrow state repositories and transactional mutation tests passed");
 console.log("PASS | H-02 authorization repair regression suite passed");
 console.log("PASS | H-02 persistence created_at & column-default repair regression suite passed");
+console.log("PASS | H-02 Pass 6 variable ambiguity guard and transactional rollback simulation passed");
+
 
 

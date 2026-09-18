@@ -17,7 +17,7 @@ declare
   collection_key text;
   rows_payload jsonb;
   ids_payload jsonb;
-  table_name text;
+  target_table_name text;
   insert_columns text;
   select_expressions text;
   update_assignments text;
@@ -57,8 +57,8 @@ begin
   end if;
 
   for collection_key, rows_payload in select key, value from jsonb_each(coalesce(p_collections, '{}'::jsonb)) loop
-    table_name := public.studentos_collection_table(collection_key);
-    if table_name is null or to_regclass(format('public.%I', table_name)) is null then
+    target_table_name := public.studentos_collection_table(collection_key);
+    if target_table_name is null or to_regclass(format('public.%I', target_table_name)) is null then
       raise exception 'STUDENTOS_COLLECTION_INVALID: %', collection_key;
     end if;
     if jsonb_typeof(rows_payload) <> 'array' then
@@ -88,11 +88,11 @@ begin
         filter (where c.column_name not in ('id', 'created_at', 'started_at'))
       into insert_columns, select_expressions, update_assignments
       from information_schema.columns c
-      where c.table_schema = 'public' and c.table_name = table_name;
+      where c.table_schema = 'public' and c.table_name = target_table_name;
 
     execute format(
       'insert into public.%1$I (%2$s) select %3$s from jsonb_populate_recordset(null::public.%1$I, $1) r on conflict (id) do update set %4$s',
-      table_name,
+      target_table_name,
       insert_columns,
       select_expressions,
       update_assignments
@@ -102,14 +102,14 @@ begin
   end loop;
 
   for collection_key, ids_payload in select key, value from jsonb_each(coalesce(p_delete_ids, '{}'::jsonb)) loop
-    table_name := public.studentos_collection_table(collection_key);
-    if table_name is null or to_regclass(format('public.%I', table_name)) is null then
+    target_table_name := public.studentos_collection_table(collection_key);
+    if target_table_name is null or to_regclass(format('public.%I', target_table_name)) is null then
       raise exception 'STUDENTOS_COLLECTION_INVALID: %', collection_key;
     end if;
     if jsonb_typeof(ids_payload) <> 'array' then
       raise exception 'STUDENTOS_DELETE_IDS_INVALID: %', collection_key;
     end if;
-    execute format('delete from public.%I where user_id = $1 and id in (select jsonb_array_elements_text($2))', table_name)
+    execute format('delete from public.%I where user_id = $1 and id in (select jsonb_array_elements_text($2))', target_table_name)
       using p_user_id, ids_payload;
     get diagnostics changed_rows = row_count;
     affected := affected + changed_rows;
