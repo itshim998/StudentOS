@@ -80,31 +80,6 @@ Adaptive Recovery is additive and remains **disabled by default** until its prod
 
 Detailed architecture and rollout notes are available in [`docs/adaptive-recovery-engine.md`](docs/adaptive-recovery-engine.md).
 
-## OpenAI Build Week 2026
-
-StudentOS existed before Build Week. During the event, I used GPT-5.6 through OpenAI Codex to inspect the existing repository, plan the recovery architecture, implement the new backend subsystem, test failure paths, review production risks, and perform remediation passes.
-
-Codex was used to:
-
-- understand the existing planning, assessment, persistence, provider, and worker paths
-- design the event, snapshot, recovery-state, run, preview, and plan-version lifecycle
-- implement recovery persistence, APIs, background processing, provider routing, and validation
-- add evidence grounding, deterministic priority controls, idempotency, concurrency protection, and stale-preview checks
-- build focused tests and a repeatable evaluation suite
-- review deployment, rollback, privacy, export, deletion, and operational risks
-- remediate issues found after the first implementation pass
-
-GPT-5.6 was used through Codex as the engineering and reasoning model. StudentOS does **not** use the OpenAI API at runtime and does not require an OpenAI API key.
-
-The production AI boundary continues to use the existing StudentOS provider chain:
-
-1. Groq
-2. Gemini
-3. Pollinations
-
-The recovery subsystem fixes that order for recovery reasoning and validates provider output through strict Zod contracts before it can influence planning.
-
-The original recovery baseline, implementation provenance, current limitations, and validation coverage are recorded in [`docs/adaptive-recovery-engine.md`](docs/adaptive-recovery-engine.md).
 
 ## Architecture
 
